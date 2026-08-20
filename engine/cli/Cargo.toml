@@ -1,0 +1,24 @@
+[package]
+name = "open-shogi-cli"
+description = "Command-line entry point for OpenShogiAI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+flate2 = "=1.1.9"
+open-shogi-core.workspace = true
+open-shogi-usi.workspace = true
+serde = { version = "=1.0.229", features = ["derive"] }
+# Cross-runtime self-hashes require the same correctly rounded decimal-to-f64 value as Python.
+serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
+sha2 = "=0.10.9"
+toml = "=0.8.23"
+
+[dev-dependencies]
+base64 = "=0.22.1"
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+schema_version = 1
+
+[training]
+name = "value_v0"
+teacher_loss_weight = 1.0
+game_result_loss_weight = 0.2
+policy_agreement_loss_weight = 0.1
+ranking_loss_weight = 0.1
+ranking_margin = 0.05
+learning_rate = 0.001
+weight_decay = 0.0001
+batch_size = 64
+epochs = 50
+sample_ratio = 1.0
+stage_ratios = [0.30, 0.50, 0.20]
+stage_boundaries_basis_points = [3333, 6667]
+expected_teacher_labels = 10000
+teacher_clip_cp = 3000.0
+teacher_normalization_cp = 1200.0
+seed = 20260729
+device = "auto"
+deterministic = true
+quantization = "both"
+gradient_clip_norm = 5.0
+checkpoint_every_epochs = 1

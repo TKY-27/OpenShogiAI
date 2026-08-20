@@ -1,0 +1,23 @@
+schema_version: 1
+source_id: aobazero-no-noise
+evidence:
+  - evidence_id: official-robots
+    url: http://www.yss-aya.com/robots.txt
+    max_bytes: 65536
+    sha256: null
+  - evidence_id: immutable-rights-readme
+    url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README_en.md
+    max_bytes: 65536
+    sha256: 018bf5496101d0034f8a6559324c298b6adcec88d608e288b6bc49108b6975bc
+  - evidence_id: immutable-project-readme-ja
+    url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README.md
+    max_bytes: 65536
+    sha256: cfb7bafc4e7942ae8efef2dd9b86bc8d4585c80335400d76b53fa21446220181
+  - evidence_id: immutable-license-file
+    url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/license.txt
+    max_bytes: 65536
+    sha256: 3e5643e0fb6844379ef097542d2391885df782081bcf67b2bbf9b55a6a2a4a6f
+  - evidence_id: official-sample-index
+    url: http://www.yss-aya.com/aobazero/no_noise/sample.html
+    max_bytes: 524288
+    sha256: 178b6bfdd4a128eef14bc1ae7d057fae3781230cef9dc5cc3e2351291e15f9ad

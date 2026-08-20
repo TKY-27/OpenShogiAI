@@ -1,0 +1,66 @@
+schema_version: 1
+sources:
+  - source_id: aobazero-no-noise
+    name: AobaZero no-noise self-play samples
+    official_base: http://www.yss-aya.com/aobazero/no_noise/
+    enabled: true
+    approved: true
+    license: Public Domain
+    license_evidence:
+      - url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README_en.md
+        local_path: docs/source-audits/aobazero.md
+        quote: USI engine aobaz belongs to GPL v3. Others are in the public domain.
+      - url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README.md
+        local_path: docs/source-audits/aobazero.md
+        quote: それ以外はpublic domainです。
+    robots_checked: "2026-07-29"
+    terms_checked: "2026-07-29"
+    max_requests_per_second: 0.25
+    concurrency: 1
+    allowed_paths:
+      - /aobazero/no_noise/
+      - /robots.txt/
+    denied_paths:
+      - /secret/
+    redistributable: true
+    machine_learning_allowed: true
+    last_reviewed: "2026-08-03"
+    allowed_hosts:
+      - www.yss-aya.com
+    allow_insecure_http: true
+    max_object_bytes: 1048576
+    user_agent: OpenShogiAI/0.3 (audited research sample acquisition)
+    catalog: configs/data_source_objects/aobazero_no_noise.yaml
+    evidence_catalog: configs/data_source_objects/aobazero_evidence.yaml
+    adapter: aobazero_csa
+    robots_url: http://www.yss-aya.com/robots.txt
+    robots_policy: allowed
+  - source_id: floodgate
+    name: Floodgate public CSA records
+    official_base: https://wdoor.c.u-tokyo.ac.jp/shogi/
+    enabled: false
+    approved: false
+    license: Unverified
+    license_evidence: []
+    robots_checked: "2026-07-29"
+    terms_checked: "2026-07-29"
+    max_requests_per_second: 0.1
+    concurrency: 1
+    allowed_paths:
+      - /shogi/
+      - /robots.txt/
+    denied_paths:
+      - /shogi/archive/
+    redistributable: false
+    machine_learning_allowed: false
+    last_reviewed: "2026-07-29"
+    allowed_hosts:
+      - wdoor.c.u-tokyo.ac.jp
+    allow_insecure_http: false
+    max_object_bytes: 1048576
+    user_agent: OpenShogiAI/0.3 (disabled source audit)
+    catalog: null
+    evidence_catalog: null
+    adapter: floodgate_disabled
+    robots_url: https://wdoor.c.u-tokyo.ac.jp/robots.txt
+    robots_policy: unverified

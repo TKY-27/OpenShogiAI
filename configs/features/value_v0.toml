@@ -1,0 +1,9 @@
+schema_version = 1
+
+[features]
+name = "value_v0"
+board_planes = true
+hand_counts = true
+side_to_move = true
+king_coordinates = true
+pseudo_attacks = false

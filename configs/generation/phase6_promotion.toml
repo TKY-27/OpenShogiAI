@@ -1,0 +1,21 @@
+schema_version = 1
+
+[evidence]
+minimum_games = 40
+minimum_decisive_games = 12
+minimum_group_games = 10
+max_illegal = 0
+max_crashes = 0
+
+[thresholds]
+promote_score_rate = 0.55
+promote_wilson_lower = 0.50
+reject_score_rate = 0.45
+reject_wilson_upper = 0.50
+minimum_group_score_rate = 0.45
+maximum_side_score_gap = 0.20
+
+[performance]
+require_metrics = false
+maximum_inference_slowdown = 1.50
+maximum_search_slowdown = 1.50

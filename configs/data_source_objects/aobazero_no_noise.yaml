@@ -1,0 +1,503 @@
+schema_version: 1
+source_id: aobazero-no-noise
+objects:
+  - object_id: w4745
+    url: http://www.yss-aya.com/aobazero/no_noise/w4745.csa
+    filename: w4745.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4740
+    url: http://www.yss-aya.com/aobazero/no_noise/w4740.csa
+    filename: w4740.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4735
+    url: http://www.yss-aya.com/aobazero/no_noise/w4735.csa
+    filename: w4735.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4730
+    url: http://www.yss-aya.com/aobazero/no_noise/w4730.csa
+    filename: w4730.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4725
+    url: http://www.yss-aya.com/aobazero/no_noise/w4725.csa
+    filename: w4725.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4720
+    url: http://www.yss-aya.com/aobazero/no_noise/w4720.csa
+    filename: w4720.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4715
+    url: http://www.yss-aya.com/aobazero/no_noise/w4715.csa
+    filename: w4715.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4710
+    url: http://www.yss-aya.com/aobazero/no_noise/w4710.csa
+    filename: w4710.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4705
+    url: http://www.yss-aya.com/aobazero/no_noise/w4705.csa
+    filename: w4705.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4700
+    url: http://www.yss-aya.com/aobazero/no_noise/w4700.csa
+    filename: w4700.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4695
+    url: http://www.yss-aya.com/aobazero/no_noise/w4695.csa
+    filename: w4695.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4690
+    url: http://www.yss-aya.com/aobazero/no_noise/w4690.csa
+    filename: w4690.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4685
+    url: http://www.yss-aya.com/aobazero/no_noise/w4685.csa
+    filename: w4685.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4680
+    url: http://www.yss-aya.com/aobazero/no_noise/w4680.csa
+    filename: w4680.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4675
+    url: http://www.yss-aya.com/aobazero/no_noise/w4675.csa
+    filename: w4675.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4670
+    url: http://www.yss-aya.com/aobazero/no_noise/w4670.csa
+    filename: w4670.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4665
+    url: http://www.yss-aya.com/aobazero/no_noise/w4665.csa
+    filename: w4665.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4660
+    url: http://www.yss-aya.com/aobazero/no_noise/w4660.csa
+    filename: w4660.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4655
+    url: http://www.yss-aya.com/aobazero/no_noise/w4655.csa
+    filename: w4655.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4650
+    url: http://www.yss-aya.com/aobazero/no_noise/w4650.csa
+    filename: w4650.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4645
+    url: http://www.yss-aya.com/aobazero/no_noise/w4645.csa
+    filename: w4645.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4640
+    url: http://www.yss-aya.com/aobazero/no_noise/w4640.csa
+    filename: w4640.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4635
+    url: http://www.yss-aya.com/aobazero/no_noise/w4635.csa
+    filename: w4635.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4630
+    url: http://www.yss-aya.com/aobazero/no_noise/w4630.csa
+    filename: w4630.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4625
+    url: http://www.yss-aya.com/aobazero/no_noise/w4625.csa
+    filename: w4625.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4620
+    url: http://www.yss-aya.com/aobazero/no_noise/w4620.csa
+    filename: w4620.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4615
+    url: http://www.yss-aya.com/aobazero/no_noise/w4615.csa
+    filename: w4615.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4610
+    url: http://www.yss-aya.com/aobazero/no_noise/w4610.csa
+    filename: w4610.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4605
+    url: http://www.yss-aya.com/aobazero/no_noise/w4605.csa
+    filename: w4605.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4600
+    url: http://www.yss-aya.com/aobazero/no_noise/w4600.csa
+    filename: w4600.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4595
+    url: http://www.yss-aya.com/aobazero/no_noise/w4595.csa
+    filename: w4595.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4590
+    url: http://www.yss-aya.com/aobazero/no_noise/w4590.csa
+    filename: w4590.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4585
+    url: http://www.yss-aya.com/aobazero/no_noise/w4585.csa
+    filename: w4585.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4580
+    url: http://www.yss-aya.com/aobazero/no_noise/w4580.csa
+    filename: w4580.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4575
+    url: http://www.yss-aya.com/aobazero/no_noise/w4575.csa
+    filename: w4575.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4570
+    url: http://www.yss-aya.com/aobazero/no_noise/w4570.csa
+    filename: w4570.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4565
+    url: http://www.yss-aya.com/aobazero/no_noise/w4565.csa
+    filename: w4565.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4560
+    url: http://www.yss-aya.com/aobazero/no_noise/w4560.csa
+    filename: w4560.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4555
+    url: http://www.yss-aya.com/aobazero/no_noise/w4555.csa
+    filename: w4555.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4550
+    url: http://www.yss-aya.com/aobazero/no_noise/w4550.csa
+    filename: w4550.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4545
+    url: http://www.yss-aya.com/aobazero/no_noise/w4545.csa
+    filename: w4545.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4540
+    url: http://www.yss-aya.com/aobazero/no_noise/w4540.csa
+    filename: w4540.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4535
+    url: http://www.yss-aya.com/aobazero/no_noise/w4535.csa
+    filename: w4535.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4530
+    url: http://www.yss-aya.com/aobazero/no_noise/w4530.csa
+    filename: w4530.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4525
+    url: http://www.yss-aya.com/aobazero/no_noise/w4525.csa
+    filename: w4525.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4520
+    url: http://www.yss-aya.com/aobazero/no_noise/w4520.csa
+    filename: w4520.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4515
+    url: http://www.yss-aya.com/aobazero/no_noise/w4515.csa
+    filename: w4515.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4510
+    url: http://www.yss-aya.com/aobazero/no_noise/w4510.csa
+    filename: w4510.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4505
+    url: http://www.yss-aya.com/aobazero/no_noise/w4505.csa
+    filename: w4505.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4500
+    url: http://www.yss-aya.com/aobazero/no_noise/w4500.csa
+    filename: w4500.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4490
+    url: http://www.yss-aya.com/aobazero/no_noise/w4490.csa
+    filename: w4490.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4485
+    url: http://www.yss-aya.com/aobazero/no_noise/w4485.csa
+    filename: w4485.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4480
+    url: http://www.yss-aya.com/aobazero/no_noise/w4480.csa
+    filename: w4480.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4475
+    url: http://www.yss-aya.com/aobazero/no_noise/w4475.csa
+    filename: w4475.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4470
+    url: http://www.yss-aya.com/aobazero/no_noise/w4470.csa
+    filename: w4470.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4465
+    url: http://www.yss-aya.com/aobazero/no_noise/w4465.csa
+    filename: w4465.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4460
+    url: http://www.yss-aya.com/aobazero/no_noise/w4460.csa
+    filename: w4460.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4455
+    url: http://www.yss-aya.com/aobazero/no_noise/w4455.csa
+    filename: w4455.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4450
+    url: http://www.yss-aya.com/aobazero/no_noise/w4450.csa
+    filename: w4450.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4445
+    url: http://www.yss-aya.com/aobazero/no_noise/w4445.csa
+    filename: w4445.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4440
+    url: http://www.yss-aya.com/aobazero/no_noise/w4440.csa
+    filename: w4440.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4435
+    url: http://www.yss-aya.com/aobazero/no_noise/w4435.csa
+    filename: w4435.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4430
+    url: http://www.yss-aya.com/aobazero/no_noise/w4430.csa
+    filename: w4430.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4415
+    url: http://www.yss-aya.com/aobazero/no_noise/w4415.csa
+    filename: w4415.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4410
+    url: http://www.yss-aya.com/aobazero/no_noise/w4410.csa
+    filename: w4410.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4405
+    url: http://www.yss-aya.com/aobazero/no_noise/w4405.csa
+    filename: w4405.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4400
+    url: http://www.yss-aya.com/aobazero/no_noise/w4400.csa
+    filename: w4400.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4395
+    url: http://www.yss-aya.com/aobazero/no_noise/w4395.csa
+    filename: w4395.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4390
+    url: http://www.yss-aya.com/aobazero/no_noise/w4390.csa
+    filename: w4390.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4385
+    url: http://www.yss-aya.com/aobazero/no_noise/w4385.csa
+    filename: w4385.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4380
+    url: http://www.yss-aya.com/aobazero/no_noise/w4380.csa
+    filename: w4380.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4375
+    url: http://www.yss-aya.com/aobazero/no_noise/w4375.csa
+    filename: w4375.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4370
+    url: http://www.yss-aya.com/aobazero/no_noise/w4370.csa
+    filename: w4370.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4365
+    url: http://www.yss-aya.com/aobazero/no_noise/w4365.csa
+    filename: w4365.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4360
+    url: http://www.yss-aya.com/aobazero/no_noise/w4360.csa
+    filename: w4360.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4355
+    url: http://www.yss-aya.com/aobazero/no_noise/w4355.csa
+    filename: w4355.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4350
+    url: http://www.yss-aya.com/aobazero/no_noise/w4350.csa
+    filename: w4350.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4345
+    url: http://www.yss-aya.com/aobazero/no_noise/w4345.csa
+    filename: w4345.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4340
+    url: http://www.yss-aya.com/aobazero/no_noise/w4340.csa
+    filename: w4340.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4335
+    url: http://www.yss-aya.com/aobazero/no_noise/w4335.csa
+    filename: w4335.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4330
+    url: http://www.yss-aya.com/aobazero/no_noise/w4330.csa
+    filename: w4330.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4325
+    url: http://www.yss-aya.com/aobazero/no_noise/w4325.csa
+    filename: w4325.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4320
+    url: http://www.yss-aya.com/aobazero/no_noise/w4320.csa
+    filename: w4320.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4315
+    url: http://www.yss-aya.com/aobazero/no_noise/w4315.csa
+    filename: w4315.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4310
+    url: http://www.yss-aya.com/aobazero/no_noise/w4310.csa
+    filename: w4310.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4305
+    url: http://www.yss-aya.com/aobazero/no_noise/w4305.csa
+    filename: w4305.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4300
+    url: http://www.yss-aya.com/aobazero/no_noise/w4300.csa
+    filename: w4300.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4295
+    url: http://www.yss-aya.com/aobazero/no_noise/w4295.csa
+    filename: w4295.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4290
+    url: http://www.yss-aya.com/aobazero/no_noise/w4290.csa
+    filename: w4290.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4285
+    url: http://www.yss-aya.com/aobazero/no_noise/w4285.csa
+    filename: w4285.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4280
+    url: http://www.yss-aya.com/aobazero/no_noise/w4280.csa
+    filename: w4280.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4275
+    url: http://www.yss-aya.com/aobazero/no_noise/w4275.csa
+    filename: w4275.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4270
+    url: http://www.yss-aya.com/aobazero/no_noise/w4270.csa
+    filename: w4270.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4265
+    url: http://www.yss-aya.com/aobazero/no_noise/w4265.csa
+    filename: w4265.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4260
+    url: http://www.yss-aya.com/aobazero/no_noise/w4260.csa
+    filename: w4260.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4255
+    url: http://www.yss-aya.com/aobazero/no_noise/w4255.csa
+    filename: w4255.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4250
+    url: http://www.yss-aya.com/aobazero/no_noise/w4250.csa
+    filename: w4250.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4245
+    url: http://www.yss-aya.com/aobazero/no_noise/w4245.csa
+    filename: w4245.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4240
+    url: http://www.yss-aya.com/aobazero/no_noise/w4240.csa
+    filename: w4240.csa
+    data_format: CSA
+    compression: none
+  - object_id: w4235
+    url: http://www.yss-aya.com/aobazero/no_noise/w4235.csa
+    filename: w4235.csa
+    data_format: CSA
+    compression: none

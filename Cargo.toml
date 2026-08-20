@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "engine/cli",
+    "engine/core",
+    "engine/usi",
+    "engine/wasm",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+authors = ["OpenShogiAI contributors"]
+
+[workspace.dependencies]
+open-shogi-core = { path = "engine/core" }
+open-shogi-usi = { path = "engine/usi" }
+proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }

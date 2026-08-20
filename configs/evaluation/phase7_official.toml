@@ -1,0 +1,25 @@
+schema = "phase7_evaluation_config/v1"
+
+[official]
+run_id = "phase7-bounded-official-v1"
+profile = "champion"
+human_sides = ["black", "white"]
+nodes = 10000
+depth = 8
+max_plies = 256
+opening_enabled = false
+opening_max_plies = 24
+
+[teacher]
+config_path = "configs/teacher/apery-v2.0.0.yaml"
+nodes = 25000
+
+[diagnosis]
+move_regret_cp = 150
+evaluation_disagreement_cp = 200
+hard_example_cp = 150
+max_hard_examples = 128
+
+[resources]
+memory_limit_mib = 4096
+max_teacher_calls = 512

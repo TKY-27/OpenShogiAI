@@ -1,0 +1,28 @@
+schema_version = 1
+
+[project]
+name = "OpenShogiAI"
+version = "0.0.0"
+license = "AGPL-3.0-only"
+
+[runtime]
+rust_channel = "stable"
+python = "3.12"
+
+[reproducibility]
+default_seed = 20260729
+record_git_commit = true
+record_config_hash = true
+record_data_manifest_hash = true
+
+[resources]
+reference_host_memory_gib = 24
+working_memory_limit_gib = 20
+default_parallel_jobs = 4
+
+[paths]
+raw_data = "data/raw"
+processed_data = "data/processed"
+weights = "weights"
+artifacts = "artifacts"
+local = "local"

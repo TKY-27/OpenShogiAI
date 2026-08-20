@@ -1,0 +1,24 @@
+* text=auto eol=lf
+
+*.rs text diff=rust
+*.py text diff=python
+*.ts text
+*.tsx text
+*.toml text
+*.json text
+*.md text
+*.sh text eol=lf
+Makefile text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.wasm binary
+*.parquet binary
+*.zst binary
+*.gz binary
+*.onnx binary
+*.pt binary
+*.pth binary
+*.safetensors binary

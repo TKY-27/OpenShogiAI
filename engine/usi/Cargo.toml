@@ -1,0 +1,17 @@
+[package]
+name = "open-shogi-usi"
+description = "USI protocol boundary for OpenShogiAI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+open-shogi-core.workspace = true
+
+[dev-dependencies]
+sha2 = "=0.10.9"
+
+[lints]
+workspace = true

@@ -1,0 +1,36 @@
+schema_version = 1
+
+[run]
+games = 40
+normal_start_pairs = 10
+start_set_pairs = 10
+seed = 20260808
+nodes_per_move = 500
+max_plies = 256
+search_depth = 6
+hash_mib = 64
+
+[resources]
+workers = 2
+memory_limit_mib = 8192
+memory_per_worker_mib = 3072
+game_timeout_seconds = 1800
+command_timeout_seconds = 3600
+
+[paths]
+engine_cli = "target/release/open-shogi-cli"
+output_root = "artifacts/phase6"
+start_positions_manifest = "artifacts/phase6-inputs/start-positions.json"
+
+[hard_positions]
+teacher_drop_cp = 150
+evaluation_disagreement_cp = 200
+candidate_gap_cp = 40
+minimum_search_nodes = 500
+max_additional_labels = 500
+teacher_label_limit = 10000
+
+[replay]
+capacity = 100000
+minimum_older_positions = 1000
+dedup_key = "canonical_sfen"

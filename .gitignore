@@ -1,0 +1,54 @@
+# Rust
+/target/
+
+# Python and uv
+/.venv/
+/.uv-cache/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.ruff_cache/
+.coverage
+htmlcov/
+
+# Local data and generated artifacts
+/data/raw/
+/data/processed/
+/training/data/raw/
+/training/data/processed/
+/artifacts/*
+!/artifacts/README.md
+/local/*
+!/local/README.md
+
+# Generated model weights (documentation remains tracked)
+/weights/*
+!/weights/README.md
+!/weights/LICENSE-PENDING.md
+
+# Teacher engines and evaluation files
+**/teacher/
+!/configs/teacher/
+!/configs/teacher/*.yaml
+*.nnue
+
+# Common model/checkpoint formats
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

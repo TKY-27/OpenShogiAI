@@ -1,0 +1,10 @@
+schema_version = 1
+
+[model]
+name = "value_v0"
+hidden_layers = 2
+hidden_dim = 64
+activation = "relu"
+dropout = 0.1
+output_scale_cp = 1200.0
+auxiliary_policy_head = true
