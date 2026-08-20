@@ -1,0 +1,61 @@
+schema: phase4_teacher_config/v1
+teacher:
+  name: Apery
+  version: 2.0.0
+  executable: local/teacher/build/apery-v2.0.0/apery_2.0.0/target/release/apery
+  arguments: []
+  cwd: local/teacher/build/apery-v2.0.0/apery_2.0.0
+  install_manifest: local/teacher/build/apery-v2.0.0/install-manifest.json
+  binary_sha256: 8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403
+  eval_dir: local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617
+  eval_files:
+    - path: local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617/KKP.bin
+      sha256: 422b23bced817ecb3430adf1d2621f5a7934263b4e46673ab80cf34633537fa5
+    - path: local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617/KPP.bin
+      sha256: 4906c48c201a102ec02217216929c20f73ab364e79be26e6213a02c04e454805
+  options:
+    Book_Enable: false
+    Eval_Dir: eval/20190617
+    Eval_Hash: 256
+    USI_Ponder: false
+  nodes: 25000
+  multipv: 32
+  threads: 4
+  hash_mb: 1024
+  concurrency: 1
+  reference_host_memory_gib: 24
+  working_memory_limit_gib: 16
+timeouts:
+  startup_ms: 10000
+  ready_ms: 120000
+  search_ms: 120000
+  stop_ms: 5000
+  quit_ms: 5000
+protocol_limits:
+  max_stdout_line_bytes: 65536
+  max_stdout_queue_lines: 2048
+  max_search_lines: 100000
+  max_stderr_bytes: 65536
+selection:
+  seed: open-shogi-ai-phase4-teacher-selection-v1-20260808
+  max_positions: 10000
+  max_positions_per_game: 128
+  opening_end_basis_points: 3333
+  middlegame_end_basis_points: 6667
+  max_input_rows: 100000
+  max_input_compressed_bytes: 67108864
+  max_input_uncompressed_bytes: 268435456
+  max_input_line_bytes: 4194304
+benchmark:
+  node_candidates:
+    - 10000
+    - 25000
+  positions: 9
+  max_p95_ms: 30000
+  max_peak_rss_mib: 4096
+  require_peak_rss: true
+  rss_poll_ms: 50
+labeling:
+  max_retries: 1
+  max_quarantined: 25
+  manifest_interval: 250
