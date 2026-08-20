@@ -38,7 +38,10 @@ def build_residual_baseline(
 
     engine_sha256, engine_size = hash_file(engine, max_bytes=256 * 1024 * 1024)
     with tempfile.TemporaryDirectory(prefix="open-shogi-residual-") as temporary:
-        temporary_dir = Path(temporary)
+        # macOS may spell its temporary root through /var, a symlink to
+        # /private/var. Resolve it before handing the path to the engine's
+        # intentionally no-symlink artifact reader.
+        temporary_dir = Path(temporary).resolve(strict=True)
         input_path = temporary_dir / "positions.sfen"
         engine_output = temporary_dir / "handcrafted.jsonl"
         input_path.write_text(
