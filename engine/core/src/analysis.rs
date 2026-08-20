@@ -507,6 +507,14 @@ mod tests {
         let first = service.step(node_plan(50_000, 4), 1).unwrap();
         let second = service.step(node_plan(50_000, 4), 2).unwrap();
 
+        eprintln!(
+            "analysis transposition reuse: first_nodes={} second_nodes={} second_tt_hits={} second_tt_probes={}",
+            first.result.nodes,
+            second.result.nodes,
+            second.result.stats.tt_hits,
+            second.result.stats.tt_probes,
+        );
+
         assert!(second.result.stats.tt_hits > 0);
         assert!(second.result.nodes <= first.result.nodes);
         assert!(!second.result.root_moves.is_empty());

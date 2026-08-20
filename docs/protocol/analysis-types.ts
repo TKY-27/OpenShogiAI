@@ -1,5 +1,16 @@
 export const ANALYSIS_SCHEMA = "open_shogi_analysis/v1" as const;
 export const TIME_CONTROL_SCHEMA = "open_shogi_time_control/v1" as const;
+export const RESOURCE_BUDGET_SCHEMA = "open_shogi_resource_budget/v1" as const;
+
+export interface ResourceBudget {
+  schema: typeof RESOURCE_BUDGET_SCHEMA;
+  playThreads: 1;
+  analysisThreads: 0 | 1;
+  playHashMegabytes: number;
+  analysisHashMegabytes: number;
+  analysisPauseDuringAiTurn: boolean;
+  maximumAggregateMemoryMegabytes: number;
+}
 
 export interface AnalysisStart {
   schema: typeof ANALYSIS_SCHEMA;

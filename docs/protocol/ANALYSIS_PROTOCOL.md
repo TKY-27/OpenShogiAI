@@ -73,7 +73,9 @@ as completed cache entries.
 pause-analysis-during-AI-turn, and maximum aggregate memory. Current search is single-threaded, so
 play threads must be one and analysis threads must be zero or one. Hash allocations must fit the
 aggregate memory ceiling. Play and analysis own different `SearchEngine` instances; a coordinator
-can deny analysis slices while play is active.
+can deny analysis slices while play is active. The host-facing closed schema is
+[`resource-budget.schema.json`](resource-budget.schema.json), and the matching UI type is
+`ResourceBudget` in [`analysis-types.ts`](analysis-types.ts).
 
 ## Conformance
 

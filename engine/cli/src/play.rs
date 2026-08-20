@@ -228,6 +228,16 @@ enum Budget {
     Casual,
     Nodes(u64),
     MoveTime(u64),
+    Clock(ClockBudget),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ClockBudget {
+    black_time: u64,
+    white_time: u64,
+    byoyomi: Option<u64>,
+    black_increment: Option<u64>,
+    white_increment: Option<u64>,
 }
 
 struct PlayConfig {
@@ -1377,6 +1387,16 @@ struct HumanPlayConfigRecord {
     human_side: String,
     budget_kind: String,
     budget_value: u64,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    black_time_ms: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    white_time_ms: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    byoyomi_ms: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    black_increment_ms: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    white_increment_ms: Option<u64>,
     safety_margin_ms: u64,
     time_control_schema: String,
     depth: u8,
@@ -1458,6 +1478,11 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
     let mut human = Side::Black;
     let mut nodes = None;
     let mut movetime_ms = None;
+    let mut black_time_ms = None;
+    let mut white_time_ms = None;
+    let mut byoyomi_ms = None;
+    let mut black_increment_ms = None;
+    let mut white_increment_ms = None;
     let mut safety_margin_ms = 50_u64;
     let mut depth = 8_u8;
     let mut sfen = None;
@@ -1490,6 +1515,29 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
             "--nodes" => nodes = Some(parse_next(arguments, &mut index, "--nodes")?),
             "--movetime-ms" => {
                 movetime_ms = Some(parse_next(arguments, &mut index, "--movetime-ms")?);
+            }
+            "--black-time-ms" => {
+                black_time_ms = Some(parse_next(arguments, &mut index, "--black-time-ms")?);
+            }
+            "--white-time-ms" => {
+                white_time_ms = Some(parse_next(arguments, &mut index, "--white-time-ms")?);
+            }
+            "--byoyomi-ms" => {
+                byoyomi_ms = Some(parse_next(arguments, &mut index, "--byoyomi-ms")?);
+            }
+            "--black-increment-ms" => {
+                black_increment_ms = Some(parse_next(
+                    arguments,
+                    &mut index,
+                    "--black-increment-ms",
+                )?);
+            }
+            "--white-increment-ms" => {
+                white_increment_ms = Some(parse_next(
+                    arguments,
+                    &mut index,
+                    "--white-increment-ms",
+                )?);
             }
             "--safety-margin-ms" => {
                 safety_margin_ms =
@@ -1571,20 +1619,44 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
                 .to_owned(),
         );
     }
-    let budget = match (nodes, movetime_ms) {
-        (Some(_), Some(_)) => {
-            return Err("--nodes and --movetime-ms are mutually exclusive".to_owned());
+    let has_clock = black_time_ms.is_some()
+        || white_time_ms.is_some()
+        || byoyomi_ms.is_some()
+        || black_increment_ms.is_some()
+        || white_increment_ms.is_some();
+    if has_clock && (nodes.is_some() || movetime_ms.is_some()) {
+        return Err(
+            "clock options, --nodes, and --movetime-ms are mutually exclusive".to_owned(),
+        );
+    }
+    let budget = if has_clock {
+        let clock = ClockBudget {
+            black_time: black_time_ms.unwrap_or(0),
+            white_time: white_time_ms.unwrap_or(0),
+            byoyomi: byoyomi_ms,
+            black_increment: black_increment_ms,
+            white_increment: white_increment_ms,
+        };
+        time_control_for_budget(Budget::Clock(clock), safety_margin_ms).validate()?;
+        Budget::Clock(clock)
+    } else {
+        match (nodes, movetime_ms) {
+            (Some(_), Some(_)) => {
+                return Err("--nodes and --movetime-ms are mutually exclusive".to_owned());
+            }
+            (Some(0), _) | (_, Some(0)) => {
+                return Err("search budget must be positive".to_owned());
+            }
+            (Some(value), None) if value <= MAX_NODES_PER_MOVE => Budget::Nodes(value),
+            (Some(_), None) => {
+                return Err(format!("--nodes must be 1..={MAX_NODES_PER_MOVE}"));
+            }
+            (None, Some(value)) if value <= MAX_MOVETIME_MS => Budget::MoveTime(value),
+            (None, Some(_)) => {
+                return Err(format!("--movetime-ms must be 1..={MAX_MOVETIME_MS}"));
+            }
+            (None, None) => Budget::Casual,
         }
-        (Some(0), _) | (_, Some(0)) => return Err("search budget must be positive".to_owned()),
-        (Some(value), None) if value <= MAX_NODES_PER_MOVE => Budget::Nodes(value),
-        (Some(_), None) => {
-            return Err(format!("--nodes must be 1..={MAX_NODES_PER_MOVE}"));
-        }
-        (None, Some(value)) if value <= MAX_MOVETIME_MS => Budget::MoveTime(value),
-        (None, Some(_)) => {
-            return Err(format!("--movetime-ms must be 1..={MAX_MOVETIME_MS}"));
-        }
-        (None, None) => Budget::Casual,
     };
     let initial = match sfen {
         Some(value) => parse_sfen(&value).map_err(|error| format!("invalid --sfen: {error}"))?,
@@ -8258,12 +8330,18 @@ fn play_config_sha256(
     profile: &ResolvedProfile,
     opening: Option<&ResolvedOpening>,
 ) -> String {
+    let clock = clock_budget(config.budget);
     sha256_text(&format!(
-        "schema=open_shogi_play_config/v2;time_control_schema={};human={};budget_kind={};budget_value={};safety_margin_ms={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};opening_profile={};opening_minimum_samples={};opening_maximum_teacher_loss_cp={};transposition_entries=16384;engine={}:{}",
+        "schema=open_shogi_play_config/v3;time_control_schema={};human={};budget_kind={};budget_value={};black_time_ms={:?};white_time_ms={:?};byoyomi_ms={:?};black_increment_ms={:?};white_increment_ms={:?};safety_margin_ms={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};opening_profile={};opening_minimum_samples={};opening_maximum_teacher_loss_cp={};transposition_entries=16384;engine={}:{}",
         open_shogi_core::TIME_CONTROL_SCHEMA,
         side_name(config.human),
         budget_parts(config.budget).0,
         budget_parts(config.budget).1,
+        clock.map(|value| value.black_time),
+        clock.map(|value| value.white_time),
+        clock.and_then(|value| value.byoyomi),
+        clock.and_then(|value| value.black_increment),
+        clock.and_then(|value| value.white_increment),
         config.safety_margin_ms,
         config.depth,
         to_sfen(&config.initial),
@@ -8289,11 +8367,16 @@ fn play_config_sha256(
 
 fn recorded_play_config_sha256(config: &HumanPlayConfigRecord) -> String {
     sha256_text(&format!(
-        "schema=open_shogi_play_config/v2;time_control_schema={};human={};budget_kind={};budget_value={};safety_margin_ms={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};opening_profile={};opening_minimum_samples={};opening_maximum_teacher_loss_cp={};transposition_entries={};engine={}:{}",
+        "schema=open_shogi_play_config/v3;time_control_schema={};human={};budget_kind={};budget_value={};black_time_ms={:?};white_time_ms={:?};byoyomi_ms={:?};black_increment_ms={:?};white_increment_ms={:?};safety_margin_ms={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};opening_profile={};opening_minimum_samples={};opening_maximum_teacher_loss_cp={};transposition_entries={};engine={}:{}",
         config.time_control_schema,
         config.human_side,
         config.budget_kind,
         config.budget_value,
+        config.black_time_ms,
+        config.white_time_ms,
+        config.byoyomi_ms,
+        config.black_increment_ms,
+        config.white_increment_ms,
         config.safety_margin_ms,
         config.depth,
         config.initial_sfen,
@@ -8325,12 +8408,18 @@ fn human_play_config_record(
     config_sha256: &str,
 ) -> HumanPlayConfigRecord {
     let (budget_kind, budget_value) = budget_parts(config.budget);
+    let clock = clock_budget(config.budget);
     HumanPlayConfigRecord {
-        schema: "open_shogi_play_config/v2".to_owned(),
+        schema: "open_shogi_play_config/v3".to_owned(),
         config_sha256: config_sha256.to_owned(),
         human_side: side_name(config.human).to_owned(),
         budget_kind: budget_kind.to_owned(),
         budget_value,
+        black_time_ms: clock.map(|value| value.black_time),
+        white_time_ms: clock.map(|value| value.white_time),
+        byoyomi_ms: clock.and_then(|value| value.byoyomi),
+        black_increment_ms: clock.and_then(|value| value.black_increment),
+        white_increment_ms: clock.and_then(|value| value.white_increment),
         safety_margin_ms: config.safety_margin_ms,
         time_control_schema: open_shogi_core::TIME_CONTROL_SCHEMA.to_owned(),
         depth: config.depth,
@@ -8371,6 +8460,14 @@ const fn budget_parts(budget: Budget) -> (&'static str, u64) {
         Budget::Casual => ("casual", open_shogi_core::CASUAL_HARD_MAX_MS),
         Budget::Nodes(value) => ("nodes", value),
         Budget::MoveTime(value) => ("movetime_ms", value),
+        Budget::Clock(_) => ("clock", 0),
+    }
+}
+
+const fn clock_budget(budget: Budget) -> Option<ClockBudget> {
+    match budget {
+        Budget::Clock(clock) => Some(clock),
+        Budget::Casual | Budget::Nodes(_) | Budget::MoveTime(_) => None,
     }
 }
 
@@ -8392,7 +8489,30 @@ fn time_control_for_budget(budget: Budget, safety_margin_ms: u64) -> TimeControl
             safety_margin_ms,
             ..TimeControl::casual()
         },
+        Budget::Clock(clock) => TimeControl {
+            black_time_ms: Some(clock.black_time),
+            white_time_ms: Some(clock.white_time),
+            byoyomi_ms: clock.byoyomi,
+            black_increment_ms: clock.black_increment,
+            white_increment_ms: clock.white_increment,
+            casual: false,
+            safety_margin_ms,
+            ..TimeControl::casual()
+        },
     }
+}
+
+fn advance_clock_after_move(budget: &mut Budget, side: Side, elapsed_ms: u64) {
+    let Budget::Clock(clock) = budget else {
+        return;
+    };
+    let (remaining, increment) = match side {
+        Side::Black => (&mut clock.black_time, clock.black_increment),
+        Side::White => (&mut clock.white_time, clock.white_increment),
+    };
+    *remaining = remaining
+        .saturating_sub(elapsed_ms)
+        .saturating_add(increment.unwrap_or(0));
 }
 
 const fn profile_name(profile: PlayProfile) -> &'static str {
@@ -8460,6 +8580,7 @@ fn run_interactive_resolved<R: BufRead, W: Write>(
     let mut engine = build_search_engine(config, profile);
     let config_sha256 = play_config_sha256(config, profile, opening);
     let config_record = human_play_config_record(config, profile, opening, &config_sha256);
+    let mut current_budget = config.budget;
     let mut decisions = Vec::new();
     let mut special = None;
     writeln!(
@@ -8531,6 +8652,7 @@ fn run_interactive_resolved<R: BufRead, W: Write>(
                     )
                 })
             {
+                let side = game.position().side_to_move();
                 let score_rate = choice
                     .score_rate
                     .map_or_else(|| "n/a".to_owned(), |value| format!("{value:.3}"));
@@ -8567,9 +8689,11 @@ fn run_interactive_resolved<R: BufRead, W: Write>(
                     score_cp: None,
                     opening_book: true,
                 });
+                advance_clock_after_move(&mut current_budget, side, 0);
                 continue;
             }
-            let request = time_control_for_budget(config.budget, config.safety_margin_ms);
+            let side = game.position().side_to_move();
+            let request = time_control_for_budget(current_budget, config.safety_margin_ms);
             let plan = TimeManager::default().plan(
                 game.position().side_to_move(),
                 request,
@@ -8626,6 +8750,11 @@ fn run_interactive_resolved<R: BufRead, W: Write>(
                 score_cp: Some(result.score),
                 opening_book: false,
             });
+            advance_clock_after_move(
+                &mut current_budget,
+                side,
+                u64::try_from(result.elapsed.as_millis()).unwrap_or(u64::MAX),
+            );
         }
     }
     let (special, validation) = special
@@ -8885,7 +9014,7 @@ fn validate_paired_evidence(
     let canonical_config = serde_json::to_vec(&config)
         .map_err(|error| format!("cannot canonicalize human-play configuration: {error}"))?;
     if canonical_config != config_line.as_bytes()
-        || config.schema != "open_shogi_play_config/v2"
+        || config.schema != "open_shogi_play_config/v3"
         || config.config_sha256 != expected_config_sha256
         || recorded_play_config_sha256(&config) != expected_config_sha256
     {
@@ -8927,9 +9056,38 @@ fn validate_paired_evidence(
 )]
 fn validate_human_play_config_record(config: &HumanPlayConfigRecord) -> Result<(), String> {
     validate_sha256(&config.config_sha256)?;
+    let clock_fields = [
+        config.black_time_ms,
+        config.white_time_ms,
+        config.byoyomi_ms,
+        config.black_increment_ms,
+        config.white_increment_ms,
+    ];
+    let clock_valid = if config.budget_kind == "clock" {
+        config.budget_value == 0
+            && config.black_time_ms.is_some()
+            && config.white_time_ms.is_some()
+            && TimeControl {
+                black_time_ms: config.black_time_ms,
+                white_time_ms: config.white_time_ms,
+                byoyomi_ms: config.byoyomi_ms,
+                black_increment_ms: config.black_increment_ms,
+                white_increment_ms: config.white_increment_ms,
+                casual: false,
+                safety_margin_ms: config.safety_margin_ms,
+                ..TimeControl::casual()
+            }
+            .validate()
+            .is_ok()
+    } else {
+        config.budget_value > 0 && clock_fields.iter().all(Option::is_none)
+    };
     if !matches!(config.human_side.as_str(), "black" | "white")
-        || !matches!(config.budget_kind.as_str(), "casual" | "nodes" | "movetime_ms")
-        || config.budget_value == 0
+        || !matches!(
+            config.budget_kind.as_str(),
+            "casual" | "nodes" | "movetime_ms" | "clock"
+        )
+        || !clock_valid
         || (config.budget_kind == "casual"
             && config.budget_value != open_shogi_core::CASUAL_HARD_MAX_MS)
         || (config.budget_kind == "nodes" && config.budget_value > MAX_NODES_PER_MOVE)
@@ -9870,7 +10028,8 @@ mod tests {
         PromotionEvidence, PromotionWilsonInterval, PublicationMarker, PublicationPaths,
         PublicationStorage,
         RegistryArtifact, RegistryVerificationBudget,
-        absolute_publication_path, analyze_arena_results, contained_artifact_path,
+        absolute_publication_path, advance_clock_after_move, analyze_arena_results,
+        contained_artifact_path,
         derive_promotion_decision, deserialize_closed_json, encode_decision_log, encode_record,
         derive_paired_job_seed, handcrafted_profile, human_play_config_record, parse_arguments,
         parse_generation_policy, parse_phase6_selfplay_config, parse_unique_json,
@@ -9912,6 +10071,36 @@ mod tests {
             ])
             .is_err()
         );
+        let clock = parse_arguments(&[
+            "--black-time-ms".into(),
+            "60000".into(),
+            "--white-time-ms".into(),
+            "50000".into(),
+            "--byoyomi-ms".into(),
+            "1000".into(),
+            "--black-increment-ms".into(),
+            "100".into(),
+            "--white-increment-ms".into(),
+            "200".into(),
+        ])
+        .unwrap();
+        let Budget::Clock(clock) = clock.budget else {
+            panic!("clock options did not select clock mode");
+        };
+        assert_eq!(clock.black_time, 60_000);
+        assert_eq!(clock.white_time, 50_000);
+        assert_eq!(clock.byoyomi, Some(1_000));
+        assert_eq!(clock.black_increment, Some(100));
+        assert_eq!(clock.white_increment, Some(200));
+        assert!(
+            parse_arguments(&[
+                "--black-time-ms".into(),
+                "1000".into(),
+                "--nodes".into(),
+                "1".into(),
+            ])
+            .is_err()
+        );
         assert!(
             parse_arguments(&["--depth".into(), "1".into(), "--depth".into(), "2".into(),])
                 .is_err()
@@ -9936,6 +10125,24 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn native_clock_debits_the_ai_side_and_applies_its_increment() {
+        let mut budget = Budget::Clock(super::ClockBudget {
+            black_time: 10_000,
+            white_time: 20_000,
+            byoyomi: Some(1_000),
+            black_increment: Some(250),
+            white_increment: Some(500),
+        });
+        advance_clock_after_move(&mut budget, Side::Black, 1_200);
+        advance_clock_after_move(&mut budget, Side::White, 2_000);
+        let Budget::Clock(clock) = budget else {
+            panic!("clock mode changed unexpectedly");
+        };
+        assert_eq!(clock.black_time, 9_050);
+        assert_eq!(clock.white_time, 18_500);
     }
 
     #[test]
@@ -12203,7 +12410,7 @@ maximum_search_slowdown=1
         assert!(record.contains("$CONFIG_SHA256:"));
         assert!(record.contains("%TORYO\n"));
         let decisions = std::fs::read_to_string(&config.decision_log).unwrap();
-        assert!(decisions.starts_with("{\"schema\":\"open_shogi_play_config/v2\""));
+        assert!(decisions.starts_with("{\"schema\":\"open_shogi_play_config/v3\""));
         std::fs::remove_file(&config.output).unwrap();
         std::fs::remove_file(&config.decision_log).unwrap();
     }

@@ -20,11 +20,15 @@ engine/cli -> engine/usi -> engine/core <-+-> engine/wasm -> bindings/wasm
 ## Rust
 
 - `engine/core`: rules, legal moves, notation, game state, handcrafted evaluation,
-  `OSAVAL01` inference, secure artifact I/O, and search.
-- `engine/usi`: the bounded USI protocol boundary over `engine/core`.
+  `OSAVAL01` inference, secure artifact I/O, time allocation, play/analysis resource
+  coordination, persistent completed-depth analysis cache, opening-book validation, and search.
+- `engine/usi`: the interruptible USI protocol boundary over `engine/core`, including complete
+  clock mapping and immediate validated book moves.
 - `engine/cli`: local tools, terminal play, Arena, model inspection, dataset replay, and
-  opening-book integration.
-- `engine/wasm`: the versioned WebAssembly adapter over `engine/core`.
+  opening-book integration. Its line-oriented analysis command is the minimal reference client
+  for the UI protocol.
+- `engine/wasm`: the versioned WebAssembly adapter over `engine/core`, with the same time-control,
+  opening, and analysis lifecycle schemas.
 - `bindings/wasm`: deterministic `wasm-bindgen` output. It is an engine interface, not a GUI.
 
 Cargo dependency direction is one-way toward `engine/core`; no crate depends on UI code.
@@ -42,6 +46,11 @@ SFEN, USI, CSA, `OSAVAL01`, arena reports, model registries, and browser-engine 
 versioned, bounded formats documented in `docs/interfaces.md`. Untrusted files and process
 output are validated for size, schema, identity, hashes, legality, and path containment as
 applicable.
+
+Play and continuous analysis are separate logical `SearchEngine` instances. Compatible
+transposition entries and completed root evidence may be reused, but recursive call stacks are
+never serialized. Hosts enforce the versioned resource budget and may pause analysis slices while
+play is active.
 
 The generated Wasm bindings are the only physical artifact copied to OpenShogiUI. An integration
 check compares those four files byte-for-byte; UI code never imports an engine-internal crate.
