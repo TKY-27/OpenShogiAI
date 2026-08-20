@@ -1,0 +1,15 @@
+{
+  "schema": "open_shogi_tactical_suite/v1",
+  "cases": [
+    {
+      "id": "free-rook-capture",
+      "sfen": "4k4/9/9/5r3/4S4/9/9/9/K8 b - 1",
+      "expectedMoves": ["5e4d"]
+    },
+    {
+      "id": "mate-in-one-gold-drop",
+      "sfen": "3lkl3/9/4G4/9/9/9/9/9/K8 b G 1",
+      "expectedMoves": ["G*5b"]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+schema = "open_shogi_overall_champion_gate/v1"
+
+[arena]
+games = 40
+paired_colors = true
+movetime_ms = 10
+depth = 8
+hash_mib = 32
+max_plies = 128
+seed = 20260821
+opening_enabled = false
+
+[candidate]
+id = "residual-2x128-10k"
+kind = "residual"
+model_path = "local/campaign-inputs/models/residual-2x128/residual_2x128.f32.osaval"
+model_sha256 = "b577f7c98dad15c76af21146831169881068f8bf5a67a35409ce15ba1a0dede1"
+model_size = 1238128
+
+[incumbent]
+id = "handcrafted-experimental"
+kind = "handcrafted-experimental"
+
+[thresholds]
+confidence_level = 0.95
+minimum_decisive_games = 12
+minimum_score_rate = 0.55
+minimum_wilson_lower = 0.50
+maximum_illegal_moves = 0
+maximum_crashes = 0
+maximum_tactical_regressions = 0
+
+[tactical]
+suite_path = "configs/evaluation/overall_champion_tactical_suite.json"
+suite_sha256 = "90648b1fd1c6e2dacadc30204e1161e79815ba0bb7df2afd498450c9c8d4f79a"
+nodes = 10000
+timeout_seconds = 10

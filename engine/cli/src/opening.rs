@@ -361,6 +361,7 @@ impl OpeningBook {
         Ok(Self { entries, records })
     }
 
+    #[cfg(test)]
     pub fn select(&self, position: &Position) -> Option<OpeningChoice> {
         self.entries
             .get(&state_sfen(position))

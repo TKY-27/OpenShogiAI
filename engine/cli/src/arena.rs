@@ -23,7 +23,7 @@ use crate::{
     checksum::{
         read_file_artifact, read_open_file_artifact, read_retained_file_artifact, sha256_bytes,
     },
-    opening::OpeningBook,
+    opening::{OpeningBook, OpeningPolicy, OpeningProfile},
     tools::splitmix64,
 };
 
@@ -127,6 +127,7 @@ struct PlayerSpec {
     model_size: Option<u64>,
     model: Option<Arc<NeuralEvaluator>>,
     opening: bool,
+    opening_profile: OpeningProfile,
 }
 
 impl PlayerSpec {
@@ -147,12 +148,16 @@ impl PlayerSpec {
             .model_sha256
             .as_deref()
             .map_or_else(String::new, |hash| format!(":m-{}", &hash[..12]));
+        let opening = if self.opening {
+            format!("on:{}", self.opening_profile.name())
+        } else {
+            "off".to_owned()
+        };
         format!(
-            "search:{evaluator}:d{}:h{}:tt-{}:book-{}{model}",
+            "search:{evaluator}:d{}:h{}:tt-{}:book-{opening}{model}",
             self.depth,
             self.hash_megabytes,
-            if self.transposition { "on" } else { "off" },
-            if self.opening { "on" } else { "off" }
+            if self.transposition { "on" } else { "off" }
         )
     }
 
@@ -450,6 +455,7 @@ fn parse_arguments(arguments: &[String]) -> Result<ArenaConfig, String> {
         model_size: None,
         model: None,
         opening: false,
+        opening_profile: OpeningProfile::IbishaStrict,
     };
     let mut player_b = PlayerSpec {
         kind: PlayerKind::Random,
@@ -461,6 +467,7 @@ fn parse_arguments(arguments: &[String]) -> Result<ArenaConfig, String> {
         model_size: None,
         model: None,
         opening: false,
+        opening_profile: OpeningProfile::IbishaStrict,
     };
     let mut nodes = None;
     let mut movetime_ms = None;
@@ -507,6 +514,14 @@ fn parse_arguments(arguments: &[String]) -> Result<ArenaConfig, String> {
             }
             "--a-opening" => player_a.opening = true,
             "--b-opening" => player_b.opening = true,
+            "--a-opening-profile" => {
+                player_a.opening_profile =
+                    OpeningProfile::parse(next_value(arguments, &mut index, option)?)?;
+            }
+            "--b-opening-profile" => {
+                player_b.opening_profile =
+                    OpeningProfile::parse(next_value(arguments, &mut index, option)?)?;
+            }
             "--opening-book" => {
                 opening_book_path = Some(path_next(arguments, &mut index, "--opening-book")?);
             }
@@ -754,12 +769,20 @@ fn play_game(
                 game.position(),
                 &config.budget,
                 opening_for_player(opening_book, black_spec, game.position(), config),
+                OpeningPolicy {
+                    profile: black_spec.opening_profile,
+                    ..OpeningPolicy::default()
+                },
                 &mut black_totals,
             ),
             Side::White => white_player.select(
                 game.position(),
                 &config.budget,
                 opening_for_player(opening_book, white_spec, game.position(), config),
+                OpeningPolicy {
+                    profile: white_spec.opening_profile,
+                    ..OpeningPolicy::default()
+                },
                 &mut white_totals,
             ),
         };
@@ -930,9 +953,12 @@ impl Player {
         position: &Position,
         budget: &Budget,
         opening_book: Option<&OpeningBook>,
+        opening_policy: OpeningPolicy,
         totals: &mut SearchTotals,
     ) -> Option<Move> {
-        if let Some(choice) = opening_book.and_then(|book| book.select(position)) {
+        if let Some(choice) =
+            opening_book.and_then(|book| book.select_with_policy(position, opening_policy))
+        {
             return Some(choice.movement);
         }
         match self {
@@ -2241,8 +2267,17 @@ fn expected_resume_search_counts(
             Side::Black => (black_spec, &mut black_searches),
             Side::White => (white_spec, &mut white_searches),
         };
-        let book_choice = opening_for_player(opening_book, spec, &position, config)
-            .and_then(|book| book.select(&position));
+        let book_choice = opening_for_player(opening_book, spec, &position, config).and_then(
+            |book| {
+                book.select_with_policy(
+                    &position,
+                    OpeningPolicy {
+                        profile: spec.opening_profile,
+                        ..OpeningPolicy::default()
+                    },
+                )
+            },
+        );
         if let Some(choice) = book_choice {
             if choice.movement != movement {
                 return Err(
@@ -2269,7 +2304,15 @@ fn expected_resume_search_counts(
             Side::White => (white_spec, &mut white_searches),
         };
         if opening_for_player(opening_book, spec, &position, config)
-            .and_then(|book| book.select(&position))
+            .and_then(|book| {
+                book.select_with_policy(
+                    &position,
+                    OpeningPolicy {
+                        profile: spec.opening_profile,
+                        ..OpeningPolicy::default()
+                    },
+                )
+            })
             .is_some()
         {
             return Err(
@@ -3334,7 +3377,7 @@ mod tests {
 
     use super::{
         ArenaConfig, ArenaResult, Budget, GameOutcome, GameSummary, LOCK_FILE_NAME, MAX_GAMES,
-        MAX_STATE_BYTES, PendingGame, Player, PlayerKind, PlayerSpec, atomic_write,
+        MAX_STATE_BYTES, OpeningProfile, PendingGame, Player, PlayerKind, PlayerSpec, atomic_write,
         atomic_write_new, classify_winner, commit_pending_game_with_hooks, config_signature,
         encode_csa, encode_game_journal, expected_resume_search_counts, final_outcome, hex_decode,
         hex_encode, is_utc_timestamp, json_string, load_opening_book, parse_arguments, parse_state,
@@ -3626,11 +3669,30 @@ mod tests {
         let book = load_opening_book(&mut config).unwrap().unwrap();
         std::fs::remove_file(&book_path).unwrap();
 
-        assert!(
-            book.select(&open_shogi_core::Position::startpos())
-                .is_some()
-        );
+        assert_eq!(book.records(), 1);
         assert!(config.opening_book_sha256.is_some());
+    }
+
+    #[test]
+    fn arena_opening_profile_is_explicit_and_strict_by_default() {
+        let default = parse_arguments(&[]).unwrap();
+        assert_eq!(
+            default.player_a.opening_profile,
+            OpeningProfile::IbishaStrict
+        );
+        let unrestricted = parse_arguments(&[
+            "--a-opening".into(),
+            "--a-opening-profile".into(),
+            "unrestricted".into(),
+            "--opening-book".into(),
+            "ignored.jsonl.gz".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            unrestricted.player_a.opening_profile,
+            OpeningProfile::Unrestricted
+        );
+        assert!(unrestricted.player_a.label().contains("book-on:unrestricted"));
     }
 
     #[test]
@@ -3923,8 +3985,10 @@ mod tests {
     fn opening_resume_replays_hits_misses_boundaries_and_terminal_selections_exactly() {
         let mut config = parse_arguments(&[]).unwrap();
         config.player_a.opening = true;
+        config.player_a.opening_profile = OpeningProfile::Unrestricted;
         config.player_b.kind = PlayerKind::HandcraftedExperimental;
         config.player_b.opening = true;
+        config.player_b.opening_profile = OpeningProfile::Unrestricted;
         config.opening_max_plies = 2;
         let first = open_shogi_core::parse_usi_move("7g7f").unwrap();
         let second = open_shogi_core::parse_usi_move("3c3d").unwrap();
@@ -4488,6 +4552,7 @@ mod tests {
                 model_size: None,
                 model: None,
                 opening: false,
+                opening_profile: OpeningProfile::IbishaStrict,
             },
             player_b: PlayerSpec {
                 kind: PlayerKind::Random,
@@ -4499,6 +4564,7 @@ mod tests {
                 model_size: None,
                 model: None,
                 opening: false,
+                opening_profile: OpeningProfile::IbishaStrict,
             },
             budget: Budget::Nodes(1),
             initial_position: position,
@@ -4856,30 +4922,33 @@ mod tests {
                 .rsplit_once(' ')
                 .expect("canonical SFEN has a move number")
                 .0;
-            let record = serde_json::json!({
-                "schema": "phase3_opening_export/v1",
+            let provenance = ["1".repeat(64)];
+            let mut record = serde_json::json!({
+                "schema": "open_shogi_opening_book/v2",
                 "stateKey": crate::checksum::sha256_text(state),
                 "stateSfen": state,
-                "moveUsi": movement,
-                "count": 1,
-                "wins": 1,
-                "losses": 0,
-                "draws": 0,
-                "unknown": 0,
-                "scoreRate": 1.0,
-                "decisiveN": 1,
-                "decisiveWinRate": 1.0,
-                "decisiveWinRateWilson95Low": 0.206_549_314_377_237_45,
-                "decisiveWinRateWilson95High": 1.0,
-                "blackWins": 1,
-                "whiteWins": 0,
-                "sideSpecificDecisiveN": 1,
-                "blackDecisiveWinRate": 1.0,
-                "whiteDecisiveWinRate": 0.0,
-                "averageFullPlies": 100.0,
-                "averageRemainingPlies": 100.0,
-                "sourceCounts": {"fixture": 1},
+                "ruleProfile": "standard-shogi/v1",
+                "buildVersion": "arena-test-v2",
+                "provenanceReferences": provenance,
+                "candidates": [{
+                    "moveUsi": movement,
+                    "sampleCount": 2,
+                    "sourceDistribution": {"fixture": 2},
+                    "blackResults": {"wins": 1, "losses": 1, "draws": 0, "unknown": 0},
+                    "whiteResults": {"wins": 0, "losses": 0, "draws": 0, "unknown": 0},
+                    "teacherScoreCp": 0,
+                    "scoreUncertaintyCp": 0,
+                    "teacherDepth": 1,
+                    "teacherNodes": 1,
+                    "openingClassification": "ibisha",
+                    "provenanceReferences": provenance,
+                }],
             });
+            let checksum = crate::checksum::sha256_bytes(&serde_json::to_vec(&record).unwrap());
+            record
+                .as_object_mut()
+                .unwrap()
+                .insert("recordChecksum".to_owned(), serde_json::json!(checksum));
             serde_json::to_writer(&mut gzip, &record).unwrap();
             gzip.write_all(b"\n").unwrap();
         }
