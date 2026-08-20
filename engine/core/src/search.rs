@@ -10,7 +10,9 @@ use std::{
 };
 use web_time::Instant;
 
-use crate::{EvaluationConfig, Move, NeuralEvaluator, PieceKind, Position, Side, evaluate};
+use crate::{
+    EvaluationConfig, Move, NeuralEvaluator, PieceKind, Position, Side, TimePlan, evaluate,
+};
 
 /// Base score used for checkmates. Distance in plies is subtracted from this value.
 pub const MATE_SCORE: i32 = 30_000;
@@ -31,6 +33,34 @@ pub const fn is_mate_score(score: i32) -> bool {
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+}
+
+/// Monotonic clock used by search deadlines and measured inference time.
+///
+/// Tests can supply a deterministic implementation; production uses `web_time::Instant` on
+/// native and Wasm hosts.
+pub trait MonotonicClock: Send + Sync {
+    fn now(&self) -> Duration;
+}
+
+/// Production monotonic clock with an engine-local zero point.
+#[derive(Debug)]
+pub struct SystemMonotonicClock {
+    origin: Instant,
+}
+
+impl Default for SystemMonotonicClock {
+    fn default() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl MonotonicClock for SystemMonotonicClock {
+    fn now(&self) -> Duration {
+        self.origin.elapsed()
+    }
 }
 
 impl CancellationToken {
@@ -114,9 +144,20 @@ impl Default for SearchConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchTermination {
     Completed,
+    Stable,
     NodeLimit,
     TimeLimit,
     Cancelled,
+}
+
+/// Completed evidence for one root move at the latest fully searched depth.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootMoveStat {
+    pub movement: Move,
+    pub score: i32,
+    pub depth: u8,
+    pub nodes: u64,
+    pub pv: Vec<Move>,
 }
 
 /// Counters useful for deterministic regression tests and external benchmarks.
@@ -152,6 +193,7 @@ pub struct SearchInfo {
     pub elapsed: Duration,
     pub nps: u64,
     pub pv: Vec<Move>,
+    pub root_moves: Vec<RootMoveStat>,
     pub stats: SearchStats,
 }
 
@@ -166,6 +208,7 @@ pub struct SearchResult {
     pub elapsed: Duration,
     pub nps: u64,
     pub pv: Vec<Move>,
+    pub root_moves: Vec<RootMoveStat>,
     pub stats: SearchStats,
     pub termination: SearchTermination,
 }
@@ -248,20 +291,53 @@ impl NodeValue {
 pub struct SearchEngine {
     config: SearchConfig,
     neural: Option<Arc<NeuralEvaluator>>,
+    neural_mode: NeuralEvaluationMode,
     transposition_table: Vec<Option<TranspositionEntry>>,
     killers: Vec<[Option<Move>; 2]>,
     history: Vec<i32>,
+    clock: Arc<dyn MonotonicClock>,
+}
+
+/// Static-score semantics for an attached neural artifact.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NeuralEvaluationMode {
+    /// The model output is the complete position score.
+    #[default]
+    PureValue,
+    /// The model output is a learned delta added to the configured handcrafted score.
+    Residual,
+    /// Equal-weight blend of the configured handcrafted and pure-neural scores.
+    Composite,
+}
+
+impl NeuralEvaluationMode {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::PureValue => "pure-value",
+            Self::Residual => "residual",
+            Self::Composite => "composite-50-50",
+        }
+    }
 }
 
 impl SearchEngine {
     #[must_use]
     pub fn new(config: SearchConfig) -> Self {
+        Self::with_clock(config, Arc::new(SystemMonotonicClock::default()))
+    }
+
+    /// Builds an engine with an injected monotonic clock.
+    #[must_use]
+    pub fn with_clock(config: SearchConfig, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             config,
             neural: None,
+            neural_mode: NeuralEvaluationMode::PureValue,
             transposition_table: vec![None; config.transposition_entries],
             killers: vec![[None; 2]; MAX_SEARCH_PLY],
             history: vec![0; 2 * MOVE_BUCKETS],
+            clock,
         }
     }
 
@@ -270,8 +346,43 @@ impl SearchEngine {
     /// Mate and stalemate scores continue to be assigned by search and never by the model.
     #[must_use]
     pub fn with_neural(config: SearchConfig, neural: Arc<NeuralEvaluator>) -> Self {
+        Self::with_neural_mode(config, neural, NeuralEvaluationMode::PureValue)
+    }
+
+    /// Builds an engine with explicit, evidence-visible neural score semantics.
+    #[must_use]
+    pub fn with_neural_mode(
+        config: SearchConfig,
+        neural: Arc<NeuralEvaluator>,
+        mode: NeuralEvaluationMode,
+    ) -> Self {
         let mut engine = Self::new(config);
         engine.neural = Some(neural);
+        engine.neural_mode = mode;
+        engine
+    }
+
+    /// Builds a neural engine with an injected monotonic clock.
+    #[must_use]
+    pub fn with_neural_and_clock(
+        config: SearchConfig,
+        neural: Arc<NeuralEvaluator>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        Self::with_neural_mode_and_clock(config, neural, NeuralEvaluationMode::PureValue, clock)
+    }
+
+    /// Builds an explicit neural-score mode with an injected monotonic clock.
+    #[must_use]
+    pub fn with_neural_mode_and_clock(
+        config: SearchConfig,
+        neural: Arc<NeuralEvaluator>,
+        mode: NeuralEvaluationMode,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        let mut engine = Self::with_clock(config, clock);
+        engine.neural = Some(neural);
+        engine.neural_mode = mode;
         engine
     }
 
@@ -301,6 +412,11 @@ impl SearchEngine {
         &self.config
     }
 
+    /// Invalidates every transposition entry after an evaluator or search-semantics change.
+    pub fn clear_transpositions(&mut self) {
+        self.transposition_table.fill(None);
+    }
+
     /// Searches without receiving intermediate iteration reports.
     pub fn search(
         &mut self,
@@ -308,7 +424,7 @@ impl SearchEngine {
         limits: SearchLimits,
         cancellation: &CancellationToken,
     ) -> SearchResult {
-        self.search_with_callback(position, limits, cancellation, |_| {})
+        self.search_internal(position, limits, cancellation, None, true, |_| {})
     }
 
     /// Searches and reports each fully completed iterative-deepening iteration.
@@ -317,13 +433,73 @@ impl SearchEngine {
         position: &Position,
         limits: SearchLimits,
         cancellation: &CancellationToken,
+        callback: impl FnMut(&SearchInfo),
+    ) -> SearchResult {
+        self.search_internal(position, limits, cancellation, None, true, callback)
+    }
+
+    /// Searches using a time-manager plan and reports completed iterations.
+    pub fn search_managed_with_callback(
+        &mut self,
+        position: &Position,
+        plan: TimePlan,
+        cancellation: &CancellationToken,
+        callback: impl FnMut(&SearchInfo),
+    ) -> SearchResult {
+        let limits = SearchLimits {
+            max_depth: plan.max_depth,
+            max_nodes: plan.max_nodes,
+            movetime: plan.hard_limit,
+        };
+        self.search_internal(position, limits, cancellation, Some(plan), true, callback)
+    }
+
+    /// Searches using a time-manager plan without iteration reports.
+    pub fn search_managed(
+        &mut self,
+        position: &Position,
+        plan: TimePlan,
+        cancellation: &CancellationToken,
+    ) -> SearchResult {
+        self.search_managed_with_callback(position, plan, cancellation, |_| {})
+    }
+
+    /// Reuses compatible transposition entries while beginning a fresh iterative-deepening run.
+    /// Killer and history heuristics are reset; suspended recursive stacks are never retained.
+    pub fn search_reusing_transpositions_with_callback(
+        &mut self,
+        position: &Position,
+        plan: TimePlan,
+        cancellation: &CancellationToken,
+        callback: impl FnMut(&SearchInfo),
+    ) -> SearchResult {
+        let limits = SearchLimits {
+            max_depth: plan.max_depth,
+            max_nodes: plan.max_nodes,
+            movetime: plan.hard_limit,
+        };
+        self.search_internal(position, limits, cancellation, Some(plan), false, callback)
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "iterative-deepening completion and hard-deadline fallback remain one state transition"
+    )]
+    fn search_internal(
+        &mut self,
+        position: &Position,
+        limits: SearchLimits,
+        cancellation: &CancellationToken,
+        managed: Option<TimePlan>,
+        clear_transpositions: bool,
         mut callback: impl FnMut(&SearchInfo),
     ) -> SearchResult {
-        self.reset_for_search();
-        let started = Instant::now();
+        self.reset_for_search(clear_transpositions);
+        let clock = Arc::clone(&self.clock);
+        let started = clock.now();
         let legal_moves = position.legal_moves();
         let fallback = legal_moves.first().copied();
-        let mut context = SearchContext::new(limits, cancellation, started);
+        let mut context = SearchContext::new(limits, cancellation, started, clock.as_ref());
         let mut completed = NodeValue {
             score: if legal_moves.is_empty() {
                 if position.is_in_check(position.side_to_move()) {
@@ -352,6 +528,7 @@ impl SearchEngine {
         } else {
             for depth in depths {
                 context.root_partial = None;
+                context.root_moves.clear();
                 let aspiration = self.config.enable_aspiration
                     && self.config.enable_alpha_beta
                     && completed_depth > 0
@@ -397,15 +574,23 @@ impl SearchEngine {
 
                 completed = value;
                 completed_depth = depth;
-                let info = make_info(&completed, completed_depth, &context, started.elapsed());
+                context.complete_root_iteration(depth);
+                let elapsed = context.elapsed();
+                let info = make_info(&completed, completed_depth, &context, elapsed);
                 callback(&info);
                 if is_mate_score(completed.score) {
+                    break;
+                }
+                if managed.is_some_and(|plan| {
+                    context.should_stop_stable(position, &completed, plan, elapsed)
+                }) {
+                    context.termination = Some(SearchTermination::Stable);
                     break;
                 }
             }
         }
 
-        let elapsed = started.elapsed();
+        let elapsed = context.elapsed();
         SearchResult {
             best_move: completed.pv.first().copied().or(fallback),
             score: completed.score,
@@ -415,6 +600,7 @@ impl SearchEngine {
             elapsed,
             nps: nodes_per_second(context.nodes, elapsed),
             pv: completed.pv,
+            root_moves: context.last_completed_root_moves,
             stats: context.stats,
             termination: context.termination.unwrap_or(SearchTermination::Completed),
         }
@@ -448,8 +634,10 @@ impl SearchEngine {
         }
     }
 
-    fn reset_for_search(&mut self) {
-        self.transposition_table.fill(None);
+    fn reset_for_search(&mut self, clear_transpositions: bool) {
+        if clear_transpositions {
+            self.transposition_table.fill(None);
+        }
         self.killers.fill([None; 2]);
         self.history.fill(0);
     }
@@ -499,7 +687,9 @@ impl SearchEngine {
             && let Some(entry) = self.probe_transposition(position, context)
         {
             tt_move = entry.best_move;
-            if entry.depth >= depth {
+            // The root must still enumerate every move so MultiPV/root evidence remains complete.
+            // Retained root entries are used only for move ordering; interior entries may cut.
+            if ply > 0 && entry.depth >= depth {
                 let score = score_from_transposition(entry.score, ply);
                 match entry.bound {
                     Bound::Exact => {
@@ -545,6 +735,7 @@ impl SearchEngine {
         let mut searched_moves = 0_usize;
 
         for (index, movement) in moves.iter().copied().enumerate() {
+            let nodes_before = context.nodes;
             let quiet = is_quiet(position, movement);
             let undo = position.make_generated_move(movement);
             let child = if self.config.enable_pvs && self.config.enable_alpha_beta && index > 0 {
@@ -574,6 +765,19 @@ impl SearchEngine {
             let child = child?;
             searched_moves += 1;
             let score = -child.score;
+
+            if ply == 0 {
+                let mut pv = Vec::with_capacity(child.pv.len() + 1);
+                pv.push(movement);
+                pv.extend(child.pv.iter().copied());
+                context.root_moves.push(RootMoveStat {
+                    movement,
+                    score,
+                    depth,
+                    nodes: context.nodes.saturating_sub(nodes_before),
+                    pv,
+                });
+            }
 
             if score > best_score {
                 best_score = score;
@@ -837,39 +1041,129 @@ impl SearchEngine {
         let Some(neural) = &self.neural else {
             return evaluate(position, &self.config.evaluation);
         };
-        let started = Instant::now();
-        let score = neural.evaluate(position);
+        let started = self.clock.now();
+        let learned = neural.evaluate(position);
         stats.neural_inference_calls = stats.neural_inference_calls.saturating_add(1);
         stats.neural_inference_time = stats
             .neural_inference_time
-            .saturating_add(started.elapsed());
-        score
+            .saturating_add(self.clock.now().saturating_sub(started));
+        match self.neural_mode {
+            NeuralEvaluationMode::PureValue => learned,
+            NeuralEvaluationMode::Residual => {
+                evaluate(position, &self.config.evaluation).saturating_add(learned)
+            }
+            NeuralEvaluationMode::Composite => {
+                let handcrafted = evaluate(position, &self.config.evaluation);
+                handcrafted.saturating_add(learned) / 2
+            }
+        }
     }
 }
 
 struct SearchContext<'a> {
     limits: SearchLimits,
     cancellation: &'a CancellationToken,
-    started: Instant,
+    started: Duration,
+    clock: &'a dyn MonotonicClock,
     nodes: u64,
     seldepth: u8,
     stats: SearchStats,
     termination: Option<SearchTermination>,
     root_partial: Option<NodeValue>,
+    root_moves: Vec<RootMoveStat>,
+    last_completed_root_moves: Vec<RootMoveStat>,
+    previous_best_move: Option<Move>,
+    previous_score: Option<i32>,
+    stable_iterations: u8,
 }
 
 impl<'a> SearchContext<'a> {
-    fn new(limits: SearchLimits, cancellation: &'a CancellationToken, started: Instant) -> Self {
+    fn new(
+        limits: SearchLimits,
+        cancellation: &'a CancellationToken,
+        started: Duration,
+        clock: &'a dyn MonotonicClock,
+    ) -> Self {
         Self {
             limits,
             cancellation,
             started,
+            clock,
             nodes: 0,
             seldepth: 0,
             stats: SearchStats::default(),
             termination: None,
             root_partial: None,
+            root_moves: Vec::new(),
+            last_completed_root_moves: Vec::new(),
+            previous_best_move: None,
+            previous_score: None,
+            stable_iterations: 0,
         }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.clock.now().saturating_sub(self.started)
+    }
+
+    fn complete_root_iteration(&mut self, depth: u8) {
+        self.root_moves.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| left.movement.cmp(&right.movement))
+        });
+        for stat in &mut self.root_moves {
+            stat.depth = depth;
+        }
+        self.last_completed_root_moves.clone_from(&self.root_moves);
+    }
+
+    fn should_stop_stable(
+        &mut self,
+        position: &Position,
+        completed: &NodeValue,
+        plan: TimePlan,
+        elapsed: Duration,
+    ) -> bool {
+        if !plan.allow_stable_early_stop || plan.soft_limit.is_none_or(|soft| elapsed < soft) {
+            self.observe_stability(completed, plan);
+            return false;
+        }
+        let score_delta = self.observe_stability(completed, plan);
+        let legal_moves = position.legal_moves();
+        let in_check = position.is_in_check(position.side_to_move());
+        let tactical = legal_moves.iter().copied().any(|movement| {
+            is_tactical(position, movement) || move_gives_check(position, movement)
+        });
+        let close_candidates = self.last_completed_root_moves.get(0..2).is_some_and(|top| {
+            top[0].score.saturating_sub(top[1].score) <= plan.stability.close_candidate_cp
+        });
+        let volatile = score_delta.is_some_and(|delta| delta >= plan.stability.volatile_score_cp);
+        let difficult = legal_moves.len() >= plan.stability.difficult_branching_moves;
+        self.stable_iterations >= plan.stability.required_stable_iterations
+            && !in_check
+            && !tactical
+            && !close_candidates
+            && !volatile
+            && !difficult
+    }
+
+    fn observe_stability(&mut self, completed: &NodeValue, plan: TimePlan) -> Option<i32> {
+        let best_move = completed.pv.first().copied();
+        let score_delta = self
+            .previous_score
+            .map(|previous| completed.score.saturating_sub(previous).saturating_abs());
+        if self.previous_best_move == best_move
+            && score_delta.is_some_and(|delta| delta <= plan.stability.stable_score_cp)
+        {
+            self.stable_iterations = self.stable_iterations.saturating_add(1);
+        } else {
+            self.stable_iterations = 0;
+        }
+        self.previous_best_move = best_move;
+        self.previous_score = Some(completed.score);
+        score_delta
     }
 
     fn enter_node(&mut self, ply: usize, quiescence: bool) -> Result<(), ()> {
@@ -893,7 +1187,7 @@ impl<'a> SearchContext<'a> {
         if self
             .limits
             .movetime
-            .is_some_and(|limit| self.started.elapsed() >= limit)
+            .is_some_and(|limit| self.elapsed() >= limit)
         {
             self.termination = Some(SearchTermination::TimeLimit);
             return Err(());
@@ -1006,6 +1300,7 @@ fn make_info(
         elapsed,
         nps: nodes_per_second(context.nodes, elapsed),
         pv: value.pv.clone(),
+        root_moves: context.last_completed_root_moves.clone(),
         stats: context.stats,
     }
 }
@@ -1077,6 +1372,14 @@ fn is_tactical(position: &Position, movement: Move) -> bool {
     !is_quiet(position, movement)
 }
 
+fn move_gives_check(position: &Position, movement: Move) -> bool {
+    let mut child = position.clone();
+    if child.make_move(movement).is_err() {
+        return false;
+    }
+    child.is_in_check(child.side_to_move())
+}
+
 fn history_index(side: Side, movement: Move) -> usize {
     let bucket = match movement {
         Move::Normal { from, to, promote } => {
@@ -1096,7 +1399,29 @@ fn transposition_index(hash: u64, table_len: usize) -> usize {
 mod tests {
     use super::*;
     use crate::neural::NeuralEvaluator;
-    use crate::{Hand, Piece, Square};
+    use crate::{Hand, Piece, Square, TimeControl, TimeManager};
+    use std::sync::atomic::AtomicU64;
+
+    #[derive(Debug)]
+    struct SteppingClock {
+        milliseconds: AtomicU64,
+        step_ms: u64,
+    }
+
+    impl SteppingClock {
+        const fn new(step_ms: u64) -> Self {
+            Self {
+                milliseconds: AtomicU64::new(0),
+                step_ms,
+            }
+        }
+    }
+
+    impl MonotonicClock for SteppingClock {
+        fn now(&self) -> Duration {
+            Duration::from_millis(self.milliseconds.fetch_add(self.step_ms, Ordering::Relaxed))
+        }
+    }
 
     fn square(file: u8, rank: u8) -> Square {
         Square::new(file, rank).expect("test square")
@@ -1121,6 +1446,55 @@ mod tests {
             assert_eq!(left, right);
             assert!(position.is_legal_move(left));
         }
+    }
+
+    #[test]
+    fn fake_clock_enforces_the_twenty_second_casual_hard_limit_without_sleeping() {
+        let clock = Arc::new(SteppingClock::new(1));
+        let mut engine = SearchEngine::with_clock(SearchConfig::default(), clock);
+        let mut plan = TimeManager::default()
+            .plan(Side::Black, TimeControl::casual(), 64)
+            .expect("casual plan");
+        // Exercise the hard deadline independently from the optional convergence rule.
+        plan.allow_stable_early_stop = false;
+        let position = Position::startpos();
+        let result = engine.search_managed(&position, plan, &CancellationToken::new());
+
+        assert_eq!(result.termination, SearchTermination::TimeLimit);
+        assert!(result.elapsed <= Duration::from_millis(20_000));
+        assert!(
+            result
+                .best_move
+                .is_some_and(|movement| { position.legal_moves().contains(&movement) })
+        );
+    }
+
+    #[test]
+    fn completed_depth_exposes_sorted_legal_root_evidence() {
+        let position = Position::startpos();
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let result = engine.search(
+            &position,
+            SearchLimits {
+                max_depth: 2,
+                max_nodes: None,
+                movetime: None,
+            },
+            &CancellationToken::new(),
+        );
+
+        assert!(!result.root_moves.is_empty());
+        assert!(
+            result
+                .root_moves
+                .windows(2)
+                .all(|pair| pair[0].score >= pair[1].score)
+        );
+        assert!(result.root_moves.iter().all(|stat| {
+            stat.depth == result.depth
+                && stat.pv.first() == Some(&stat.movement)
+                && position.legal_moves().contains(&stat.movement)
+        }));
     }
 
     #[test]
@@ -1190,8 +1564,9 @@ mod tests {
                 expected_score != 0
             );
             let cancellation = CancellationToken::new();
+            let clock = SystemMonotonicClock::default();
             let mut context =
-                SearchContext::new(SearchLimits::default(), &cancellation, Instant::now());
+                SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
             let mut engine = SearchEngine::with_neural(
                 SearchConfig {
                     enable_quiescence: false,
@@ -1564,9 +1939,10 @@ mod tests {
         let movement = second.legal_moves()[0];
         let _ = second.make_generated_move(movement);
         engine.store_transposition(&first, 2, 123, Bound::Exact, None);
-        let started = Instant::now();
         let cancellation = CancellationToken::new();
-        let mut context = SearchContext::new(SearchLimits::default(), &cancellation, started);
+        let clock = SystemMonotonicClock::default();
+        let mut context =
+            SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
 
         assert!(engine.probe_transposition(&second, &mut context).is_none());
         assert_eq!(context.stats.tt_collisions, 1);
@@ -1608,8 +1984,9 @@ mod tests {
         let mut position =
             Position::from_parts(board, [Hand::default(); 2], Side::Black, 1).expect("position");
         let cancellation = CancellationToken::new();
-        let started = Instant::now();
-        let mut context = SearchContext::new(SearchLimits::default(), &cancellation, started);
+        let clock = SystemMonotonicClock::default();
+        let mut context =
+            SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
         let mut engine = SearchEngine::new(SearchConfig::default());
         let result = engine
             .quiescence(&mut position, -INFINITY, INFINITY, 0, 0, &mut context)
@@ -1634,8 +2011,9 @@ mod tests {
         assert!(position.is_in_check(Side::Black));
 
         let cancellation = CancellationToken::new();
-        let started = Instant::now();
-        let mut context = SearchContext::new(SearchLimits::default(), &cancellation, started);
+        let clock = SystemMonotonicClock::default();
+        let mut context =
+            SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
         let mut engine = SearchEngine::with_neural(
             SearchConfig::default(),
             Arc::new(NeuralEvaluator::side_to_move_test_evaluator()),
@@ -1664,8 +2042,9 @@ mod tests {
         let mut position =
             Position::from_parts(board, [Hand::default(); 2], Side::Black, 1).expect("position");
         let cancellation = CancellationToken::new();
+        let clock = SystemMonotonicClock::default();
         let mut context =
-            SearchContext::new(SearchLimits::default(), &cancellation, Instant::now());
+            SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
         let mut engine = SearchEngine::with_neural(
             SearchConfig::default(),
             Arc::new(NeuralEvaluator::side_to_move_test_evaluator()),
@@ -1713,5 +2092,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn quiet_check_is_tactical_for_casual_stability() {
+        let position = crate::parse_sfen("4k4/9/9/9/9/9/9/4R4/4K4 b - 1").unwrap();
+        let movement = crate::parse_usi_move("5h5b").unwrap();
+
+        assert!(position.legal_moves().contains(&movement));
+        assert!(!is_tactical(&position, movement));
+        assert!(move_gives_check(&position, movement));
+    }
+
+    #[test]
+    fn neural_score_semantics_are_explicit() {
+        let position = Position::startpos();
+        let config = SearchConfig::default();
+        let handcrafted = evaluate(&position, &config.evaluation);
+        let evaluator = Arc::new(NeuralEvaluator::side_to_move_test_evaluator());
+        let learned = evaluator.evaluate(&position);
+        let score = |mode| {
+            SearchEngine::with_neural_mode(config, Arc::clone(&evaluator), mode)
+                .evaluate_position(&position, &mut SearchStats::default())
+        };
+
+        assert_eq!(score(NeuralEvaluationMode::PureValue), learned);
+        assert_eq!(score(NeuralEvaluationMode::Residual), handcrafted + learned);
+        assert_eq!(
+            score(NeuralEvaluationMode::Composite),
+            handcrafted.saturating_add(learned) / 2
+        );
     }
 }

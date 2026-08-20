@@ -289,8 +289,11 @@ dependencies = [
 name = "open-shogi-core"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "libc",
  "proptest",
+ "serde",
+ "serde_json",
  "sha2",
  "web-time",
 ]
@@ -299,7 +302,9 @@ dependencies = [
 name = "open-shogi-usi"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "open-shogi-core",
+ "serde_json",
  "sha2",
 ]
 
@@ -307,6 +312,7 @@ dependencies = [
 name = "open-shogi-wasm"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "open-shogi-core",
  "serde",
  "serde_json",

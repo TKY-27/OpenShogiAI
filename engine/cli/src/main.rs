@@ -25,6 +25,7 @@ macro_rules! secure_unix_items {
 
 secure_unix_items! {
     mod arena;
+    mod analysis;
     mod args;
     mod bench;
     mod checksum;
@@ -69,6 +70,8 @@ secure_unix_items! {
             "export-csa-jsonl" => dataset::run(&arguments[1..]),
             "play" => play::run(&arguments[1..]),
             "arena" => arena::run(&arguments[1..]),
+            "analysis" => analysis::run(&arguments[1..]),
+            "opening-book" => opening::run(&arguments[1..]),
             "model" => model::run(&arguments[1..]),
             "bench" => bench::run(&arguments[1..]),
             "help" | "--help" | "-h" if arguments.len() == 1 => {
@@ -91,6 +94,8 @@ secure_unix_items! {
         println!(
             "  open-shogi-cli arena --games N --player-a TYPE --player-b TYPE [--git-commit SHA] [options]"
         );
+        println!("  open-shogi-cli analysis  # newline-delimited analysis protocol on stdin/stdout");
+        println!("  open-shogi-cli opening-book verify --book FILE");
         println!("  open-shogi-cli model inspect --model FILE");
         println!("  open-shogi-cli model infer --model FILE (--sfen SFEN | --input FILE)");
         println!(

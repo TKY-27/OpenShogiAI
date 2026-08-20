@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openshogiai.local/schemas/open_shogi_analysis-v1.json",
+  "title": "OpenShogiAI analysis protocol v1",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "start": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "schema", "positionSfen", "modelHash", "evaluatorConfigHash", "featureSchemaHash", "evaluationSemanticsHash", "searchOptionsHash", "openingProfileHash", "multiPv"],
+      "properties": {
+        "command": { "const": "start" },
+        "schema": { "const": "open_shogi_analysis/v1" },
+        "positionSfen": { "type": "string", "minLength": 9, "maxLength": 512 },
+        "modelHash": { "$ref": "#/$defs/sha256" },
+        "evaluatorConfigHash": { "$ref": "#/$defs/sha256" },
+        "featureSchemaHash": { "$ref": "#/$defs/sha256" },
+        "evaluationSemanticsHash": { "$ref": "#/$defs/sha256" },
+        "searchOptionsHash": { "$ref": "#/$defs/sha256" },
+        "openingProfileHash": { "$ref": "#/$defs/sha256" },
+        "multiPv": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rank", "score", "mateScore", "depth", "nodes", "pv"],
+      "properties": {
+        "rank": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "score": { "type": "integer" },
+        "mateScore": { "type": ["integer", "null"] },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "nodes": { "type": "integer", "minimum": 0 },
+        "pv": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "rootMove": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["movement", "score", "depth", "nodes", "pv"],
+      "properties": {
+        "movement": { "type": "string" },
+        "score": { "type": "integer" },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "nodes": { "type": "integer", "minimum": 0 },
+        "pv": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "canonicalPosition", "positionHash", "modelHash", "evaluatorConfigHash", "featureSchemaHash", "evaluationSemanticsHash", "searchOptionsHash", "openingProfileHash", "multiPv", "depth", "nodes", "nps", "score", "mateScore", "lines", "rootMoveStatistics", "timestampMs", "engineVersion"],
+      "properties": {
+        "source": { "enum": ["cache", "search"] },
+        "canonicalPosition": { "type": "string" },
+        "positionHash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "modelHash": { "$ref": "#/$defs/sha256" },
+        "evaluatorConfigHash": { "$ref": "#/$defs/sha256" },
+        "featureSchemaHash": { "$ref": "#/$defs/sha256" },
+        "evaluationSemanticsHash": { "$ref": "#/$defs/sha256" },
+        "searchOptionsHash": { "$ref": "#/$defs/sha256" },
+        "openingProfileHash": { "$ref": "#/$defs/sha256" },
+        "multiPv": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "nodes": { "type": "integer", "minimum": 0 },
+        "nps": { "type": "integer", "minimum": 0 },
+        "score": { "type": "integer" },
+        "mateScore": { "type": ["integer", "null"] },
+        "lines": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/line" } },
+        "rootMoveStatistics": { "type": "array", "items": { "$ref": "#/$defs/rootMove" } },
+        "timestampMs": { "type": "integer", "minimum": 0 },
+        "engineVersion": { "type": "string" }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/start" },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["command", "schema", "positionSfen"],
+      "properties": { "command": { "const": "change-position" }, "schema": { "const": "open_shogi_analysis/v1" }, "positionSfen": { "type": "string" } }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["command", "schema", "multiPv"],
+      "properties": { "command": { "const": "change-multi-pv" }, "schema": { "const": "open_shogi_analysis/v1" }, "multiPv": { "type": "integer", "minimum": 1, "maximum": 10 } }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["command", "schema", "nodes", "maxDepth", "timestampMs"],
+      "properties": { "command": { "const": "step" }, "schema": { "const": "open_shogi_analysis/v1" }, "nodes": { "type": "integer", "minimum": 1, "maximum": 10000000 }, "maxDepth": { "type": "integer", "minimum": 1, "maximum": 64 }, "timestampMs": { "type": "integer", "minimum": 0 } }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["command", "schema"],
+      "properties": { "command": { "enum": ["stop", "worker-failed", "restart", "quit"] }, "schema": { "const": "open_shogi_analysis/v1" } }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "event", "updates"],
+      "properties": {
+        "schema": { "const": "open_shogi_analysis/v1" },
+        "event": { "type": "string" },
+        "updates": { "type": "array", "items": { "$ref": "#/$defs/update" } },
+        "slice": { "type": "object" },
+        "message": { "type": "string" }
+      }
+    }
+  ]
+}

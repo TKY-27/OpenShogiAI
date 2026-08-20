@@ -9,6 +9,13 @@ details and are not persistent identifiers.
 Unknown schema versions and malformed input are rejected. Parsers do not guess repairs for
 untrusted data.
 
+Play clocks use `open_shogi_time_control/v1` across Rust, native play, USI mapping, and Wasm.
+Persistent analysis uses `open_shogi_analysis/v1`; see
+[`protocol/ANALYSIS_PROTOCOL.md`](protocol/ANALYSIS_PROTOCOL.md).
+Opening data uses `open_shogi_opening_book/v2`; see
+[`protocol/OPENING_BOOK_FORMAT.md`](protocol/OPENING_BOOK_FORMAT.md). Native, USI, and Wasm book
+hits report `source=book` and do not consume the normal search budget.
+
 ## Phase 1 rule boundary
 
 `engine/core` owns:

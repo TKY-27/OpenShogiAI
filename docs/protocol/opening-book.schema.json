@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openshogiai.invalid/schema/opening-book-v2.json",
+  "title": "OpenShogiAI opening-book record v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "stateKey", "stateSfen", "ruleProfile", "buildVersion",
+    "provenanceReferences", "candidates", "recordChecksum"
+  ],
+  "properties": {
+    "schema": {"const": "open_shogi_opening_book/v2"},
+    "stateKey": {"$ref": "#/$defs/sha256"},
+    "stateSfen": {"type": "string", "minLength": 1, "maxLength": 512},
+    "ruleProfile": {"const": "standard-shogi/v1"},
+    "buildVersion": {"type": "string", "minLength": 1, "maxLength": 128},
+    "provenanceReferences": {"$ref": "#/$defs/provenance"},
+    "candidates": {
+      "type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/$defs/candidate"}
+    },
+    "recordChecksum": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "provenance": {
+      "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sha256"}
+    },
+    "results": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wins", "losses", "draws", "unknown"],
+      "properties": {
+        "wins": {"type": "integer", "minimum": 0},
+        "losses": {"type": "integer", "minimum": 0},
+        "draws": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0}
+      }
+    },
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "moveUsi", "sampleCount", "sourceDistribution", "blackResults", "whiteResults",
+        "teacherScoreCp", "scoreUncertaintyCp", "teacherDepth", "teacherNodes",
+        "openingClassification", "provenanceReferences"
+      ],
+      "properties": {
+        "moveUsi": {"type": "string", "pattern": "^(?:[1-9][a-i][1-9][a-i]\\+?|[RBGSNLP]\\*[1-9][a-i])$"},
+        "sampleCount": {"type": "integer", "minimum": 1},
+        "sourceDistribution": {
+          "type": "object", "minProperties": 1,
+          "additionalProperties": {"type": "integer", "minimum": 1}
+        },
+        "blackResults": {"$ref": "#/$defs/results"},
+        "whiteResults": {"$ref": "#/$defs/results"},
+        "teacherScoreCp": {"type": "integer", "minimum": -32000, "maximum": 32000},
+        "scoreUncertaintyCp": {
+          "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0, "maximum": 10000}]
+        },
+        "teacherDepth": {"type": "integer", "minimum": 1, "maximum": 64},
+        "teacherNodes": {"type": "integer", "minimum": 1},
+        "openingClassification": {
+          "enum": ["ibisha", "ibisha-vs-furibisha", "furibisha", "unclassified"]
+        },
+        "provenanceReferences": {"$ref": "#/$defs/provenance"}
+      }
+    }
+  }
+}

@@ -99,3 +99,15 @@ process and its files remain beneath ignored `local/teacher/` storage.
 
 The WebAssembly engine and generated binding introduce no third-party shogi-engine source,
 game records, model weights, or browser assets.
+
+## Analysis, book, and strength campaign
+
+| Topic | Reference | Consulted | Use |
+| --- | --- | --- | --- |
+| AobaZero game-record rights recheck | [Pinned official English README](https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README_en.md) and [Japanese README](https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README.md) | 2026-08-21 | Reconfirmed the official publication location and file-scoped Public Domain basis before deriving book v2 from the already approved 100-game sample |
+| AobaZero sample reachability | [Official no-noise sample index](http://www.yss-aya.com/aobazero/no_noise/sample.html) and [catalog object `w4745.csa`](http://www.yss-aya.com/aobazero/no_noise/w4745.csa) | 2026-08-21 | Bounded HTTP HEAD recheck returned 200; no new object was acquired and the pinned manifest hashes remain authoritative |
+
+The time manager, analysis cache/protocol, resource coordinator, opening format and classifier,
+Ibisya policies, residual score semantics, composite score semantics, and champion gate are
+project-specific implementations. No external opening book or shogi-engine implementation was
+copied, translated, linked, or imported.

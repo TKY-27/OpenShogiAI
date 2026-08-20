@@ -78,7 +78,7 @@ impl EvaluationConfig {
 
 impl Default for EvaluationConfig {
     fn default() -> Self {
-        Self::handcrafted_experimental()
+        crate::overall_champion_evaluation()
     }
 }
 

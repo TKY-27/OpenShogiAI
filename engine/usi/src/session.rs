@@ -4,13 +4,13 @@ use std::{
     io::{self, BufRead, Write},
     sync::{Arc, Condvar, Mutex},
     thread::{self, JoinHandle},
-    time::Duration,
 };
 
 use open_shogi_core::{
-    CancellationToken, EvaluationConfig, MATE_SCORE, NeuralEvaluator, NeuralQuantization, Position,
-    SearchConfig, SearchEngine, SearchInfo, SearchLimits, Side, is_mate_score, parse_sfen,
-    parse_usi_move, to_usi_move,
+    CancellationToken, EvaluationConfig, MATE_SCORE, NeuralEvaluationMode, NeuralEvaluator,
+    NeuralQuantization, OpeningBookV2, OpeningPolicy, OpeningProfile, Position, SearchConfig,
+    SearchEngine, SearchInfo, TimeControl, TimeManager, is_mate_score, parse_sfen, parse_usi_move,
+    to_usi_move,
 };
 
 use crate::{GoParameters, UsiCommand, engine_id_line, parse_command, parser::MAX_GO_DEPTH};
@@ -18,12 +18,15 @@ use crate::{GoParameters, UsiCommand, engine_id_line, parse_command, parser::MAX
 const MAX_HASH_MEGABYTES: usize = 1_024;
 const MAX_DEPTH: u8 = MAX_GO_DEPTH;
 const DEFAULT_HASH_MEGABYTES: usize = 32;
-const DEFAULT_MOVE_TIME_MS: u64 = 1_000;
+const DEFAULT_SAFETY_MARGIN_MS: u64 = 50;
+const DEFAULT_OPENING_MAX_PLIES: u32 = 40;
+const DEFAULT_OPENING_MINIMUM_SAMPLES: u64 = 2;
+const DEFAULT_OPENING_MAXIMUM_TEACHER_LOSS_CP: i32 = 80;
 
 /// Static evaluator selected through the USI `ModelKind` option.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ModelKind {
-    /// Use the built-in deterministic handcrafted evaluator.
+    /// Use the built-in evaluator that passed the overall-champion evidence gate.
     #[default]
     Handcrafted,
     /// Require an `OSAVAL01` model containing `f32` weights.
@@ -35,7 +38,7 @@ pub enum ModelKind {
 impl ModelKind {
     const fn usi_value(self) -> &'static str {
         match self {
-            Self::Handcrafted => "handcrafted",
+            Self::Handcrafted => "overall-champion",
             Self::NeuralFloat => "neural-float",
             Self::NeuralQuantized => "neural-quantized",
         }
@@ -43,11 +46,12 @@ impl ModelKind {
 
     fn parse(value: Option<&str>) -> Result<Self, String> {
         match value {
-            Some("handcrafted") => Ok(Self::Handcrafted),
+            Some("overall-champion" | "handcrafted") => Ok(Self::Handcrafted),
             Some("neural-float") => Ok(Self::NeuralFloat),
             Some("neural-quantized") => Ok(Self::NeuralQuantized),
             _ => Err(
-                "ModelKind must be `handcrafted`, `neural-float`, or `neural-quantized`".to_owned(),
+                "ModelKind must be `overall-champion`, `neural-float`, or `neural-quantized`"
+                    .to_owned(),
             ),
         }
     }
@@ -92,9 +96,16 @@ impl<W: Write + Send> ProtocolSink for WriterSink<W> {
 pub struct UsiOptions {
     pub hash_megabytes: usize,
     pub max_depth: u8,
+    pub safety_margin_ms: u64,
     pub evaluation: EvaluationConfig,
     pub model_kind: ModelKind,
+    pub model_semantics: NeuralEvaluationMode,
     pub model_path: String,
+    pub opening_book_path: String,
+    pub opening_profile: OpeningProfile,
+    pub opening_max_plies: u32,
+    pub opening_minimum_samples: u64,
+    pub opening_maximum_teacher_loss_cp: i32,
 }
 
 impl Default for UsiOptions {
@@ -102,9 +113,16 @@ impl Default for UsiOptions {
         Self {
             hash_megabytes: DEFAULT_HASH_MEGABYTES,
             max_depth: 8,
+            safety_margin_ms: DEFAULT_SAFETY_MARGIN_MS,
             evaluation: EvaluationConfig::default(),
             model_kind: ModelKind::Handcrafted,
+            model_semantics: NeuralEvaluationMode::PureValue,
             model_path: String::new(),
+            opening_book_path: String::new(),
+            opening_profile: OpeningProfile::IbishaStrict,
+            opening_max_plies: DEFAULT_OPENING_MAX_PLIES,
+            opening_minimum_samples: DEFAULT_OPENING_MINIMUM_SAMPLES,
+            opening_maximum_teacher_loss_cp: DEFAULT_OPENING_MAXIMUM_TEACHER_LOSS_CP,
         }
     }
 }
@@ -182,6 +200,7 @@ pub struct UsiSession {
     active: Option<ActiveSearch>,
     neural_evaluator: Option<Arc<NeuralEvaluator>>,
     pending_model: Option<(ModelKind, String)>,
+    opening_book: Option<Arc<OpeningBookV2>>,
     sink: Arc<dyn ProtocolSink>,
 }
 
@@ -195,6 +214,7 @@ impl UsiSession {
             active: None,
             neural_evaluator: None,
             pending_model: None,
+            opening_book: None,
             sink,
         }
     }
@@ -274,10 +294,31 @@ impl UsiSession {
         self.sink
             .send("option name MaxDepth type spin default 8 min 1 max 64");
         self.sink.send(
-            "option name ModelKind type combo default handcrafted var handcrafted var neural-float var neural-quantized",
+            "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized",
         );
+        self.sink.send(
+            "option name ModelSemantics type combo default pure-value var pure-value var residual var composite-50-50",
+        );
+        self.sink.send(&format!(
+            "option name TimeSafetyMarginMs type spin default {DEFAULT_SAFETY_MARGIN_MS} min 0 max {}",
+            open_shogi_core::MAX_SAFETY_MARGIN_MS
+        ));
         self.sink
             .send("option name ModelPath type filename default <empty>");
+        self.sink
+            .send("option name OpeningBookPath type filename default <empty>");
+        self.sink.send(
+            "option name OpeningProfile type combo default ibisha_strict var unrestricted var ibisha_preferred var ibisha_strict",
+        );
+        self.sink.send(&format!(
+            "option name OpeningMaxPlies type spin default {DEFAULT_OPENING_MAX_PLIES} min 1 max 40"
+        ));
+        self.sink.send(&format!(
+            "option name OpeningMinSamples type spin default {DEFAULT_OPENING_MINIMUM_SAMPLES} min 1 max 1000000"
+        ));
+        self.sink.send(&format!(
+            "option name OpeningMaxTeacherLossCp type spin default {DEFAULT_OPENING_MAXIMUM_TEACHER_LOSS_CP} min 0 max 10000"
+        ));
         for name in evaluation_option_names() {
             self.sink
                 .send(&format!("option name Eval{name} type check default true"));
@@ -285,6 +326,10 @@ impl UsiSession {
         self.sink.send("usiok");
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed USI option table keeps validation and transactional updates together"
+    )]
     fn set_option(&mut self, name: &str, value: Option<&str>) -> Result<(), String> {
         self.cancel_active(true);
         match name {
@@ -302,6 +347,16 @@ impl UsiSession {
                 }
                 self.options.max_depth = value;
             }
+            "TimeSafetyMarginMs" => {
+                let value = parse_u64_option(value, "TimeSafetyMarginMs")?;
+                if value > open_shogi_core::MAX_SAFETY_MARGIN_MS {
+                    return Err(format!(
+                        "TimeSafetyMarginMs must be 0..={}",
+                        open_shogi_core::MAX_SAFETY_MARGIN_MS
+                    ));
+                }
+                self.options.safety_margin_ms = value;
+            }
             "ModelKind" => {
                 let model_kind = ModelKind::parse(value)?;
                 let model_path = self
@@ -309,6 +364,19 @@ impl UsiSession {
                     .as_ref()
                     .map_or_else(|| self.options.model_path.clone(), |(_, path)| path.clone());
                 self.apply_model_candidate(model_kind, model_path)?;
+            }
+            "ModelSemantics" => {
+                self.options.model_semantics = match value {
+                    Some("pure-value") => NeuralEvaluationMode::PureValue,
+                    Some("residual") => NeuralEvaluationMode::Residual,
+                    Some("composite-50-50") => NeuralEvaluationMode::Composite,
+                    _ => {
+                        return Err(
+                            "ModelSemantics must be pure-value, residual, or composite-50-50"
+                                .to_owned(),
+                        );
+                    }
+                };
             }
             "ModelPath" => {
                 let path = value.ok_or_else(|| "ModelPath requires a value".to_owned())?;
@@ -320,6 +388,42 @@ impl UsiSession {
                     .as_ref()
                     .map_or(self.options.model_kind, |(kind, _)| *kind);
                 self.apply_model_candidate(model_kind, path.to_owned())?;
+            }
+            "OpeningBookPath" => {
+                let path = value.ok_or_else(|| "OpeningBookPath requires a value".to_owned())?;
+                if path.is_empty() {
+                    return Err("OpeningBookPath must not be empty".to_owned());
+                }
+                let book = OpeningBookV2::load_file(path)
+                    .map_err(|error| format!("opening book validation failed: {error}"))?;
+                path.clone_into(&mut self.options.opening_book_path);
+                self.opening_book = Some(Arc::new(book));
+            }
+            "OpeningProfile" => {
+                self.options.opening_profile = OpeningProfile::parse(
+                    value.ok_or_else(|| "OpeningProfile requires a value".to_owned())?,
+                )?;
+            }
+            "OpeningMaxPlies" => {
+                let value = parse_u32_option(value, "OpeningMaxPlies")?;
+                if !(1..=40).contains(&value) {
+                    return Err("OpeningMaxPlies must be 1..=40".to_owned());
+                }
+                self.options.opening_max_plies = value;
+            }
+            "OpeningMinSamples" => {
+                let value = parse_u64_option(value, "OpeningMinSamples")?;
+                if !(1..=1_000_000).contains(&value) {
+                    return Err("OpeningMinSamples must be 1..=1000000".to_owned());
+                }
+                self.options.opening_minimum_samples = value;
+            }
+            "OpeningMaxTeacherLossCp" => {
+                let value = parse_i32_option(value, "OpeningMaxTeacherLossCp")?;
+                if !(0..=10_000).contains(&value) {
+                    return Err("OpeningMaxTeacherLossCp must be 0..=10000".to_owned());
+                }
+                self.options.opening_maximum_teacher_loss_cp = value;
             }
             option if option.starts_with("Eval") => {
                 let enabled = parse_bool_option(value, option)?;
@@ -346,6 +450,32 @@ impl UsiSession {
     fn start_search(&mut self, parameters: &GoParameters) -> Result<(), String> {
         self.cancel_active(true);
         self.ensure_model_ready()?;
+        if self.position.move_number() <= self.options.opening_max_plies
+            && let Some(choice) = self.opening_book.as_ref().and_then(|book| {
+                book.select(
+                    &self.position,
+                    OpeningPolicy {
+                        profile: self.options.opening_profile,
+                        minimum_sample_count: self.options.opening_minimum_samples,
+                        maximum_teacher_loss_cp: self.options.opening_maximum_teacher_loss_cp,
+                    },
+                )
+            })
+        {
+            self.output_authority.advance();
+            self.sink.send(&format!(
+                "info string source book profile {} samples {} teacher_cp {} teacher_depth {} teacher_nodes {} classification {}",
+                self.options.opening_profile.name(),
+                choice.sample_count,
+                choice.teacher_score_cp,
+                choice.teacher_depth,
+                choice.teacher_nodes,
+                choice.opening_classification,
+            ));
+            self.sink
+                .send(&format!("bestmove {}", to_usi_move(choice.movement)));
+            return Ok(());
+        }
         let generation = self.output_authority.advance();
         let cancellation = CancellationToken::new();
         let worker_cancellation = cancellation.clone();
@@ -354,7 +484,17 @@ impl UsiSession {
         let position = self.position.clone();
         let config = search_config(&self.options);
         let neural_evaluator = self.neural_evaluator.clone();
-        let limits = search_limits(&position, &self.options, parameters);
+        let model_semantics = self.options.model_semantics;
+        let time_control = time_control(&self.options, parameters);
+        let plan = TimeManager::default().plan(
+            position.side_to_move(),
+            time_control,
+            if parameters.infinite {
+                MAX_DEPTH
+            } else {
+                self.options.max_depth
+            },
+        )?;
         let completion_gate = parameters
             .infinite
             .then(|| Arc::new(CompletionGate::default()));
@@ -362,16 +502,20 @@ impl UsiSession {
         let handle = thread::spawn(move || {
             let mut engine = neural_evaluator.map_or_else(
                 || SearchEngine::new(config),
-                |evaluator| SearchEngine::with_neural(config, evaluator),
+                |evaluator| SearchEngine::with_neural_mode(config, evaluator, model_semantics),
             );
             let callback_sink = Arc::clone(&sink);
             let callback_authority = Arc::clone(&output_authority);
-            let result =
-                engine.search_with_callback(&position, limits, &worker_cancellation, move |info| {
+            let result = engine.search_managed_with_callback(
+                &position,
+                plan,
+                &worker_cancellation,
+                move |info| {
                     callback_authority.send_if_current(generation, callback_sink.as_ref(), || {
                         format_search_info(info)
                     });
-                });
+                },
+            );
             if let Some(gate) = worker_gate
                 && !gate.wait()
             {
@@ -608,58 +752,20 @@ fn hash_entries(megabytes: usize) -> usize {
     SearchEngine::transposition_entries_for_megabytes(megabytes).max(1)
 }
 
-fn search_limits(
-    position: &Position,
-    options: &UsiOptions,
-    parameters: &GoParameters,
-) -> SearchLimits {
-    let max_depth = if parameters.infinite {
-        MAX_DEPTH
-    } else {
-        parameters.depth.unwrap_or(options.max_depth).min(MAX_DEPTH)
-    };
-    let movetime = if parameters.infinite {
-        None
-    } else {
-        parameters
-            .movetime_ms
-            .or_else(|| allocate_time(position.side_to_move(), parameters))
-            .or_else(|| {
-                (parameters.nodes.is_none() && parameters.depth.is_none())
-                    .then_some(DEFAULT_MOVE_TIME_MS)
-            })
-            .map(Duration::from_millis)
-    };
-    SearchLimits {
-        max_depth,
-        max_nodes: parameters.nodes,
-        movetime,
+fn time_control(options: &UsiOptions, parameters: &GoParameters) -> TimeControl {
+    TimeControl {
+        black_time_ms: parameters.black_time_ms,
+        white_time_ms: parameters.white_time_ms,
+        byoyomi_ms: parameters.byoyomi_ms,
+        black_increment_ms: parameters.black_increment_ms,
+        white_increment_ms: parameters.white_increment_ms,
+        movetime_ms: parameters.movetime_ms,
+        nodes: parameters.nodes,
+        depth: parameters.depth,
+        infinite: parameters.infinite,
+        casual: false,
+        safety_margin_ms: options.safety_margin_ms,
     }
-}
-
-fn allocate_time(side: Side, parameters: &GoParameters) -> Option<u64> {
-    let remaining = match side {
-        Side::Black => parameters.black_time_ms,
-        Side::White => parameters.white_time_ms,
-    };
-    let increment = match side {
-        Side::Black => parameters.black_increment_ms,
-        Side::White => parameters.white_increment_ms,
-    };
-    if remaining.is_none() && increment.is_none() && parameters.byoyomi_ms.is_none() {
-        return None;
-    }
-    let remaining = remaining.unwrap_or(0);
-    let increment = increment.unwrap_or(0);
-    let byoyomi = parameters.byoyomi_ms.unwrap_or(0);
-    let budget = (remaining / 30)
-        .saturating_add(increment)
-        .saturating_add(byoyomi);
-    let available = remaining
-        .saturating_add(increment)
-        .saturating_add(byoyomi)
-        .max(1);
-    Some(budget.max(1).min(available))
 }
 
 fn format_search_info(info: &SearchInfo) -> String {
@@ -744,6 +850,27 @@ fn parse_u8_option(value: Option<&str>, name: &str) -> Result<u8, String> {
         .map_err(|_| format!("{name} must be an integer"))
 }
 
+fn parse_u32_option(value: Option<&str>, name: &str) -> Result<u32, String> {
+    value
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .parse()
+        .map_err(|_| format!("{name} must be an integer"))
+}
+
+fn parse_u64_option(value: Option<&str>, name: &str) -> Result<u64, String> {
+    value
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .parse()
+        .map_err(|_| format!("{name} must be an integer"))
+}
+
+fn parse_i32_option(value: Option<&str>, name: &str) -> Result<i32, String> {
+    value
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .parse()
+        .map_err(|_| format!("{name} must be an integer"))
+}
+
 fn parse_bool_option(value: Option<&str>, name: &str) -> Result<bool, String> {
     match value {
         Some("true") => Ok(true),
@@ -766,14 +893,16 @@ mod tests {
         time::Duration,
     };
 
+    use flate2::{Compression, write::GzEncoder};
     use open_shogi_core::{
         MATE_SCORE, NeuralQuantization, Position, SearchInfo, SearchStats, to_sfen,
     };
     use sha2::{Digest, Sha256};
+    use std::io::Write as _;
 
     use super::{
-        BoundedLine, ModelKind, OutputAuthority, ProtocolSink, UsiSession, allocate_time,
-        format_search_info, read_bounded_line, run_protocol,
+        BoundedLine, ModelKind, OutputAuthority, ProtocolSink, UsiSession, format_search_info,
+        read_bounded_line, run_protocol, time_control,
     };
     use crate::GoParameters;
 
@@ -858,6 +987,36 @@ mod tests {
         bytes
     }
 
+    fn opening_book_bytes() -> Vec<u8> {
+        let provenance = ["1".repeat(64), "2".repeat(64)];
+        let mut record = serde_json::json!({
+            "schema": open_shogi_core::OPENING_BOOK_SCHEMA,
+            "stateKey": "eb5bc2ef917ec96fe2172f96d7060ec4f39322caf929fc1177d2c9fc8b937ebc",
+            "stateSfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -",
+            "ruleProfile": "standard-shogi/v1",
+            "buildVersion": "usi-fixture",
+            "provenanceReferences": provenance,
+            "candidates": [{
+                "moveUsi": "2g2f", "sampleCount": 2,
+                "sourceDistribution": {"aobazero-no-noise": 2},
+                "blackResults": {"wins": 1, "losses": 1, "draws": 0, "unknown": 0},
+                "whiteResults": {"wins": 0, "losses": 0, "draws": 0, "unknown": 0},
+                "teacherScoreCp": 20, "scoreUncertaintyCp": null,
+                "teacherDepth": 8, "teacherNodes": 25000,
+                "openingClassification": "ibisha",
+                "provenanceReferences": provenance
+            }]
+        });
+        let checksum = format!("{:x}", Sha256::digest(serde_json::to_vec(&record).unwrap()));
+        record
+            .as_object_mut()
+            .unwrap()
+            .insert("recordChecksum".to_owned(), serde_json::json!(checksum));
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        writeln!(encoder, "{}", serde_json::to_string(&record).unwrap()).unwrap();
+        encoder.finish().unwrap()
+    }
+
     #[test]
     fn handshake_has_identity_options_and_terminator() {
         let sink = Arc::new(MemorySink::default());
@@ -874,7 +1033,13 @@ mod tests {
                 .any(|line| line.starts_with("option name Hash "))
         );
         assert!(lines.iter().any(|line| {
-            line == "option name ModelKind type combo default handcrafted var handcrafted var neural-float var neural-quantized"
+            line == "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized"
+        }));
+        assert!(lines.iter().any(|line| {
+            line == "option name TimeSafetyMarginMs type spin default 50 min 0 max 1000"
+        }));
+        assert!(lines.iter().any(|line| {
+            line == "option name OpeningProfile type combo default ibisha_strict var unrestricted var ibisha_preferred var ibisha_strict"
         }));
         assert!(
             lines
@@ -1153,6 +1318,7 @@ mod tests {
             elapsed: Duration::from_millis(1),
             nps: 5_000,
             pv: Vec::new(),
+            root_moves: Vec::new(),
             stats: SearchStats::default(),
         };
         assert!(format_search_info(&info(42)).contains("score cp 42"));
@@ -1189,6 +1355,33 @@ mod tests {
             1
         );
         assert!(lines.iter().any(|line| line.starts_with("info depth ")));
+    }
+
+    #[test]
+    fn valid_opening_book_returns_immediate_legal_move_without_worker() {
+        let book = TemporaryModel::write(&opening_book_bytes());
+        let sink = Arc::new(MemorySink::default());
+        let mut session = UsiSession::new(sink.clone());
+
+        assert!(session.process_line(&format!(
+            "setoption name OpeningBookPath value {}",
+            book.display()
+        )));
+        assert!(session.process_line("go nodes 100"));
+
+        assert!(session.active.is_none());
+        let lines = sink.0.lock().unwrap();
+        assert!(lines.iter().any(|line| {
+            line.starts_with("info string source book ") && line.contains("classification ibisha")
+        }));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("bestmove "))
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["bestmove 2g2f"]
+        );
     }
 
     #[test]
@@ -1230,38 +1423,45 @@ mod tests {
 
     #[test]
     fn clock_allocation_handles_byoyomi_only_and_zero_clock() {
-        assert_eq!(
-            allocate_time(
+        let options = super::UsiOptions::default();
+        let manager = open_shogi_core::TimeManager::default();
+        let byoyomi = manager
+            .plan(
                 open_shogi_core::Side::Black,
-                &GoParameters {
-                    byoyomi_ms: Some(500),
-                    ..GoParameters::default()
-                }
-            ),
-            Some(500)
-        );
+                time_control(
+                    &options,
+                    &GoParameters {
+                        byoyomi_ms: Some(500),
+                        ..GoParameters::default()
+                    },
+                ),
+                8,
+            )
+            .unwrap();
         assert_eq!(
-            allocate_time(
-                open_shogi_core::Side::Black,
-                &GoParameters {
-                    black_time_ms: Some(0),
-                    ..GoParameters::default()
-                }
-            ),
-            Some(1)
+            byoyomi.allocated_hard_limit,
+            Some(Duration::from_millis(500))
         );
+        assert_eq!(byoyomi.hard_limit, Some(Duration::from_millis(450)));
+
+        let zero_clock = manager
+            .plan(
+                open_shogi_core::Side::Black,
+                time_control(
+                    &options,
+                    &GoParameters {
+                        black_time_ms: Some(0),
+                        ..GoParameters::default()
+                    },
+                ),
+                8,
+            )
+            .unwrap();
         assert_eq!(
-            allocate_time(
-                open_shogi_core::Side::Black,
-                &GoParameters {
-                    black_time_ms: Some(u64::MAX),
-                    black_increment_ms: Some(u64::MAX),
-                    byoyomi_ms: Some(u64::MAX),
-                    ..GoParameters::default()
-                }
-            ),
-            Some(u64::MAX)
+            zero_clock.allocated_hard_limit,
+            Some(Duration::from_millis(1))
         );
+        assert_eq!(zero_clock.hard_limit, Some(Duration::from_millis(1)));
     }
 
     #[test]

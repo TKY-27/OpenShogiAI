@@ -25,6 +25,7 @@ from open_shogi_training.data.opening import (
     build_opening_database,
     export_opening_jsonl,
 )
+from open_shogi_training.data.opening_v2 import build_opening_book_v2
 from open_shogi_training.data.registry import RegistryError, load_source_registry
 from open_shogi_training.data.splits import SplitPolicy
 from open_shogi_training.selfplay.common import ArtifactRef, artifact_ref
@@ -119,6 +120,20 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--database", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)
     export.add_argument("--min-count", type=int, default=1)
+
+    opening_v2 = subparsers.add_parser(
+        "build-opening-v2",
+        help="build the teacher-safe provenance-bound OpenShogiAI opening book",
+    )
+    opening_v2.add_argument("--opening-v1", type=Path, required=True)
+    opening_v2.add_argument("--labels", type=Path, required=True)
+    opening_v2.add_argument("--label-manifest", type=Path, required=True)
+    opening_v2.add_argument("--dataset-manifest", type=Path, required=True)
+    opening_v2.add_argument("--output", type=Path, required=True)
+    opening_v2.add_argument("--build-version", required=True)
+    opening_v2.add_argument("--maximum-plies", type=int, default=40)
+    opening_v2.add_argument("--minimum-sample-count", type=int, default=2)
+    opening_v2.add_argument("--maximum-teacher-loss-cp", type=int, default=80)
     return parser
 
 
@@ -201,6 +216,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "database": str(arguments.database),
                     "output": str(arguments.output),
                     "min_count": arguments.min_count,
+                }
+            )
+            return 0
+        if arguments.command == "build-opening-v2":
+            report = build_opening_book_v2(
+                arguments.opening_v1,
+                arguments.labels,
+                arguments.label_manifest,
+                arguments.dataset_manifest,
+                arguments.output,
+                build_version=arguments.build_version,
+                maximum_plies=arguments.maximum_plies,
+                minimum_sample_count=arguments.minimum_sample_count,
+                maximum_teacher_loss_cp=arguments.maximum_teacher_loss_cp,
+            )
+            _emit_json(
+                {
+                    "schema": "open_shogi_opening_build_report/v1",
+                    "output": str(arguments.output),
+                    "inputRecords": report.input_records,
+                    "retainedPositions": report.retained_positions,
+                    "retainedCandidates": report.retained_candidates,
+                    "rejectedWithoutTeacher": report.rejected_without_teacher,
+                    "rejectedTeacherLoss": report.rejected_teacher_loss,
+                    "ibishaCandidates": report.ibisha_candidates,
+                    "ibishaVsFuribishaCandidates": report.ibisha_vs_furibisha_candidates,
+                    "artifactSha256": report.artifact.sha256,
+                    "artifactSize": report.artifact.size,
                 }
             )
             return 0

@@ -26,10 +26,10 @@ required_provenance = {
     "The private source history was not published",
 }
 expected_bindings = {
-    "open_shogi_wasm.d.ts": "be1db38df5cca0a4c55418b1e35bb8107c2a5d2e2a4e834c0ebad270878f7b7a",
-    "open_shogi_wasm.js": "165ee2cc0a034216d919baa9f0230ba312f837ce223dd1af71a8739e59dd3d4f",
-    "open_shogi_wasm_bg.wasm": "7d3f7f06e0309978eb0f7aa9107721384e14062b724ca00fcee9c626ee8a1caf",
-    "open_shogi_wasm_bg.wasm.d.ts": "3c17285e297fbc61c9e3ad306270ecf7361a5f2032582b56a8524b91877d85c8",
+    "open_shogi_wasm.d.ts": "19f8a5a9f786666d2a736daff7cedae9fa9c77a55f6e6ed85950882e0e07eee9",
+    "open_shogi_wasm.js": "b0862ea56ee808c2feabe2ab67128d317fdbb824856b47fe6fabd5dbfac40d88",
+    "open_shogi_wasm_bg.wasm": "67c11f4da7e7e0b7c6c1ace36ab84ab8a5f2ab22a88142218a54f3e0855b1030",
+    "open_shogi_wasm_bg.wasm.d.ts": "25de209ae4d389487b6b7db0ae895e935fdd84fa62a9bad0dbadf08ec7c910cd",
 }
 failures: list[str] = []
 text = (root / "PROVENANCE.md").read_text(encoding="utf-8")

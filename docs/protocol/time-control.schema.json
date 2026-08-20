@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openshogiai.local/schemas/open_shogi_time_control-v1.json",
+  "title": "OpenShogiAI time control v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema"],
+  "properties": {
+    "schema": { "const": "open_shogi_time_control/v1" },
+    "blackTimeMs": { "type": "integer", "minimum": 0, "maximum": 604800000 },
+    "whiteTimeMs": { "type": "integer", "minimum": 0, "maximum": 604800000 },
+    "byoyomiMs": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+    "blackIncrementMs": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+    "whiteIncrementMs": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+    "movetimeMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+    "nodes": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+    "depth": { "type": "integer", "minimum": 1, "maximum": 64 },
+    "infinite": { "type": "boolean", "default": false },
+    "casual": { "type": "boolean", "default": false },
+    "safetyMarginMs": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 50 }
+  }
+}

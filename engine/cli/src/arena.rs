@@ -13,9 +13,9 @@ use std::{fs::File, io::Write as _, path::Path};
 use open_shogi_core::{
     AnchoredDir, AnchoredFile, CancellationToken, CsaGame, CsaResultValidation, CsaSpecialMove,
     EngineIdentity, EntryKind, EvaluationConfig, Game, GameEnd, MAX_NEURAL_MODEL_BYTES, Move,
-    MAX_SECURE_CLEANUP_QUARANTINE_ENTRIES, NeuralEvaluator, NeuralQuantization, Position,
-    RandomMoveSelector, RepetitionOutcome, SearchConfig, SearchEngine, SearchLimits, SearchStats,
-    Side, parse_csa_game, parse_sfen, to_csa_game, to_sfen,
+    MAX_SECURE_CLEANUP_QUARANTINE_ENTRIES, NeuralEvaluationMode, NeuralEvaluator,
+    NeuralQuantization, Position, RandomMoveSelector, RepetitionOutcome, SearchConfig,
+    SearchEngine, SearchLimits, SearchStats, Side, parse_csa_game, parse_sfen, to_csa_game, to_sfen,
 };
 
 use crate::{
@@ -63,6 +63,8 @@ enum PlayerKind {
     HandcraftedBaseline,
     HandcraftedExperimental,
     Neural,
+    Residual,
+    Composite,
 }
 
 impl PlayerKind {
@@ -75,8 +77,10 @@ impl PlayerKind {
                 Ok(Self::HandcraftedExperimental)
             }
             "neural" => Ok(Self::Neural),
+            "residual" => Ok(Self::Residual),
+            "composite" => Ok(Self::Composite),
             _ => Err(
-                "player type must be random, material, handcrafted-baseline, handcrafted-experimental, or neural"
+                "player type must be random, material, handcrafted-baseline, handcrafted-experimental, neural, residual, or composite"
                     .to_owned(),
             ),
         }
@@ -86,6 +90,19 @@ impl PlayerKind {
         !matches!(self, Self::Random)
     }
 
+    const fn uses_model(self) -> bool {
+        matches!(self, Self::Neural | Self::Residual | Self::Composite)
+    }
+
+    const fn neural_mode(self) -> Option<NeuralEvaluationMode> {
+        match self {
+            Self::Neural => Some(NeuralEvaluationMode::PureValue),
+            Self::Residual => Some(NeuralEvaluationMode::Residual),
+            Self::Composite => Some(NeuralEvaluationMode::Composite),
+            _ => None,
+        }
+    }
+
     const fn report_name(self) -> &'static str {
         match self {
             Self::Random => "random",
@@ -93,6 +110,8 @@ impl PlayerKind {
             Self::HandcraftedBaseline => "handcrafted-baseline",
             Self::HandcraftedExperimental => "handcrafted-experimental",
             Self::Neural => "neural",
+            Self::Residual => "residual",
+            Self::Composite => "composite",
         }
     }
 }
@@ -118,6 +137,8 @@ impl PlayerSpec {
             PlayerKind::HandcraftedBaseline => self.search_label("handcrafted-baseline"),
             PlayerKind::HandcraftedExperimental => self.search_label("handcrafted-experimental"),
             PlayerKind::Neural => self.search_label("neural"),
+            PlayerKind::Residual => self.search_label("residual"),
+            PlayerKind::Composite => self.search_label("composite-50-50"),
         }
     }
 
@@ -570,11 +591,12 @@ fn validate_player(name: &str, player: &PlayerSpec) -> Result<(), String> {
         return Err(format!("--{name}-hash-mb must be 1..=1024"));
     }
     match (player.kind, player.model_path.is_some()) {
-        (PlayerKind::Neural, false) => {
-            return Err(format!("neural player {name} requires --{name}-model"));
+        (kind, false) if kind.uses_model() => {
+            return Err(format!("model-backed player {name} requires --{name}-model"));
         }
-        (PlayerKind::Neural, true) | (_, false) => {}
-        (_, true) => return Err(format!("--{name}-model requires neural player {name}")),
+        (kind, true) if kind.uses_model() => {}
+        (_, false) => {}
+        (_, true) => return Err(format!("--{name}-model requires a model-backed player {name}")),
     }
     Ok(())
 }
@@ -886,12 +908,12 @@ impl Player {
                     ..SearchConfig::default()
                 };
                 config.evaluation = evaluation_config(evaluator);
-                let engine = if evaluator == PlayerKind::Neural {
+                let engine = if let Some(mode) = evaluator.neural_mode() {
                     let model = spec
                         .model
                         .as_ref()
-                        .ok_or_else(|| "neural player lacks a loaded model".to_owned())?;
-                    SearchEngine::with_neural(config, Arc::clone(model))
+                        .ok_or_else(|| "model-backed player lacks a loaded model".to_owned())?;
+                    SearchEngine::with_neural_mode(config, Arc::clone(model), mode)
                 } else {
                     SearchEngine::new(config)
                 };
@@ -959,7 +981,11 @@ const fn evaluation_config(kind: PlayerKind) -> EvaluationConfig {
     match kind {
         PlayerKind::Material => EvaluationConfig::material_only(),
         PlayerKind::HandcraftedBaseline => EvaluationConfig::handcrafted_baseline(),
-        PlayerKind::HandcraftedExperimental | PlayerKind::Neural | PlayerKind::Random => {
+        PlayerKind::HandcraftedExperimental
+        | PlayerKind::Neural
+        | PlayerKind::Residual
+        | PlayerKind::Composite
+        | PlayerKind::Random => {
             EvaluationConfig::handcrafted_experimental()
         }
     }
@@ -2179,10 +2205,10 @@ fn validate_resumed_game(
     {
         return Err("arena resume search counts disagree with CSA turn selections".to_owned());
     }
-    if (config.player_a.kind != PlayerKind::Neural
+    if (!config.player_a.kind.uses_model()
         && (summary.player_a_neural_inference_calls != 0
             || summary.player_a_neural_inference_time_ns != 0))
-        || (config.player_b.kind != PlayerKind::Neural
+        || (!config.player_b.kind.uses_model()
             && (summary.player_b_neural_inference_calls != 0
                 || summary.player_b_neural_inference_time_ns != 0))
     {
@@ -2789,7 +2815,7 @@ fn validate_report_config_identity(config: &ArenaConfig) -> Result<(), String> {
             player.model_architecture_version().is_some(),
             player.model_quantization().is_some(),
         ];
-        let valid_presence = if player.kind == PlayerKind::Neural {
+        let valid_presence = if player.kind.uses_model() {
             model_identity_parts.into_iter().all(std::convert::identity)
         } else {
             model_identity_parts

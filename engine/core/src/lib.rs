@@ -6,12 +6,16 @@
 
 #![deny(unsafe_code)]
 
+mod analysis;
+mod champion;
 mod evaluation;
 mod game;
 mod neural;
 mod notation;
+mod opening;
 mod perft;
 mod position;
+mod resource;
 mod search;
 #[cfg(any(
     target_os = "macos",
@@ -34,8 +38,17 @@ mod secure_file;
     target_os = "android"
 )))]
 mod secure_file_portable;
+mod time_control;
 mod types;
 
+pub use analysis::{
+    ANALYSIS_SCHEMA, AnalysisCacheEntry, AnalysisCacheKey, AnalysisLine, AnalysisService,
+    AnalysisState, AnalysisStep, AnalysisUpdate, AnalysisUpdateSource,
+    DEFAULT_ANALYSIS_CACHE_ENTRIES, MAX_ANALYSIS_MULTI_PV,
+};
+pub use champion::{
+    ChampionScope, NEURAL_LINEAGE_CHAMPION_ID, OVERALL_CHAMPION_ID, overall_champion_evaluation,
+};
 pub use evaluation::{EvaluationBreakdown, EvaluationConfig, evaluate, evaluate_breakdown};
 pub use game::{
     EnteringKingDeclaration, EnteringKingRule, Game, GameEnd, GameRecord, ImpasseCondition,
@@ -51,12 +64,17 @@ pub use notation::{
     CsaGame, CsaParseError, CsaResultValidation, CsaSpecialMove, NotationError, parse_csa_game,
     parse_csa_move, parse_sfen, parse_usi_move, to_csa_game, to_csa_move, to_sfen, to_usi_move,
 };
+pub use opening::{
+    OPENING_BOOK_SCHEMA, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile,
+};
 pub use perft::{PerftError, PerftResult, perft, perft_divide};
 pub use position::{IllegalMove, Position, PositionError, Undo};
+pub use resource::{RESOURCE_BUDGET_SCHEMA, ResourceBudget, ResourceCoordinator};
 pub use search::{
-    CancellationToken, MATE_SCORE, MATE_THRESHOLD, MateSearchResult, RandomMoveSelector,
-    SearchConfig, SearchEngine, SearchInfo, SearchLimits, SearchResult, SearchStats,
-    SearchTermination, is_mate_score,
+    CancellationToken, MATE_SCORE, MATE_THRESHOLD, MateSearchResult, MonotonicClock,
+    NeuralEvaluationMode, RandomMoveSelector, RootMoveStat, SearchConfig, SearchEngine, SearchInfo,
+    SearchLimits, SearchResult, SearchStats, SearchTermination, SystemMonotonicClock,
+    is_mate_score,
 };
 #[doc(hidden)]
 #[cfg(any(
@@ -83,6 +101,11 @@ pub use secure_file::{
     target_os = "android"
 )))]
 pub use secure_file_portable::{AnchoredFile, StableFileIdentity};
+pub use time_control::{
+    CASUAL_HARD_MAX_MS, MAX_CLOCK_MS, MAX_MOVE_TIME_MS, MAX_SAFETY_MARGIN_MS,
+    MAX_TIME_CONTROL_DEPTH, MAX_TIME_CONTROL_NODES, StabilityPolicy, TIME_CONTROL_SCHEMA,
+    TimeControl, TimeControlMode, TimeManager, TimeManagerConfig, TimePlan,
+};
 pub use types::{
     BOARD_SQUARES, HAND_KIND_COUNT, Hand, HandPiece, Move, Piece, PieceKind, Side, Square,
 };

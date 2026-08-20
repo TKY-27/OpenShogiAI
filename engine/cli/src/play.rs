@@ -9,9 +9,10 @@ use std::{
 use open_shogi_core::{
     AnchoredDir, AnchoredFile, CancellationToken, CsaGame, CsaResultValidation, CsaSpecialMove,
     EntryKind, EvaluationConfig, Game, GameEnd, HandPiece, MAX_NEURAL_MODEL_BYTES, Move,
-    NeuralEvaluator, NeuralQuantization, Position, RepetitionOutcome, SearchConfig, SearchEngine,
-    SearchLimits, Side, StableDirectoryIdentity, StableFileIdentity, parse_csa_game, parse_sfen,
-    parse_usi_move, repetition_outcome_from_moves, to_csa_game, to_sfen, to_usi_move,
+    NeuralEvaluationMode, NeuralEvaluator, NeuralQuantization, Position, RepetitionOutcome,
+    SearchConfig, SearchEngine, Side, StableDirectoryIdentity, StableFileIdentity, TimeControl,
+    TimeManager, parse_csa_game, parse_sfen, parse_usi_move, repetition_outcome_from_moves,
+    to_csa_game, to_sfen, to_usi_move,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -27,10 +28,9 @@ use crate::{
         read_open_file_artifact_with_check, read_retained_file_artifact, sha256_bytes,
         sha256_open_file_with_check, sha256_text,
     },
-    opening::OpeningBook,
+    opening::{OpeningBook, OpeningPolicy, OpeningProfile},
 };
 
-const DEFAULT_NODES: u64 = 10_000;
 const DEFAULT_MAX_PLIES: u32 = 512;
 const MAX_NODES_PER_MOVE: u64 = 1_000_000_000;
 const MAX_MOVETIME_MS: u64 = 3_600_000;
@@ -182,9 +182,12 @@ enum PlayProfile {
     Material,
     HandcraftedBaseline,
     HandcraftedExperimental,
+    OverallChampion,
     Neural,
+    Residual,
+    Composite,
     GenerationZero,
-    Champion,
+    NeuralLineageChampion,
     Challenger,
 }
 
@@ -194,12 +197,15 @@ impl PlayProfile {
             "material" => Ok(Self::Material),
             "handcrafted" | "handcrafted-baseline" => Ok(Self::HandcraftedBaseline),
             "experimental" | "handcrafted-experimental" => Ok(Self::HandcraftedExperimental),
+            "champion" | "overall-champion" => Ok(Self::OverallChampion),
             "neural" => Ok(Self::Neural),
+            "residual" => Ok(Self::Residual),
+            "composite" => Ok(Self::Composite),
             "generation-0" => Ok(Self::GenerationZero),
-            "champion" => Ok(Self::Champion),
+            "neural-lineage-champion" => Ok(Self::NeuralLineageChampion),
             "challenger" => Ok(Self::Challenger),
             _ => Err(
-                "--profile must be material, handcrafted-baseline, handcrafted-experimental, neural, generation-0, champion, or challenger"
+                "--profile must be material, handcrafted-baseline, handcrafted-experimental, overall-champion, neural, residual, composite, generation-0, neural-lineage-champion, or challenger"
                     .to_owned(),
             ),
         }
@@ -208,13 +214,18 @@ impl PlayProfile {
     const fn is_registry_alias(self) -> bool {
         matches!(
             self,
-            Self::GenerationZero | Self::Champion | Self::Challenger
+            Self::GenerationZero | Self::NeuralLineageChampion | Self::Challenger
         )
+    }
+
+    const fn uses_direct_model(self) -> bool {
+        matches!(self, Self::Neural | Self::Residual | Self::Composite)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Budget {
+    Casual,
     Nodes(u64),
     MoveTime(u64),
 }
@@ -222,6 +233,7 @@ enum Budget {
 struct PlayConfig {
     human: Side,
     budget: Budget,
+    safety_margin_ms: u64,
     depth: u8,
     initial: Position,
     max_plies: u32,
@@ -232,6 +244,9 @@ struct PlayConfig {
     registry_path: Option<PathBuf>,
     opening_book_path: Option<PathBuf>,
     opening_max_plies: u32,
+    opening_profile: OpeningProfile,
+    opening_minimum_samples: u64,
+    opening_maximum_teacher_loss_cp: i32,
 }
 
 enum HumanTurn {
@@ -1362,6 +1377,8 @@ struct HumanPlayConfigRecord {
     human_side: String,
     budget_kind: String,
     budget_value: u64,
+    safety_margin_ms: u64,
+    time_control_schema: String,
     depth: u8,
     initial_sfen: String,
     max_plies: u32,
@@ -1384,6 +1401,9 @@ struct HumanPlayConfigRecord {
     #[serde(deserialize_with = "deserialize_required_option")]
     opening_artifact_size: Option<u64>,
     opening_max_plies: u32,
+    opening_profile: String,
+    opening_minimum_samples: u64,
+    opening_maximum_teacher_loss_cp: i32,
     transposition_entries: usize,
     engine_name: String,
     engine_version: String,
@@ -1438,16 +1458,20 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
     let mut human = Side::Black;
     let mut nodes = None;
     let mut movetime_ms = None;
+    let mut safety_margin_ms = 50_u64;
     let mut depth = 8_u8;
     let mut sfen = None;
     let mut max_plies = DEFAULT_MAX_PLIES;
     let mut output = PathBuf::from("artifacts/pending_human_review/human-game.csa");
     let mut decision_log = None;
-    let mut profile = PlayProfile::HandcraftedExperimental;
+    let mut profile = PlayProfile::OverallChampion;
     let mut model_path = None;
     let mut registry_path = None;
     let mut opening_book_path = None;
     let mut opening_max_plies = 24_u32;
+    let mut opening_profile = OpeningProfile::IbishaStrict;
+    let mut opening_minimum_samples = 2_u64;
+    let mut opening_maximum_teacher_loss_cp = 80_i32;
     let mut seen_options = std::collections::BTreeSet::new();
     let mut index = 0;
     while index < arguments.len() {
@@ -1466,6 +1490,10 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
             "--nodes" => nodes = Some(parse_next(arguments, &mut index, "--nodes")?),
             "--movetime-ms" => {
                 movetime_ms = Some(parse_next(arguments, &mut index, "--movetime-ms")?);
+            }
+            "--safety-margin-ms" => {
+                safety_margin_ms =
+                    parse_next(arguments, &mut index, "--safety-margin-ms")?;
             }
             "--depth" => depth = parse_next(arguments, &mut index, "--depth")?,
             "--sfen" => sfen = Some(next_value(arguments, &mut index, "--sfen")?.to_owned()),
@@ -1489,6 +1517,18 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
             "--opening-max-plies" => {
                 opening_max_plies = parse_next(arguments, &mut index, "--opening-max-plies")?;
             }
+            "--opening-profile" => {
+                opening_profile =
+                    OpeningProfile::parse(next_value(arguments, &mut index, "--opening-profile")?)?;
+            }
+            "--opening-min-samples" => {
+                opening_minimum_samples =
+                    parse_next(arguments, &mut index, "--opening-min-samples")?;
+            }
+            "--opening-max-teacher-loss-cp" => {
+                opening_maximum_teacher_loss_cp =
+                    parse_next(arguments, &mut index, "--opening-max-teacher-loss-cp")?;
+            }
             argument => return Err(format!("unknown play argument: {argument}")),
         }
         index += 1;
@@ -1502,18 +1542,33 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
     if !(1..=MAX_PLIES).contains(&opening_max_plies) {
         return Err(format!("--opening-max-plies must be 1..={MAX_PLIES}"));
     }
-    if profile == PlayProfile::Neural && model_path.is_none() {
-        return Err("--profile neural requires --model".to_owned());
+    if opening_minimum_samples == 0 || opening_minimum_samples > 1_000_000 {
+        return Err("--opening-min-samples must be 1..=1000000".to_owned());
     }
-    if profile != PlayProfile::Neural && model_path.is_some() {
-        return Err("--model is only valid with a neural profile".to_owned());
+    if !(0..=10_000).contains(&opening_maximum_teacher_loss_cp) {
+        return Err("--opening-max-teacher-loss-cp must be 0..=10000".to_owned());
+    }
+    if safety_margin_ms > open_shogi_core::MAX_SAFETY_MARGIN_MS {
+        return Err(format!(
+            "--safety-margin-ms must be 0..={}",
+            open_shogi_core::MAX_SAFETY_MARGIN_MS
+        ));
+    }
+    if profile.uses_direct_model() && model_path.is_none() {
+        return Err("direct model-backed profiles require --model".to_owned());
+    }
+    if !profile.uses_direct_model() && model_path.is_some() {
+        return Err("--model is only valid with a direct model-backed profile".to_owned());
     }
     if profile.is_registry_alias() && registry_path.is_none() {
-        return Err("generation/champion/challenger profiles require --registry".to_owned());
+        return Err(
+            "generation/neural-lineage-champion/challenger profiles require --registry".to_owned(),
+        );
     }
     if !profile.is_registry_alias() && registry_path.is_some() {
         return Err(
-            "--registry is only valid with generation/champion/challenger profiles".to_owned(),
+            "--registry is only valid with generation/neural-lineage-champion/challenger profiles"
+                .to_owned(),
         );
     }
     let budget = match (nodes, movetime_ms) {
@@ -1529,7 +1584,7 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
         (None, Some(_)) => {
             return Err(format!("--movetime-ms must be 1..={MAX_MOVETIME_MS}"));
         }
-        (None, None) => Budget::Nodes(DEFAULT_NODES),
+        (None, None) => Budget::Casual,
     };
     let initial = match sfen {
         Some(value) => parse_sfen(&value).map_err(|error| format!("invalid --sfen: {error}"))?,
@@ -1545,6 +1600,7 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
     Ok(PlayConfig {
         human,
         budget,
+        safety_margin_ms,
         depth,
         initial,
         max_plies,
@@ -1555,6 +1611,9 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
         registry_path,
         opening_book_path,
         opening_max_plies,
+        opening_profile,
+        opening_minimum_samples,
+        opening_maximum_teacher_loss_cp,
     })
 }
 
@@ -1563,8 +1622,16 @@ fn resolve_profile(config: &PlayConfig) -> Result<ResolvedProfile, String> {
         PlayProfile::Material => Ok(handcrafted_profile("material")),
         PlayProfile::HandcraftedBaseline => Ok(handcrafted_profile("handcrafted-baseline")),
         PlayProfile::HandcraftedExperimental => Ok(handcrafted_profile("handcrafted-experimental")),
-        PlayProfile::Neural => load_neural_profile(
-            "neural-direct",
+        PlayProfile::OverallChampion => Ok(handcrafted_profile(
+            open_shogi_core::OVERALL_CHAMPION_ID,
+        )),
+        PlayProfile::Neural | PlayProfile::Residual | PlayProfile::Composite => load_neural_profile(
+            match config.profile {
+                PlayProfile::Neural => "neural-direct",
+                PlayProfile::Residual => "residual-direct",
+                PlayProfile::Composite => "composite-direct",
+                _ => unreachable!(),
+            },
             config
                 .model_path
                 .as_deref()
@@ -1573,7 +1640,9 @@ fn resolve_profile(config: &PlayConfig) -> Result<ResolvedProfile, String> {
             None,
             None,
         ),
-        PlayProfile::GenerationZero | PlayProfile::Champion | PlayProfile::Challenger => {
+        PlayProfile::GenerationZero
+        | PlayProfile::NeuralLineageChampion
+        | PlayProfile::Challenger => {
             resolve_registry_profile(
                 config.profile,
                 config
@@ -1687,7 +1756,7 @@ fn resolve_registry_profile(
         .map(|model| (model.model_id.as_str(), model))
         .collect::<BTreeMap<_, _>>();
     let model_id = match profile {
-        PlayProfile::Champion => registry
+        PlayProfile::NeuralLineageChampion => registry
             .champion_model_id
             .as_deref()
             .ok_or_else(|| "model registry has no champion".to_owned())?,
@@ -8165,7 +8234,14 @@ fn build_search_engine(config: &PlayConfig, profile: &ResolvedProfile) -> Search
     search_config.evaluation = evaluation_config(config.profile);
     profile.neural.as_ref().map_or_else(
         || SearchEngine::new(search_config),
-        |neural| SearchEngine::with_neural(search_config, Arc::clone(neural)),
+        |neural| {
+            let mode = match config.profile {
+                PlayProfile::Residual => NeuralEvaluationMode::Residual,
+                PlayProfile::Composite => NeuralEvaluationMode::Composite,
+                _ => NeuralEvaluationMode::PureValue,
+            };
+            SearchEngine::with_neural_mode(search_config, Arc::clone(neural), mode)
+        },
     )
 }
 
@@ -8183,10 +8259,12 @@ fn play_config_sha256(
     opening: Option<&ResolvedOpening>,
 ) -> String {
     sha256_text(&format!(
-        "schema=phase6_human_play_config/v1;human={};budget_kind={};budget_value={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};transposition_entries=16384;engine={}:{}",
+        "schema=open_shogi_play_config/v2;time_control_schema={};human={};budget_kind={};budget_value={};safety_margin_ms={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};opening_profile={};opening_minimum_samples={};opening_maximum_teacher_loss_cp={};transposition_entries=16384;engine={}:{}",
+        open_shogi_core::TIME_CONTROL_SCHEMA,
         side_name(config.human),
         budget_parts(config.budget).0,
         budget_parts(config.budget).1,
+        config.safety_margin_ms,
         config.depth,
         to_sfen(&config.initial),
         config.max_plies,
@@ -8201,6 +8279,9 @@ fn play_config_sha256(
         opening.map(|loaded| loaded.artifact_sha256.as_str()),
         opening.map(|loaded| loaded.artifact_size),
         config.opening_max_plies,
+        config.opening_profile.name(),
+        config.opening_minimum_samples,
+        config.opening_maximum_teacher_loss_cp,
         open_shogi_core::ENGINE_NAME,
         open_shogi_core::ENGINE_VERSION,
     ))
@@ -8208,10 +8289,12 @@ fn play_config_sha256(
 
 fn recorded_play_config_sha256(config: &HumanPlayConfigRecord) -> String {
     sha256_text(&format!(
-        "schema=phase6_human_play_config/v1;human={};budget_kind={};budget_value={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};transposition_entries={};engine={}:{}",
+        "schema=open_shogi_play_config/v2;time_control_schema={};human={};budget_kind={};budget_value={};safety_margin_ms={};depth={};initial_sfen={};max_plies={};profile={};model_id={};artifact={:?};payload={:?};architecture={:?};quantization={:?};registry_sha256={:?};registry_revision={:?};opening_sha256={:?};opening_size={:?};opening_max_plies={};opening_profile={};opening_minimum_samples={};opening_maximum_teacher_loss_cp={};transposition_entries={};engine={}:{}",
+        config.time_control_schema,
         config.human_side,
         config.budget_kind,
         config.budget_value,
+        config.safety_margin_ms,
         config.depth,
         config.initial_sfen,
         config.max_plies,
@@ -8226,6 +8309,9 @@ fn recorded_play_config_sha256(config: &HumanPlayConfigRecord) -> String {
         config.opening_artifact_sha256.as_deref(),
         config.opening_artifact_size,
         config.opening_max_plies,
+        config.opening_profile,
+        config.opening_minimum_samples,
+        config.opening_maximum_teacher_loss_cp,
         config.transposition_entries,
         config.engine_name,
         config.engine_version,
@@ -8240,11 +8326,13 @@ fn human_play_config_record(
 ) -> HumanPlayConfigRecord {
     let (budget_kind, budget_value) = budget_parts(config.budget);
     HumanPlayConfigRecord {
-        schema: "phase6_human_play_config/v1".to_owned(),
+        schema: "open_shogi_play_config/v2".to_owned(),
         config_sha256: config_sha256.to_owned(),
         human_side: side_name(config.human).to_owned(),
         budget_kind: budget_kind.to_owned(),
         budget_value,
+        safety_margin_ms: config.safety_margin_ms,
+        time_control_schema: open_shogi_core::TIME_CONTROL_SCHEMA.to_owned(),
         depth: config.depth,
         initial_sfen: to_sfen(&config.initial),
         max_plies: config.max_plies,
@@ -8262,6 +8350,9 @@ fn human_play_config_record(
         opening_artifact_sha256: opening.map(|loaded| loaded.artifact_sha256.clone()),
         opening_artifact_size: opening.map(|loaded| loaded.artifact_size),
         opening_max_plies: config.opening_max_plies,
+        opening_profile: config.opening_profile.name().to_owned(),
+        opening_minimum_samples: config.opening_minimum_samples,
+        opening_maximum_teacher_loss_cp: config.opening_maximum_teacher_loss_cp,
         transposition_entries: 16_384,
         engine_name: open_shogi_core::ENGINE_NAME.to_owned(),
         engine_version: open_shogi_core::ENGINE_VERSION.to_owned(),
@@ -8277,8 +8368,30 @@ const fn side_name(side: Side) -> &'static str {
 
 const fn budget_parts(budget: Budget) -> (&'static str, u64) {
     match budget {
+        Budget::Casual => ("casual", open_shogi_core::CASUAL_HARD_MAX_MS),
         Budget::Nodes(value) => ("nodes", value),
         Budget::MoveTime(value) => ("movetime_ms", value),
+    }
+}
+
+fn time_control_for_budget(budget: Budget, safety_margin_ms: u64) -> TimeControl {
+    match budget {
+        Budget::Casual => TimeControl {
+            safety_margin_ms,
+            ..TimeControl::casual()
+        },
+        Budget::Nodes(nodes) => TimeControl {
+            nodes: Some(nodes),
+            casual: false,
+            safety_margin_ms,
+            ..TimeControl::casual()
+        },
+        Budget::MoveTime(movetime_ms) => TimeControl {
+            movetime_ms: Some(movetime_ms),
+            casual: false,
+            safety_margin_ms,
+            ..TimeControl::casual()
+        },
     }
 }
 
@@ -8287,9 +8400,12 @@ const fn profile_name(profile: PlayProfile) -> &'static str {
         PlayProfile::Material => "material",
         PlayProfile::HandcraftedBaseline => "handcrafted-baseline",
         PlayProfile::HandcraftedExperimental => "handcrafted-experimental",
+        PlayProfile::OverallChampion => "overall-champion",
         PlayProfile::Neural => "neural",
+        PlayProfile::Residual => "residual",
+        PlayProfile::Composite => "composite",
         PlayProfile::GenerationZero => "generation-0",
-        PlayProfile::Champion => "champion",
+        PlayProfile::NeuralLineageChampion => "neural-lineage-champion",
         PlayProfile::Challenger => "challenger",
     }
 }
@@ -8404,17 +8520,32 @@ fn run_interactive_resolved<R: BufRead, W: Write>(
         } else {
             let sfen_before = to_sfen(game.position());
             if game.position().move_number() <= config.opening_max_plies
-                && let Some(choice) = opening.and_then(|loaded| loaded.book.select(game.position()))
+                && let Some(choice) = opening.and_then(|loaded| {
+                    loaded.book.select_with_policy(
+                        game.position(),
+                        OpeningPolicy {
+                            profile: config.opening_profile,
+                            minimum_sample_count: config.opening_minimum_samples,
+                            maximum_teacher_loss_cp: config.opening_maximum_teacher_loss_cp,
+                        },
+                    )
+                })
             {
                 let score_rate = choice
                     .score_rate
                     .map_or_else(|| "n/a".to_owned(), |value| format!("{value:.3}"));
                 writeln!(
                     writer,
-                    "AI {} (opening count {} score-rate {})",
+                    "AI {} (source=book profile={} count={} score-rate={} teacher={} depth={} nodes={} classification={} provenance={})",
                     to_usi_move(choice.movement),
+                    config.opening_profile.name(),
                     choice.count,
                     score_rate,
+                    choice.teacher_score_cp.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                    choice.teacher_depth.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                    choice.teacher_nodes.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                    choice.opening_classification,
+                    choice.provenance_references.join(","),
                 )
                 .map_err(|error| error.to_string())?;
                 game.play(choice.movement)
@@ -8438,19 +8569,14 @@ fn run_interactive_resolved<R: BufRead, W: Write>(
                 });
                 continue;
             }
-            let limits = match config.budget {
-                Budget::Nodes(nodes) => SearchLimits {
-                    max_depth: config.depth,
-                    max_nodes: Some(nodes),
-                    movetime: None,
-                },
-                Budget::MoveTime(milliseconds) => SearchLimits {
-                    max_depth: config.depth,
-                    max_nodes: None,
-                    movetime: Some(Duration::from_millis(milliseconds)),
-                },
-            };
-            let result = engine.search(game.position(), limits, &CancellationToken::new());
+            let request = time_control_for_budget(config.budget, config.safety_margin_ms);
+            let plan = TimeManager::default().plan(
+                game.position().side_to_move(),
+                request,
+                config.depth,
+            )?;
+            let result =
+                engine.search_managed(game.position(), plan, &CancellationToken::new());
             let Some(movement) = result.best_move else {
                 special = Some((
                     CsaSpecialMove::Resign,
@@ -8759,7 +8885,7 @@ fn validate_paired_evidence(
     let canonical_config = serde_json::to_vec(&config)
         .map_err(|error| format!("cannot canonicalize human-play configuration: {error}"))?;
     if canonical_config != config_line.as_bytes()
-        || config.schema != "phase6_human_play_config/v1"
+        || config.schema != "open_shogi_play_config/v2"
         || config.config_sha256 != expected_config_sha256
         || recorded_play_config_sha256(&config) != expected_config_sha256
     {
@@ -8795,16 +8921,31 @@ fn validate_paired_evidence(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the durable play receipt validates every closed identity and compatibility field"
+)]
 fn validate_human_play_config_record(config: &HumanPlayConfigRecord) -> Result<(), String> {
     validate_sha256(&config.config_sha256)?;
     if !matches!(config.human_side.as_str(), "black" | "white")
-        || !matches!(config.budget_kind.as_str(), "nodes" | "movetime_ms")
+        || !matches!(config.budget_kind.as_str(), "casual" | "nodes" | "movetime_ms")
         || config.budget_value == 0
+        || (config.budget_kind == "casual"
+            && config.budget_value != open_shogi_core::CASUAL_HARD_MAX_MS)
         || (config.budget_kind == "nodes" && config.budget_value > MAX_NODES_PER_MOVE)
         || (config.budget_kind == "movetime_ms" && config.budget_value > MAX_MOVETIME_MS)
+        || config.safety_margin_ms > open_shogi_core::MAX_SAFETY_MARGIN_MS
+        || config.time_control_schema != open_shogi_core::TIME_CONTROL_SCHEMA
         || !(1..=64).contains(&config.depth)
         || !(1..=MAX_PLIES).contains(&config.max_plies)
         || !(1..=MAX_PLIES).contains(&config.opening_max_plies)
+        || !matches!(
+            config.opening_profile.as_str(),
+            "unrestricted" | "ibisha_preferred" | "ibisha_strict"
+        )
+        || config.opening_minimum_samples == 0
+        || config.opening_minimum_samples > 1_000_000
+        || !(0..=10_000).contains(&config.opening_maximum_teacher_loss_cp)
         || config.transposition_entries != 16_384
         || config.engine_name != open_shogi_core::ENGINE_NAME
         || config.engine_version != open_shogi_core::ENGINE_VERSION
@@ -8824,7 +8965,7 @@ fn validate_human_play_config_record(config: &HumanPlayConfigRecord) -> Result<(
     ];
     let neural = matches!(
         config.profile.as_str(),
-        "neural" | "generation-0" | "champion" | "challenger"
+        "neural" | "generation-0" | "neural-lineage-champion" | "challenger"
     );
     if neural != model_fields.into_iter().all(std::convert::identity)
         || (!neural && model_fields.into_iter().any(std::convert::identity))
@@ -8833,9 +8974,10 @@ fn validate_human_play_config_record(config: &HumanPlayConfigRecord) -> Result<(
             "material"
                 | "handcrafted-baseline"
                 | "handcrafted-experimental"
+                | "overall-champion"
                 | "neural"
                 | "generation-0"
-                | "champion"
+                | "neural-lineage-champion"
                 | "challenger"
         )
     {
@@ -8857,8 +8999,11 @@ fn validate_human_play_config_record(config: &HumanPlayConfigRecord) -> Result<(
         "material" if config.model_id == "material" => {}
         "handcrafted-baseline" if config.model_id == "handcrafted-baseline" => {}
         "handcrafted-experimental" if config.model_id == "handcrafted-experimental" => {}
+        "overall-champion" if config.model_id == open_shogi_core::OVERALL_CHAMPION_ID => {}
         "neural" if config.model_id == "neural-direct" => {}
-        "generation-0" | "champion" | "challenger" => {
+        "residual" if config.model_id == "residual-direct" => {}
+        "composite" if config.model_id == "composite-direct" => {}
+        "generation-0" | "neural-lineage-champion" | "challenger" => {
             validate_identifier(&config.model_id, "human-play modelId")?;
         }
         _ => return Err("human-play profile and modelId disagree".to_owned()),
@@ -8869,7 +9014,7 @@ fn validate_human_play_config_record(config: &HumanPlayConfigRecord) -> Result<(
     ];
     let registry_profile = matches!(
         config.profile.as_str(),
-        "generation-0" | "champion" | "challenger"
+        "generation-0" | "neural-lineage-champion" | "challenger"
     );
     if registry_profile != registry_fields.into_iter().all(std::convert::identity)
         || (!registry_profile && registry_fields.into_iter().any(std::convert::identity))
@@ -9720,8 +9865,8 @@ mod tests {
 
     use super::{
         ArenaAnalysisEnvelope, ArenaResults, Budget, DecisionEvent, GenerationPolicy,
-        ModelRegistry, Phase3SplitPolicy, Phase6StartPosition, PlayConfig, PlayProfile,
-        PromotionDecision,
+        ModelRegistry, OpeningProfile, Phase3SplitPolicy, Phase6StartPosition, PlayConfig,
+        PlayProfile, PromotionDecision,
         PromotionEvidence, PromotionWilsonInterval, PublicationMarker, PublicationPaths,
         PublicationStorage,
         RegistryArtifact, RegistryVerificationBudget,
@@ -9747,10 +9892,17 @@ mod tests {
 
     #[test]
     fn play_arguments_are_bounded() {
+        let defaults = parse_arguments(&[]).unwrap();
+        assert!(matches!(defaults.budget, Budget::Casual));
+        assert_eq!(defaults.profile, PlayProfile::OverallChampion);
+        assert_eq!(defaults.safety_margin_ms, 50);
         assert!(parse_arguments(&["--depth".into(), "0".into()]).is_err());
         assert!(parse_arguments(&["--nodes".into(), "1000000001".into()]).is_err());
         assert!(parse_arguments(&["--movetime-ms".into(), "3600001".into()]).is_err());
         assert!(parse_arguments(&["--max-plies".into(), "10001".into()]).is_err());
+        assert!(
+            parse_arguments(&["--safety-margin-ms".into(), "1001".into()]).is_err()
+        );
         assert!(
             parse_arguments(&[
                 "--nodes".into(),
@@ -11844,7 +11996,8 @@ mod tests {
         let root = temporary_record_path("shared-registry-chain").with_extension("");
         let registry_path = materialize_shared_registry_chain(&root);
 
-        let resolved = resolve_registry_profile(PlayProfile::Champion, &registry_path).unwrap();
+        let resolved =
+            resolve_registry_profile(PlayProfile::NeuralLineageChampion, &registry_path).unwrap();
         assert_eq!(resolved.model_id, "champion-v0");
 
         let report = std::fs::read_dir(root.join("artifacts/phase6/generation-0001/arena/jobs"))
@@ -11863,7 +12016,9 @@ mod tests {
         changed[index + 1..index + 6].copy_from_slice(b"white");
         assert_eq!(changed.len(), original.len());
         std::fs::write(&report, changed).unwrap();
-        let Err(error) = resolve_registry_profile(PlayProfile::Champion, &registry_path) else {
+        let Err(error) =
+            resolve_registry_profile(PlayProfile::NeuralLineageChampion, &registry_path)
+        else {
             panic!("tampered shared registry chain was accepted");
         };
         assert!(
@@ -12048,7 +12203,7 @@ maximum_search_slowdown=1
         assert!(record.contains("$CONFIG_SHA256:"));
         assert!(record.contains("%TORYO\n"));
         let decisions = std::fs::read_to_string(&config.decision_log).unwrap();
-        assert!(decisions.starts_with("{\"schema\":\"phase6_human_play_config/v1\""));
+        assert!(decisions.starts_with("{\"schema\":\"open_shogi_play_config/v2\""));
         std::fs::remove_file(&config.output).unwrap();
         std::fs::remove_file(&config.decision_log).unwrap();
     }
@@ -12667,7 +12822,9 @@ maximum_search_slowdown=1
         registry["championModelId"] = serde_json::json!("challenger-v1");
         std::fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
 
-        let Err(error) = resolve_registry_profile(PlayProfile::Champion, &registry_path) else {
+        let Err(error) =
+            resolve_registry_profile(PlayProfile::NeuralLineageChampion, &registry_path)
+        else {
             panic!("invalid champion transition was accepted");
         };
 
@@ -12825,7 +12982,9 @@ maximum_search_slowdown=1
             serde_json::json!(promotion_bytes.len());
         std::fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
 
-        let Err(error) = resolve_registry_profile(PlayProfile::Champion, &registry_path) else {
+        let Err(error) =
+            resolve_registry_profile(PlayProfile::NeuralLineageChampion, &registry_path)
+        else {
             panic!("mismatched promotion identity was accepted");
         };
 
@@ -12865,7 +13024,9 @@ maximum_search_slowdown=1
             serde_json::json!(promotion_bytes.len());
         std::fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
 
-        let Err(error) = resolve_registry_profile(PlayProfile::Champion, &registry_path) else {
+        let Err(error) =
+            resolve_registry_profile(PlayProfile::NeuralLineageChampion, &registry_path)
+        else {
             panic!("mismatched arena analysis was accepted");
         };
 
@@ -12888,7 +13049,9 @@ maximum_search_slowdown=1
         registry["models"][1]["artifact"]["size"] = serde_json::json!(corrupt.len());
         std::fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
 
-        let Err(error) = resolve_registry_profile(PlayProfile::Champion, &registry_path) else {
+        let Err(error) =
+            resolve_registry_profile(PlayProfile::NeuralLineageChampion, &registry_path)
+        else {
             panic!("corrupt unselected model was accepted");
         };
         assert!(error.contains("not valid OSAVAL01"));
@@ -14751,6 +14914,7 @@ dedup_key = "canonical_sfen"
         PlayConfig {
             human: Side::Black,
             budget: Budget::Nodes(1),
+            safety_margin_ms: 50,
             depth: 1,
             initial: Position::startpos(),
             max_plies: 2,
@@ -14761,6 +14925,9 @@ dedup_key = "canonical_sfen"
             registry_path: None,
             opening_book_path: None,
             opening_max_plies: 24,
+            opening_profile: OpeningProfile::IbishaStrict,
+            opening_minimum_samples: 2,
+            opening_maximum_teacher_loss_cp: 80,
         }
     }
 
