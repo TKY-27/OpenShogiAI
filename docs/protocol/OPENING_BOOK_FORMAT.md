@@ -22,10 +22,12 @@ then USI notation. The selected move must meet the minimum sample count, remain 
 teacher loss from the best candidate, and satisfy the opening profile. Variety is not part of this
 mode. A miss or unsafe entry falls back to unrestricted legal search.
 
-`ibisha_strict` and `ibisha_preferred` accept `ibisha` and `ibisha-vs-furibisha` classifications
-during the configured opening phase. They never modify move generation; after a miss, all legal
-moves—including necessary later rook movement and all opponent Furibisha replies—remain available
-to normal search. `unrestricted` accepts any teacher-safe classification.
+`ibisha_strict` accepts only `ibisha` and `ibisha-vs-furibisha` classifications during the
+configured opening phase. `ibisha_preferred` first selects the strongest safe candidate in those
+classes, then permits the strongest safe unrestricted book candidate if none exists.
+`unrestricted` accepts any teacher-safe classification. Profiles never modify move generation;
+after a miss, all legal moves—including necessary later rook movement and all opponent Furibisha
+replies—remain available to normal search.
 
 Verify an artifact with:
 

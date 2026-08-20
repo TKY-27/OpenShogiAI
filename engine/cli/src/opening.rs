@@ -384,20 +384,29 @@ impl OpeningBook {
             .filter(|choice| choice.count >= policy.minimum_sample_count)
             .filter_map(|choice| choice.teacher_score_cp)
             .max();
-        self.entries
-            .get(&state_sfen(position))?
-            .iter()
-            .filter(|choice| choice.count >= policy.minimum_sample_count)
-            .filter(|choice| {
-                choice
-                    .teacher_score_cp
-                    .zip(best_teacher_score)
-                    .is_some_and(|(score, best)| {
-                        best.saturating_sub(score) <= policy.maximum_teacher_loss_cp
-                    })
-            })
-            .find(|choice| profile_accepts(policy.profile, &choice.opening_classification))
-            .cloned()
+        let safe = || {
+            choices
+                .iter()
+                .filter(|choice| choice.count >= policy.minimum_sample_count)
+                .filter(|choice| {
+                    choice
+                        .teacher_score_cp
+                        .zip(best_teacher_score)
+                        .is_some_and(|(score, best)| {
+                            best.saturating_sub(score) <= policy.maximum_teacher_loss_cp
+                        })
+                })
+        };
+        match policy.profile {
+            OpeningProfile::Unrestricted => safe().next().cloned(),
+            OpeningProfile::IbishaPreferred => safe()
+                .find(|choice| is_ibisha(&choice.opening_classification))
+                .or_else(|| safe().next())
+                .cloned(),
+            OpeningProfile::IbishaStrict => safe()
+                .find(|choice| is_ibisha(&choice.opening_classification))
+                .cloned(),
+        }
     }
 
     pub const fn records(&self) -> usize {
@@ -421,13 +430,8 @@ fn sort_choices(choices: &mut [OpeningChoice]) {
     });
 }
 
-fn profile_accepts(profile: OpeningProfile, classification: &str) -> bool {
-    match profile {
-        OpeningProfile::Unrestricted => true,
-        OpeningProfile::IbishaPreferred | OpeningProfile::IbishaStrict => {
-            matches!(classification, "ibisha" | "ibisha-vs-furibisha")
-        }
-    }
+fn is_ibisha(classification: &str) -> bool {
+    matches!(classification, "ibisha" | "ibisha-vs-furibisha")
 }
 
 fn validated_position(state: &str, number: usize) -> Result<Position, String> {
@@ -907,6 +911,18 @@ mod tests {
                 },
             )
             .is_none());
+
+        let preferred_fallback = book
+            .select_with_policy(
+                &position,
+                OpeningPolicy {
+                    profile: OpeningProfile::IbishaPreferred,
+                    maximum_teacher_loss_cp: 5,
+                    ..OpeningPolicy::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(to_usi_move(preferred_fallback.movement), "7g7f");
     }
 
     #[test]

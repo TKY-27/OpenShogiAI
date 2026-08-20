@@ -218,14 +218,24 @@ impl OpeningBookV2 {
             .filter(|choice| choice.sample_count >= policy.minimum_sample_count)
             .map(|choice| choice.teacher_score_cp)
             .max()?;
-        choices
-            .iter()
-            .filter(|choice| choice.sample_count >= policy.minimum_sample_count)
-            .filter(|choice| {
-                best.saturating_sub(choice.teacher_score_cp) <= policy.maximum_teacher_loss_cp
-            })
-            .find(|choice| style_accepts(policy.profile, &choice.opening_classification))
-            .cloned()
+        let safe = || {
+            choices
+                .iter()
+                .filter(|choice| choice.sample_count >= policy.minimum_sample_count)
+                .filter(|choice| {
+                    best.saturating_sub(choice.teacher_score_cp) <= policy.maximum_teacher_loss_cp
+                })
+        };
+        match policy.profile {
+            OpeningProfile::Unrestricted => safe().next().cloned(),
+            OpeningProfile::IbishaPreferred => safe()
+                .find(|choice| is_ibisha(&choice.opening_classification))
+                .or_else(|| safe().next())
+                .cloned(),
+            OpeningProfile::IbishaStrict => safe()
+                .find(|choice| is_ibisha(&choice.opening_classification))
+                .cloned(),
+        }
     }
 
     #[must_use]
@@ -406,13 +416,8 @@ fn validate_sha256(value: &str, number: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn style_accepts(profile: OpeningProfile, classification: &str) -> bool {
-    match profile {
-        OpeningProfile::Unrestricted => true,
-        OpeningProfile::IbishaPreferred | OpeningProfile::IbishaStrict => {
-            matches!(classification, "ibisha" | "ibisha-vs-furibisha")
-        }
-    }
+fn is_ibisha(classification: &str) -> bool {
+    matches!(classification, "ibisha" | "ibisha-vs-furibisha")
 }
 
 fn state_sfen(position: &Position) -> String {
@@ -471,16 +476,28 @@ mod tests {
             "ruleProfile": RULE_PROFILE,
             "buildVersion": "fixture",
             "provenanceReferences": provenance,
-            "candidates": [{
-                "moveUsi": "2g2f", "sampleCount": 2,
-                "sourceDistribution": {"aobazero-no-noise": 2},
-                "blackResults": {"wins": 1, "losses": 1, "draws": 0, "unknown": 0},
-                "whiteResults": {"wins": 0, "losses": 0, "draws": 0, "unknown": 0},
-                "teacherScoreCp": 20, "scoreUncertaintyCp": null,
-                "teacherDepth": 8, "teacherNodes": 25000,
-                "openingClassification": "ibisha-vs-furibisha",
-                "provenanceReferences": provenance
-            }]
+            "candidates": [
+                {
+                    "moveUsi": "7g7f", "sampleCount": 2,
+                    "sourceDistribution": {"aobazero-no-noise": 2},
+                    "blackResults": {"wins": 1, "losses": 1, "draws": 0, "unknown": 0},
+                    "whiteResults": {"wins": 0, "losses": 0, "draws": 0, "unknown": 0},
+                    "teacherScoreCp": 30, "scoreUncertaintyCp": null,
+                    "teacherDepth": 8, "teacherNodes": 25000,
+                    "openingClassification": "unclassified",
+                    "provenanceReferences": provenance
+                },
+                {
+                    "moveUsi": "2g2f", "sampleCount": 2,
+                    "sourceDistribution": {"aobazero-no-noise": 2},
+                    "blackResults": {"wins": 1, "losses": 1, "draws": 0, "unknown": 0},
+                    "whiteResults": {"wins": 0, "losses": 0, "draws": 0, "unknown": 0},
+                    "teacherScoreCp": 20, "scoreUncertaintyCp": null,
+                    "teacherDepth": 8, "teacherNodes": 25000,
+                    "openingClassification": "ibisha-vs-furibisha",
+                    "provenanceReferences": provenance
+                }
+            ]
         });
         let checksum = sha256_hex(&serde_json::to_vec(&record).unwrap());
         record
@@ -500,7 +517,32 @@ mod tests {
             .unwrap();
         assert_eq!(to_usi_move(choice.movement), "2g2f");
         assert_eq!(book.positions(), 1);
-        assert_eq!(book.candidates(), 1);
+        assert_eq!(book.candidates(), 2);
+    }
+
+    #[test]
+    fn preferred_profile_falls_back_to_the_strongest_safe_candidate() {
+        let book = OpeningBookV2::from_compressed_bytes(&fixture()).unwrap();
+        let strict = book.select(
+            &Position::startpos(),
+            OpeningPolicy {
+                maximum_teacher_loss_cp: 5,
+                ..OpeningPolicy::default()
+            },
+        );
+        assert!(strict.is_none());
+
+        let preferred = book
+            .select(
+                &Position::startpos(),
+                OpeningPolicy {
+                    profile: OpeningProfile::IbishaPreferred,
+                    maximum_teacher_loss_cp: 5,
+                    ..OpeningPolicy::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(to_usi_move(preferred.movement), "7g7f");
     }
 
     #[test]

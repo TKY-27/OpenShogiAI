@@ -26,6 +26,11 @@ The private source history was not published, grafted, or made reachable from th
 The source commit identifiers above are provenance identifiers in the private repository, not
 commits in this clean history.
 
+The versioned Wasm module was subsequently regenerated from the repository's own Rust source with
+the locked Cargo graph and `wasm-bindgen 0.2.127`. Its current SHA-256 is
+`49034d4d1cff1e004eceaf1e62b309d9882516e039457c09a758904217fd3805`; `make wasm-web-check`
+reproduces and verifies the complete binding set.
+
 ## Independent implementation
 
 Project engine code was independently implemented. Material rules, standards, protocol, and
