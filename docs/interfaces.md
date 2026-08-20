@@ -283,10 +283,12 @@ artifacts with matching metadata, enforces parent/lifecycle/evidence order, and 
 champion plus an optional active challenger. Rust terminal play resolves `champion` and
 `challenger` through this validated registry rather than trusting a path alias.
 
-Human-play decision logs use `phase6_human_play_config/v1` followed by
-`phase6_human_decision/v1` rows. A `phase6_human_publication/v1` marker atomically binds the
-canonical CSA and decision log; recovery revalidates both. The registry-facing intake artifact
-is `phase6_pending_human_review/v1`, so human choices never become labels automatically.
+Human-play decision logs use `open_shogi_play_config/v3` followed by
+`phase6_human_decision/v1` rows. The v3 configuration identity-binds the shared time-control
+schema, complete initial clock/byoyomi/increment fields, safety margin, evaluator, opening policy,
+and artifact identities. A `phase6_human_publication/v1` marker atomically binds the canonical CSA
+and decision log; recovery revalidates both. The registry-facing intake artifact is
+`phase6_pending_human_review/v1`, so human choices never become labels automatically.
 
 ## Phase 7 developer-evaluation schemas
 

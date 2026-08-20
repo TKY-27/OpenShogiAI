@@ -6,7 +6,8 @@
 locally from deterministic random initialization; no third-party model architecture or weight
 was copied, linked, or used as an initialization. The initial float32 model was registered as
 `value-v0-f32-g0r4`. A one-epoch bounded replay run produced `value-v0-f32-g1r4`, which met the
-configured 40-game promotion policy and is the current local champion.
+configured 40-game neural-lineage promotion policy and is the `neural_lineage_champion`. It is
+not the `overall_champion`; that role remains `handcrafted-experimental`.
 
 Both models are experimental. They are not published, are not assigned a model-weight license,
 and are not evidence of general playing strength or amateur-dan strength. Their registry license
@@ -179,18 +180,99 @@ validation start set. All configured promotion gates passed, so it was promoted 
 supports that exact bounded promotion decision only; it does not overturn the Phase 5 evidence
 that this model family is weak against the handcrafted evaluator.
 
+## Bounded 2026-08-21 evaluator campaign
+
+The follow-up campaign reused exactly the approved 10,000 teacher-labeled positions. It trained
+one model at a time on MPS with seed `20260729`, 50 epochs, and no test-split access during
+selection. Residual targets are defined as:
+
+```text
+final_score = handcrafted_experimental_score + learned_delta
+```
+
+The residual baseline was independently built twice with identical SHA-256
+`b90db1c8b41a58fbc6d8d0e45f920da66fd3fb932ed3b1614495aa268162529d`.
+Because an absolute game-result target is not a delta, that auxiliary loss is masked for residual
+runs. Teacher delta regression, candidate ranking, and the training-only policy-agreement head
+remain enabled. The pure-neural controls remain intact.
+
+| Run | Training / exported parameters | Validation objective | Optimized MAE (cp) | Time (s) | Peak RSS (bytes) | Float32 artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| pure 2x64 control | 150,722 / 150,657 | 0.6712710091 | 802.5032 | 107.545 | 911,671,296 | `7a7192b3...` |
+| pure 2x128 | 309,634 / 309,505 | 0.6890455457 | 829.2856 | 115.263 | 918,011,904 | `b42b0930...` |
+| residual 2x64 | 150,722 / 150,657 | 0.3901236407 | 747.1778 delta | 109.598 | 915,259,392 | `cfe84ee0...` |
+| residual 2x128 | 309,634 / 309,505 | 0.3896368305 | 746.1339 delta | 113.305 | 906,117,120 | `b577f7c9...` |
+
+Float32 sizes are 602,736 bytes for 2x64 and 1,238,128 bytes for 2x128. Int8 sizes are 151,164
+and 310,396 bytes. The full artifact hashes are in `PHASE_9_REPORT.md`; generated weights remain
+ignored and unpublished.
+
+Calibration below uses the 1,845 validation rows with ordinary centipawn teacher scores and the
+unclipped final exported score. `teacher = intercept + slope * model`; it is distinct from the
+clipped training objective.
+
+| Model | Raw MAE (cp) | RMSE (cp) | Mean model bias (cp) | Slope | Intercept (cp) | Pearson r |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| pure 2x128 | 967.03 | 1,752.78 | -119.01 | 0.8718 | 132.93 | 0.2223 |
+| residual 2x64 | 867.39 | 1,379.01 | -137.63 | 1.0543 | 132.75 | 0.6444 |
+| residual 2x128 | 866.45 | 1,377.45 | -126.82 | 1.0568 | 121.11 | 0.6448 |
+
+Only residual 2x128 was evaluated on the held-out test after selection. Its optimized test
+objective was `0.4406921195`, optimized delta MAE was 808.6469 cp, and auxiliary policy accuracy
+was 0.619361. On the 1,037 ordinary-cp test rows its raw final-score MAE was 872.39 cp, RMSE was
+1,341.20 cp, calibration slope/intercept were 0.8919/110.65 cp, and Pearson r was 0.6454.
+
+Move-ranking evidence is a direct engine benchmark, not the training-only binary policy head.
+Each engine searched all 1,894 validation positions at 500 nodes and depth cap 4 and was compared
+with Apery's recorded best move. The test split was not read.
+
+| Evaluator | Matches | Accuracy |
+| --- | ---: | ---: |
+| handcrafted baseline | 377 | 19.905% |
+| handcrafted experimental | 377 | 19.905% |
+| pure 2x64 initial | 196 | 10.348% |
+| pure 2x64 neural-lineage champion | 189 | 9.979% |
+| pure 2x128 | 202 | 10.665% |
+| residual 2x64 | 415 | 21.911% |
+| residual 2x128 | 420 | 22.175% |
+| composite 50/50 with g1r4 | 397 | 20.961% |
+
+Equal-wall-clock exploratory Arenas used 10 ms/move, depth cap 8, 32 MiB hash, alternating
+colors, 128 plies, opening disabled, and zero illegal moves. Against handcrafted experimental:
+
+| Candidate | Games finished | Candidate W-L-D | Notes |
+| --- | ---: | ---: | --- |
+| handcrafted baseline | 17/20 | 0-2-15 | 3 max-plies; incomplete for a 20-game score claim |
+| pure 2x64 initial | 20/20 | 0-20-0 | exploratory |
+| pure 2x64 g1r4 | 20/20 | 0-20-0 | exploratory |
+| pure 2x128 | 20/20 | 0-20-0 | exploratory |
+| residual 2x64 | 20/20 | 0-20-0 | exploratory |
+| composite g1r4 | 20/20 | 0-19-1 | exploratory |
+| residual 2x128 | 40/40 | 0-8-32 | predeclared overall gate; score 0.400, Wilson 95% 0.2635-0.5540 |
+
+Search-context neural inference throughput was about 13.8k calls/s for 2x64 models and 6.95k
+calls/s for 2x128 models. These are Arena observations, not standalone hardware specifications.
+Residual 2x128 passed both tactical cases with no regression but failed the gate's decisive-game,
+score-rate, and lower-confidence-bound thresholds. Therefore `handcrafted-experimental` remains
+the overall champion. The prerequisite for the larger self-play campaign was not met: zero new
+generations and zero new self-play games were started.
+
 ## Limitations
 
 - Training data is a small, homogeneous 100-game self-play slice with only 10,000 teacher
   labels; it is not representative of human play or broad shogi distributions.
 - Teacher analysis used 25,000 nodes and at most three returned PVs. Two short-PV rows omit one
   independently legal root move, so unreturned moves have unknown teacher scores.
+- The separate opening-book teacher view used MultiPV 32 on the same 10,000 positions; it was not
+  substituted into model training, validation, or test data.
 - Validation selected epoch 1 and the 50-epoch run overfit strongly.
 - Phase 5 and Phase 6 arenas contain only 40 games per comparison and show material color/start
   sensitivity; all strength conclusions are provisional.
 - The promotion opponent was another weak neural model, not a strong external engine or human.
 - No multi-generation or large-scale training campaign was run, and no current Elo, rank, or
   amateur-dan estimate is justified.
+- The equal-wall-clock matrix is small. Max-plies games are reported as capped rather than silently
+  converted to draws, and only the predeclared residual 2x128 gate is promotion evidence.
 - MPS memory readings are snapshots plus process-lifetime peak RSS, not a full memory trace.
 - Weight licensing remains pending review. The source-code AGPL-3.0-only license does not
   license generated weights by implication.

@@ -257,3 +257,66 @@ The two games were deliberately terminated by human resignation after exercising
 paths. Reproducing the workflow does not require reproducing wall-clock time or the human input,
 and these two outcomes are not strength evidence. The checked-in `PHASE_7_REPORT.md` records the
 exact inputs, observations, hashes, and interpretation limits.
+
+## Phase 9 analysis, book, and strength evidence
+
+Phase 9 keeps two champion identities. `value-v0-f32-g1r4` is the neural-lineage champion;
+`handcrafted-experimental` is the overall champion and is the default for native play, USI,
+Wasm, and UI-facing engine profiles. `configs/evaluation/overall_champion_gate.toml` predeclares
+the paired equal-wall-clock gate and tactical thresholds. Recreate one gate in a fresh output
+root from a clean content-addressed release build:
+
+```sh
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.champion_gate preflight
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.champion_gate tactical-run
+
+target/release/open-shogi-cli arena \
+  --games 40 --player-a residual \
+  --a-model local/campaign-inputs/models/residual-2x128/residual_2x128.f32.osaval \
+  --player-b handcrafted-experimental --a-depth 8 --b-depth 8 \
+  --a-hash-mb 32 --b-hash-mb 32 --movetime-ms 10 --max-plies 128 \
+  --seed 20260821 --git-commit "$(git rev-parse HEAD)" \
+  --output-dir artifacts/strength-campaign/overall-gate/arena
+
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.champion_gate verify
+```
+
+Native terminal play accepts casual no-clock mode by omission, `--nodes`, `--movetime-ms`, or
+the full shared clock fields. Clock state for the AI side is debited by measured search time and
+its side-specific increment is applied after each AI move:
+
+```sh
+target/release/open-shogi-cli play --human black --profile overall-champion \
+  --black-time-ms 600000 --white-time-ms 600000 --byoyomi-ms 10000 \
+  --black-increment-ms 0 --white-increment-ms 0 --safety-margin-ms 50
+```
+
+The analysis reference transport is newline-delimited JSON:
+
+```sh
+target/release/open-shogi-cli analysis
+```
+
+Use `docs/protocol/ANALYSIS_PROTOCOL.md`, `analysis-protocol.schema.json`,
+`time-control.schema.json`, `resource-budget.schema.json`, and `analysis-types.ts` as one
+versioned contract. Cached display plus renewed iterative deepening is reproducible; arbitrary
+suspended recursive call stacks are not restored.
+
+The serious book rebuild is deterministic:
+
+```sh
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.data build-opening-v2 \
+  --opening-v1 local/campaign-inputs/data-processed/phase3/opening/aobazero-no-noise-pd-sample100.jsonl.gz \
+  --labels artifacts/strength-campaign/opening/labels-multipv32/labels.jsonl \
+  --label-manifest artifacts/strength-campaign/opening/labels-multipv32/manifest.json \
+  --dataset-manifest local/campaign-inputs/data-processed/phase3/aobazero-no-noise-pd-sample100/manifest.json \
+  --output artifacts/opening/open-shogi-opening-v2.jsonl.gz \
+  --build-version openshogiai-book-v2-20260821-multipv32 \
+  --maximum-plies 40 --minimum-sample-count 2 --maximum-teacher-loss-cp 80
+
+target/release/open-shogi-cli opening-book verify \
+  --book artifacts/opening/open-shogi-opening-v2.jsonl.gz
+```
+
+Generated labels, models, books, and Arena evidence stay ignored. `PHASE_9_REPORT.md` binds the
+observed hashes and measurements and records why the self-play expansion did not start.

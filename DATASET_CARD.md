@@ -148,3 +148,28 @@ training targets. The held-out test split remains final-evaluation-only.
 Human-play CSA and decision logs are isolated as `pending_human_review`. Human moves are not
 accepted as labels or added to replay automatically. All Phase 6 datasets and reports remain
 ignored local artifacts and were not uploaded or published.
+
+## 2026-08-21 bounded evaluator and opening views
+
+The evaluator campaign did not acquire new data and did not expand the approved population.
+Pure 2x128, residual 2x64, and residual 2x128 used the same 10,000 unique teacher positions,
+fixed split assignment, seed, and manifests as the initial model. Training and model selection
+read train/validation only. Exactly one selected model, residual 2x128, was evaluated on the
+1,064-row held-out test split after selection. No test row entered a residual baseline decision,
+training batch, checkpoint selection, move-ranking benchmark, opening statistic, or Arena start
+selection.
+
+The opening-book workflow reanalyzed those same 10,000 unique positions with the separately
+predeclared Apery MultiPV 32 configuration. This created a wider teacher view, not 10,000 new
+unique teacher-labeled positions. Its label SHA-256 is
+`03f5375f09b167a12a4297cd2a404f0fb95a91edd2f6cdeabc955c14c7ce5ea0`, and its manifest SHA-256
+is `57f70b734f8c3eab4bd6c0ae2c439eae3373baf4f1b304d4fb32a17bb0e726fb`.
+All 10,000 completed, none was quarantined, and every returned root/PV was independently replayed
+for legality. Of 10,000 rows, 8,105 returned 32 candidates. Short rows retained incomplete
+coverage explicitly; 25,946 independently legal but unreturned roots received no fabricated
+score.
+
+The resulting v2 book joins only approved Phase 3 train-split opening counts to teacher-returned
+legal candidates. It contains 424 canonical positions and 448 candidates through at most 40
+plies. Generated labels, manifests, predictions, model artifacts, Arena records, and the book
+remain ignored local evidence and were not published.
