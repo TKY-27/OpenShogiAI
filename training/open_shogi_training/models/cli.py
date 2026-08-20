@@ -56,6 +56,7 @@ from open_shogi_training.models.phase5_arena import (
     run_phase5_arena,
     verify_phase5_arena,
 )
+from open_shogi_training.models.residual import build_residual_baseline
 from open_shogi_training.models.train import (
     compare_checkpoints,
     evaluate_checkpoint,
@@ -178,6 +179,15 @@ def build_parser() -> argparse.ArgumentParser:
     predictions.add_argument("--left", type=Path, required=True)
     predictions.add_argument("--right", type=Path, required=True)
 
+    residual = subparsers.add_parser(
+        "build-residual-baseline",
+        help="bind handcrafted-experimental scores to the approved teacher set",
+    )
+    residual.add_argument("--training", type=Path, default=DEFAULT_TRAINING)
+    _add_dataset_arguments(residual, target_options=False)
+    residual.add_argument("--engine", type=Path, default=Path("target/release/open-shogi-cli"))
+    residual.add_argument("--output", type=Path, required=True)
+
     for command, help_text in (
         ("arena-run", "run or safely resume the frozen Phase 5 comparison matrix"),
         ("arena-verify", "recompute the Phase 5 arena manifest and Rust-replay every CSA"),
@@ -248,6 +258,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(arguments: argparse.Namespace) -> dict[str, Any] | str:
+    if arguments.command == "build-residual-baseline":
+        require_clean_head(Path.cwd())
+        training = load_training_config(arguments.training)
+        loaded = _load_examples(arguments, training)
+        return build_residual_baseline(
+            loaded,
+            engine=arguments.engine,
+            output=arguments.output,
+        )
     if arguments.command in {"train", "smoke", "overfit"}:
         require_clean_head(Path.cwd())
         feature, model, training = _load_configs(arguments)
@@ -436,12 +455,19 @@ def _add_config_arguments(parser: argparse.ArgumentParser, training_default: Pat
     parser.add_argument("--training", type=Path, default=training_default)
 
 
-def _add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_dataset_arguments(parser: argparse.ArgumentParser, *, target_options: bool = True) -> None:
     parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--label-manifest", type=Path, required=True)
     parser.add_argument("--positions", type=Path, required=True)
     parser.add_argument("--dataset-manifest", type=Path, required=True)
     parser.add_argument("--replay-manifest", type=Path)
+    if target_options:
+        parser.add_argument(
+            "--target-semantics",
+            choices=("pure-value", "residual"),
+            default="pure-value",
+        )
+        parser.add_argument("--residual-baseline", type=Path)
 
 
 def _add_evaluation_arguments(parser: argparse.ArgumentParser) -> None:
@@ -474,6 +500,8 @@ def _load_examples(
         label_manifest_path=arguments.label_manifest,
         replay_manifest_path=arguments.replay_manifest,
         include_replay_test=include_replay_test,
+        target_semantics=getattr(arguments, "target_semantics", "pure-value"),
+        residual_baseline_path=getattr(arguments, "residual_baseline", None),
         repository_root=Path.cwd(),
     )
 

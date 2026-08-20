@@ -449,6 +449,82 @@ def test_strict_join_checks_manifest_record_count_and_next_sfen(tmp_path: Path) 
         )
 
 
+def test_residual_targets_are_manifest_bound_deltas_and_mask_absolute_outcomes(
+    tmp_path: Path,
+) -> None:
+    training = load_training_config(PROJECT_ROOT / "configs/training/value_v0_smoke.toml")
+    labels, positions, manifest = _dataset_fixture(tmp_path)
+    pure = _load_training_examples_for_test(labels, positions, manifest, training)
+    baseline = tmp_path / "residual-baseline.json"
+    order_hash = hashlib.sha256()
+    records = []
+    for example in pure.examples:
+        order_hash.update(f"{example.position_id}\0{example.sfen}\n".encode())
+        records.append(
+            {
+                "positionId": example.position_id,
+                "canonicalSfen": example.sfen,
+                "scoreCp": 25,
+            }
+        )
+    baseline.write_text(
+        json.dumps(
+            {
+                "schema": "open_shogi_residual_baseline/v1",
+                "buildVersion": 1,
+                "evaluatorProfile": "handcrafted-experimental",
+                "engine": {"sha256": "a" * 64, "size": 1},
+                "datasetIdentity": {
+                    "datasetManifestSha256": pure.identity.dataset_manifest_sha256,
+                    "positionsSha256": pure.identity.positions_sha256,
+                    "labelsSha256": pure.identity.labels_sha256,
+                    "labelManifestSha256": pure.identity.label_manifest_sha256,
+                },
+                "positionOrderSha256": order_hash.hexdigest(),
+                "records": records,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    residual = _load_training_examples_for_test(
+        labels,
+        positions,
+        manifest,
+        training,
+        target_semantics="residual",
+        residual_baseline_path=baseline,
+    )
+
+    assert residual.identity.target_semantics == "residual"
+    assert (
+        residual.identity.residual_baseline_sha256
+        == hashlib.sha256(baseline.read_bytes()).hexdigest()
+    )
+    assert all(example.teacher_cp_clipped == 75.0 for example in residual.examples)
+    assert all(example.residual_baseline_cp == 25 for example in residual.examples)
+    assert all(example.outcome_mask == 0.0 for example in residual.examples)
+
+    with pytest.raises(ValueError, match="require exactly one"):
+        _load_training_examples_for_test(
+            labels,
+            positions,
+            manifest,
+            training,
+            target_semantics="residual",
+        )
+    with pytest.raises(ValueError, match="require exactly one"):
+        _load_training_examples_for_test(
+            labels,
+            positions,
+            manifest,
+            training,
+            residual_baseline_path=baseline,
+        )
+
+
 def _dataset_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     positions_path = tmp_path / "positions.jsonl.gz"

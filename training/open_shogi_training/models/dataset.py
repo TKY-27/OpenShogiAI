@@ -234,6 +234,7 @@ class TrainingExample:
     recorded_move: str
     candidate_gap_cp: int | None
     already_teacher_labeled: bool
+    residual_baseline_cp: int | None = None
     source_kind: str = "phase4_teacher"
     source_manifest_sha256: str | None = None
     source_generation_id: str | None = None
@@ -248,6 +249,8 @@ class DatasetIdentity:
     labels_sha256: str
     label_manifest_sha256: str
     replay_manifest_sha256: str | None
+    target_semantics: str = "pure-value"
+    residual_baseline_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +391,8 @@ def load_training_examples(
     label_manifest_path: Path,
     replay_manifest_path: Path | None = None,
     include_replay_test: bool = False,
+    target_semantics: str = "pure-value",
+    residual_baseline_path: Path | None = None,
     repository_root: Path | None = None,
 ) -> LoadedExamples:
     """Load the complete goal-wide teacher set and strictly join it to Phase 3."""
@@ -401,6 +406,8 @@ def load_training_examples(
         replay_manifest_path=replay_manifest_path,
         expected_teacher_labels=training_config.expected_teacher_labels,
         include_replay_test=include_replay_test,
+        target_semantics=target_semantics,
+        residual_baseline_path=residual_baseline_path,
         repository_root=repository_root,
     )
 
@@ -414,6 +421,8 @@ def _load_training_examples_for_test(
     label_manifest_path: Path | None = None,
     replay_manifest_path: Path | None = None,
     include_replay_test: bool = False,
+    target_semantics: str = "pure-value",
+    residual_baseline_path: Path | None = None,
 ) -> LoadedExamples:
     """Internal fixture loader; production commands must require the complete 10k set."""
 
@@ -426,6 +435,8 @@ def _load_training_examples_for_test(
         replay_manifest_path=replay_manifest_path,
         expected_teacher_labels=None,
         include_replay_test=include_replay_test,
+        target_semantics=target_semantics,
+        residual_baseline_path=residual_baseline_path,
         repository_root=None,
     )
 
@@ -440,9 +451,16 @@ def _load_training_examples(
     replay_manifest_path: Path | None,
     expected_teacher_labels: int | None,
     include_replay_test: bool,
+    target_semantics: str,
+    residual_baseline_path: Path | None,
     repository_root: Path | None,
 ) -> LoadedExamples:
     """Strictly join labels to move-bearing Phase 3 rows and bind every artifact hash."""
+
+    if target_semantics not in {"pure-value", "residual"}:
+        raise ValueError("target semantics must be pure-value or residual")
+    if (target_semantics == "residual") != (residual_baseline_path is not None):
+        raise ValueError("residual target semantics require exactly one residual baseline artifact")
 
     manifest, dataset_manifest_sha256, dataset_manifest_size = _load_json_object_with_identity(
         dataset_manifest_path, max_bytes=16 * 1024 * 1024
@@ -626,12 +644,27 @@ def _load_training_examples(
                 f"{label['position_id']}: expected {expected_split}"
             )
 
+    residual_scores: dict[str, int] = {}
+    residual_baseline_sha256 = None
+    if residual_baseline_path is not None:
+        residual_scores, residual_baseline_sha256 = _load_residual_baseline(
+            residual_baseline_path,
+            labels=labels,
+            dataset_identity={
+                "datasetManifestSha256": dataset_manifest_sha256,
+                "positionsSha256": positions_sha256,
+                "labelsSha256": labels_sha256,
+                "labelManifestSha256": label_manifest_sha256,
+            },
+        )
+
     teacher_examples = tuple(
         _make_example(
             label,
             moves[label["position_id"]],
             training_config,
             label_manifest_sha256=label_manifest_sha256,
+            residual_baseline_cp=residual_scores.get(label["position_id"]),
         )
         for label in labels
     )
@@ -663,6 +696,8 @@ def _load_training_examples(
             labels_sha256=labels_sha256,
             label_manifest_sha256=label_manifest_sha256,
             replay_manifest_sha256=replay_sha256,
+            target_semantics=target_semantics,
+            residual_baseline_sha256=residual_baseline_sha256,
         ),
         counts_by_split=split_counts,
         counts_by_stage=stage_counts,
@@ -1491,6 +1526,79 @@ def _load_teacher_labels_same_fd(
     return tuple(records), digest.hexdigest(), observed
 
 
+def _load_residual_baseline(
+    path: Path,
+    *,
+    labels: tuple[dict[str, Any], ...],
+    dataset_identity: dict[str, str],
+) -> tuple[dict[str, int], str]:
+    artifact, artifact_sha256, _ = _load_json_object_with_identity(
+        path, max_bytes=128 * 1024 * 1024
+    )
+    if (
+        set(artifact)
+        != {
+            "schema",
+            "buildVersion",
+            "evaluatorProfile",
+            "engine",
+            "datasetIdentity",
+            "positionOrderSha256",
+            "records",
+        }
+        or artifact.get("schema") != "open_shogi_residual_baseline/v1"
+    ):
+        raise ValueError("residual baseline must use its closed v1 schema")
+    if artifact.get("buildVersion") != 1:
+        raise ValueError("residual baseline build version is unsupported")
+    if artifact.get("evaluatorProfile") != "handcrafted-experimental":
+        raise ValueError("residual baseline must use handcrafted-experimental")
+    engine = artifact.get("engine")
+    if (
+        not isinstance(engine, dict)
+        or set(engine) != {"sha256", "size"}
+        or not isinstance(engine.get("sha256"), str)
+        or _SHA256_RE.fullmatch(engine["sha256"]) is None
+        or isinstance(engine.get("size"), bool)
+        or not isinstance(engine.get("size"), int)
+        or engine["size"] <= 0
+    ):
+        raise ValueError("residual baseline engine identity is invalid")
+    if artifact.get("datasetIdentity") != dataset_identity:
+        raise ValueError("residual baseline dataset identity differs from training inputs")
+    records = artifact.get("records")
+    if not isinstance(records, list) or len(records) != len(labels):
+        raise ValueError("residual baseline record count differs from teacher labels")
+    scores: dict[str, int] = {}
+    order_hash = hashlib.sha256()
+    for index, (record, label) in enumerate(zip(records, labels, strict=True)):
+        if not isinstance(record, dict) or set(record) != {
+            "positionId",
+            "canonicalSfen",
+            "scoreCp",
+        }:
+            raise ValueError(f"residual baseline record {index} violates its closed schema")
+        if (
+            record.get("positionId") != label["position_id"]
+            or record.get("canonicalSfen") != label["canonical_sfen"]
+        ):
+            raise ValueError(f"residual baseline record {index} is not bound to its label")
+        score = record.get("scoreCp")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, int)
+            or not _I32_MIN <= score <= _I32_MAX
+        ):
+            raise ValueError(f"residual baseline record {index} score is invalid")
+        order_hash.update(f"{record['positionId']}\0{record['canonicalSfen']}\n".encode())
+        if record["positionId"] in scores:
+            raise ValueError("residual baseline contains duplicate position identities")
+        scores[record["positionId"]] = score
+    if artifact.get("positionOrderSha256") != order_hash.hexdigest():
+        raise ValueError("residual baseline position-order checksum is invalid")
+    return scores, artifact_sha256
+
+
 def _iter_jsonl_gzip_descriptor(
     descriptor: int,
     path: Path,
@@ -1532,6 +1640,7 @@ def _make_example(
     config: TrainingConfig,
     *,
     label_manifest_sha256: str,
+    residual_baseline_cp: int | None,
 ) -> TrainingExample:
     score = label["score"]
     if score["kind"] == "cp":
@@ -1540,8 +1649,18 @@ def _make_example(
         if score["value"] == 0:
             raise ValueError("a mate teacher score must have a non-zero signed distance")
         teacher_cp = config.teacher_clip_cp if score["value"] > 0 else -config.teacher_clip_cp
+    if residual_baseline_cp is not None:
+        teacher_cp = max(
+            -config.teacher_clip_cp,
+            min(config.teacher_clip_cp, teacher_cp - residual_baseline_cp),
+        )
     teacher_target = teacher_cp / config.teacher_normalization_cp
     outcome_target, outcome_mask = _outcome_target(label["outcome"], label["side_to_move"])
+    # A residual head predicts only the correction. Training that correction
+    # toward an absolute game-result sign would change the final score's
+    # meaning, so residual runs mask this absolute auxiliary target.
+    if residual_baseline_cp is not None:
+        outcome_target, outcome_mask = 0.0, 0.0
     values = (teacher_cp, teacher_target, outcome_target, outcome_mask)
     if any(not math.isfinite(value) for value in values):
         raise FloatingPointError("derived training target is non-finite")
@@ -1564,6 +1683,7 @@ def _make_example(
         recorded_move=recorded_move,
         candidate_gap_cp=_candidate_gap_cp(label["candidates"]),
         already_teacher_labeled=True,
+        residual_baseline_cp=residual_baseline_cp,
         source_kind="phase4_teacher",
         source_manifest_sha256=label_manifest_sha256,
         source_game_id=label["game_id"],
@@ -2008,6 +2128,12 @@ def _validate_training_example(example: TrainingExample) -> None:
         raise ValueError(
             f"training example {example.position_id} has an invalid teacher provenance flag"
         )
+    if example.residual_baseline_cp is not None and (
+        isinstance(example.residual_baseline_cp, bool)
+        or not isinstance(example.residual_baseline_cp, int)
+        or not _I32_MIN <= example.residual_baseline_cp <= _I32_MAX
+    ):
+        raise ValueError(f"training example {example.position_id} has an invalid residual baseline")
     if example.source_kind == "phase4_teacher":
         if (
             not example.already_teacher_labeled

@@ -41,12 +41,16 @@ MAX_CHECKPOINT_TREE_ITEMS = 1_000_000
 MAX_CHECKPOINT_TREE_DEPTH = 64
 MPS_RNG_STATE_BYTES = 44
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_DATASET_IDENTITY_KEYS = {
+_DATASET_IDENTITY_KEYS_V1 = {
     "dataset_manifest_sha256",
     "positions_sha256",
     "labels_sha256",
     "label_manifest_sha256",
     "replay_manifest_sha256",
+}
+_DATASET_IDENTITY_KEYS = _DATASET_IDENTITY_KEYS_V1 | {
+    "target_semantics",
+    "residual_baseline_sha256",
 }
 _ADAMW_PARAM_GROUP_KEYS = frozenset(
     {
@@ -256,9 +260,19 @@ def load_checkpoint_with_identity(path: Path) -> tuple[dict[str, Any], str, int]
     ):
         raise ValueError("checkpoint config_sha256 is invalid")
     identity = value["dataset_identity"]
-    if not isinstance(identity, dict) or set(identity) != _DATASET_IDENTITY_KEYS:
+    if not isinstance(identity, dict) or frozenset(identity) not in {
+        frozenset(_DATASET_IDENTITY_KEYS_V1),
+        frozenset(_DATASET_IDENTITY_KEYS),
+    }:
         raise ValueError("checkpoint dataset_identity schema is invalid")
-    for key in _DATASET_IDENTITY_KEYS - {"replay_manifest_sha256"}:
+    if set(identity) == _DATASET_IDENTITY_KEYS_V1:
+        identity["target_semantics"] = "pure-value"
+        identity["residual_baseline_sha256"] = None
+    for key in _DATASET_IDENTITY_KEYS - {
+        "replay_manifest_sha256",
+        "residual_baseline_sha256",
+        "target_semantics",
+    }:
         if not isinstance(identity[key], str) or _SHA256_RE.fullmatch(identity[key]) is None:
             raise ValueError(f"checkpoint dataset_identity.{key} is invalid")
     replay_hash = identity["replay_manifest_sha256"]
@@ -266,6 +280,15 @@ def load_checkpoint_with_identity(path: Path) -> tuple[dict[str, Any], str, int]
         not isinstance(replay_hash, str) or _SHA256_RE.fullmatch(replay_hash) is None
     ):
         raise ValueError("checkpoint replay_manifest_sha256 is invalid")
+    if identity["target_semantics"] not in {"pure-value", "residual"}:
+        raise ValueError("checkpoint target semantics are invalid")
+    residual_hash = identity["residual_baseline_sha256"]
+    if residual_hash is not None and (
+        not isinstance(residual_hash, str) or _SHA256_RE.fullmatch(residual_hash) is None
+    ):
+        raise ValueError("checkpoint residual_baseline_sha256 is invalid")
+    if (identity["target_semantics"] == "residual") != (residual_hash is not None):
+        raise ValueError("checkpoint target semantics and residual baseline disagree")
     for key in ("feature_config", "model_config", "training_config", "runtime"):
         if not isinstance(value[key], dict):
             raise ValueError(f"checkpoint {key} must be an object")
@@ -410,7 +433,11 @@ def validate_resume_identity(
 ) -> None:
     if checkpoint["config_sha256"] != config_sha256:
         raise ValueError("resume checkpoint config hash does not match")
-    if checkpoint["dataset_identity"] != dataset_identity:
+    expected_identity = dict(dataset_identity)
+    if set(expected_identity) == _DATASET_IDENTITY_KEYS_V1:
+        expected_identity["target_semantics"] = "pure-value"
+        expected_identity["residual_baseline_sha256"] = None
+    if checkpoint["dataset_identity"] != expected_identity:
         raise ValueError("resume checkpoint dataset identities do not match")
 
 

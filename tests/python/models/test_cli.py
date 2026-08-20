@@ -29,6 +29,8 @@ def _load_test_examples(
     label_manifest_path,
     replay_manifest_path=None,
     include_replay_test=False,
+    target_semantics="pure-value",
+    residual_baseline_path=None,
     repository_root=None,
 ):
     del label_manifest_path, repository_root
@@ -39,6 +41,8 @@ def _load_test_examples(
         training,
         replay_manifest_path=replay_manifest_path,
         include_replay_test=include_replay_test,
+        target_semantics=target_semantics,
+        residual_baseline_path=residual_baseline_path,
     )
 
 
@@ -59,6 +63,7 @@ def test_parser_exposes_all_model_lab_commands() -> None:
         "validate-config",
         "config-diff",
         "compare-predictions",
+        "build-residual-baseline",
         "arena-run",
         "arena-verify",
     }

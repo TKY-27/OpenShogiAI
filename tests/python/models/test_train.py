@@ -618,6 +618,28 @@ def test_prediction_artifact_excludes_outcome_only_replay_placeholders(tmp_path:
     assert rows[0]["teacherScore"]["kind"] == "cp"
 
 
+def test_residual_prediction_artifact_reports_the_combined_absolute_score(tmp_path: Path) -> None:
+    example = replace(
+        _example(1, "validation", "opening"),
+        teacher_target=0.0,
+        teacher_cp_clipped=0.0,
+        residual_baseline_cp=125,
+    )
+    output = tmp_path / "residual-predictions.jsonl"
+
+    _write_predictions(
+        output,
+        (example,),
+        [0.25],
+        checkpoint_sha256="a" * 64,
+        config_sha256="b" * 64,
+        output_scale_cp=1200.0,
+    )
+
+    row = json.loads(output.read_text(encoding="utf-8"))
+    assert row["modelCp"] == 425
+
+
 def _loaded_examples() -> LoadedExamples:
     examples = []
     stages = ("opening", "middlegame", "endgame")

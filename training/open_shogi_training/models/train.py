@@ -60,7 +60,7 @@ from open_shogi_training.models.dataset import (
     hash_file,
     split_examples,
 )
-from open_shogi_training.models.export import normalized_to_centipawns
+from open_shogi_training.models.export import MAX_NON_MATE_CP, normalized_to_centipawns
 from open_shogi_training.models.features import feature_groups, input_dimension
 from open_shogi_training.models.network import (
     DeviceSelection,
@@ -1908,7 +1908,14 @@ def _write_predictions(
                 "kind": example.teacher_score_kind,
                 "value": example.teacher_score_value,
             },
-            "modelCp": normalized_to_centipawns(prediction, output_scale_cp),
+            "modelCp": max(
+                -MAX_NON_MATE_CP,
+                min(
+                    MAX_NON_MATE_CP,
+                    normalized_to_centipawns(prediction, output_scale_cp)
+                    + (example.residual_baseline_cp or 0),
+                ),
+            ),
             "candidateGapCp": example.candidate_gap_cp,
             "bestmove": example.bestmove,
             "recordedMove": example.recorded_move,
