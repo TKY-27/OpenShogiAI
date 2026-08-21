@@ -1,0 +1,22 @@
+schema: open_shogiai_phase10r_selfplay/v1
+frozen_as_of: "2026-08-21"
+entry_gate: arena_400
+entry_score: 0.48
+before_entry:
+  allowed: [candidate_vs_frozen_handcrafted_experimental, candidate_vs_older_pure_learned_models, teacher_relabel_decisive_errors]
+  maximum_generated_fraction_per_training_rung: 0.25
+  handcrafted_scores_as_training_targets: false
+after_entry:
+  pure_candidate_selfplay_allowed: true
+  generation_games: [1000, 5000, 20000, 100000]
+  paired_colors: true
+  factual_wdl_only_until_teacher_selected: true
+  maximum_generated_fraction_per_training_rung: 0.40
+  promote_automatically: false
+plateau:
+  definition: two generations with less than 0.005 paired Arena score improvement and no calibration improvement
+  action: rollback_to_best_generation_and_return_to_active_learning
+rollback:
+  triggers: [illegal_move, unexplained_crash, tactical_regression, source_held_out_regression_over_0.01, arena_score_regression_over_0.02]
+  action: quarantine_generation_and_restore_last_passing_checkpoint
+forbidden: [final_holdout_start_or_descendant, handcrafted_leaf_score_or_residual_target, pending_or_denied_external_record, promotion_without_final_1600_and_separate_authorization]

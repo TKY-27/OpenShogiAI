@@ -1,0 +1,34 @@
+schema: open_shogiai_phase10r_resource_budget/v1
+frozen_as_of: "2026-08-21"
+reference_host: {platform: MacBook Pro M5, unified_memory_bytes: 25769803776}
+workers:
+  maximum_concurrent_heavy: 2
+  maximum_training: 1
+  maximum_teacher_or_arena: 1
+  cpu_threads_per_heavy_worker: 4
+  dataloader_workers: 2
+memory:
+  aggregate_rss_target_bytes: 17179869184
+  warning_bytes: 15032385536
+  critical_action: checkpoint_then_stop_current_heavy_jobs
+  memory_pressure_critical_action: immediate_resumable_stop
+disk:
+  minimum_free_bytes: 161061273600
+  check_before_stage: true
+  check_every_streamed_bytes: 1073741824
+  materialize_all_examples_locally: false
+  checkpoint_before_cleanup: true
+thermal:
+  training_and_teacher_concurrent: false
+  arena_concurrent_games: 1
+  serious_or_critical_pressure_action: checkpoint_then_stop
+  sustained_throttling_action: reduce_to_one_heavy_worker_at_next_checkpoint
+jobs:
+  wall_clock_deadline: null
+  time_alone_stops_job: false
+  deterministic_manifests: true
+  resumable: true
+  checkpoint_interval_optimizer_steps: 10000
+  progress_receipt_interval_minutes: 30
+  polling_agent_loop: forbidden
+  scheduler: launch_job_then_wait_on_process_or_checkpoint_event

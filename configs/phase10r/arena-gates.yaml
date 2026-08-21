@@ -1,0 +1,58 @@
+schema: open_shogiai_phase10r_arena_gates/v1
+frozen_as_of: "2026-08-21"
+score: (wins + 0.5 * draws) / finished_wld_games
+confidence:
+  level: 0.95
+  required_reports: [wilson_half_draw, paired_color_bootstrap_100000_resamples]
+  final_required_lower_bound_strictly_above: 0.50
+contract:
+  opponent: handcrafted-experimental
+  candidate_mode: pure_value
+  equal_wall_clock: true
+  paired_reversed_colors: true
+  opening_book: disabled
+  depth_cap: 8
+  hash_mib_per_player: 32
+  max_plies: 128
+  seed: 20260821
+  start_manifest: artifacts/phase10/start-pool-manifest.json
+  start_manifest_sha256: 491a3d54d3d67002fc03fc3644c16b405f5b1dbb662e88e4af260bd45757a1f1
+  groups: [general_opening, ibisha, opponent_furibisha, hard_middlegame_endgame]
+  maximum_pair_reuse_per_campaign: 1
+  movetime_ms: 10
+gates:
+  - gate_id: short_screen
+    games: 40
+    pairs: 20
+    requirements: {finished: 40, score_minimum: 0.40, illegal_moves_maximum: 0, unexplained_crashes_maximum: 0, tactical_regressions_maximum: 0}
+  - gate_id: arena_400
+    games: 400
+    pairs: 200
+    pass_action: permit_bootstrapped_crossplay_and_pure_selfplay_without_promotion
+    requirements: {finished: 400, score_minimum: 0.48, wilson_lower_minimum: 0.43, paired_bootstrap_lower_minimum: 0.43, illegal_moves_maximum: 0, unexplained_crashes_maximum: 0, tactical_regressions_maximum: 0}
+  - gate_id: arena_800
+    games: 800
+    pairs: 400
+    requirements: {finished: 800, score_minimum: 0.52, paired_bootstrap_lower_minimum: 0.48, illegal_moves_maximum: 0, unexplained_crashes_maximum: 0}
+  - gate_id: practical_20s
+    games: 40
+    pairs: 20
+    override_movetime_ms: 20000
+    requirements: {finished: 40, score_minimum: 0.48, illegal_moves_maximum: 0, unexplained_crashes_maximum: 0, hard_deadline_violations_maximum: 0}
+  - gate_id: final_1600
+    games: 1600
+    pairs: 800
+    requirements:
+      finished: 1600
+      score_minimum: 0.55
+      wilson_lower_strictly_above: 0.50
+      paired_bootstrap_lower_strictly_above: 0.50
+      illegal_moves_maximum: 0
+      unexplained_crashes_maximum: 0
+      handcrafted_runtime_score_contribution: false
+      third_party_weights: false
+failure_policy:
+  incomplete_or_capped_game_is_draw: false
+  retry_unexplained_crash: false
+  threshold_tuning_after_result: false
+  before_final_holdout_inspection: true

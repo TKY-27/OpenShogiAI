@@ -1,5 +1,8 @@
-schema_version: 1
-holdout_policy_id: phase10r-recent-source-holdout-v1
+schema: open_shogiai_phase10r_holdout_policy/v2
+frozen_as_of: "2026-08-21"
+assignment_unit: source_lineage_plus_game_or_history_before_position_extraction
+priority: [public_test, reserved_holdout, final_holdout, source_held_out, validation, train]
+splits: {train_basis_points: 8000, validation_basis_points: 1000, final_holdout_basis_points: 1000}
 default_action: reserve_before_normalization
 reserved_artifacts:
   - wcsc33-kifu
@@ -16,15 +19,26 @@ reserved_families:
   - designated_position_events
   - public_evaluation_sets
   - unpublished_or_permission_pending_teacher_derivatives
-rules:
-  no_training_reads: true
-  no_public_test_inspection: true
-  no_overlap_release_before_final_holdout: true
-  holdout_hashes_recorded_without_positions: true
-  source_priority_does_not_override_holdout: true
-  pending_permission_is_not_a_holdout_release: true
-split_names:
-  train: train
-  validation: validation
-  test: test
-  reserved: reserved_holdout
+leakage_rules:
+  canonical_position_cross_split_duplicates: 0
+  protected_history_cross_split_duplicates: 0
+  holdout_descendants_in_training: 0
+  unresolved_identity_action: quarantine
+  deduplicate_before_sampling: true
+inspection:
+  validation: allowed_for_checkpoint_and_curriculum_selection
+  source_held_out: allowed_only_at_frozen_scale_boundaries
+  phase3_legacy_final_holdout: one_finalist_inspection_after_all_arena_selection
+  reserved_or_public_test: forbidden
+  final_result_may_select_or_retrain: false
+  log_append_only: true
+  required_log_fields: [holdout_id, artifact_sha256, candidate_sha256, purpose, timestamp_utc, git_commit, result_sha256]
+final_arena_policy:
+  start_pool_is_not_final_holdout: true
+  frozen_start_manifest: artifacts/phase10/start-pool-manifest.json
+  no_final_holdout_inspection_before_final_1600: true
+source_held_out:
+  every_active_external_source: true
+  omit_entire_source_family_from_training: true
+  minimum_reserved_group_fraction: 0.10
+  metrics: [policy_top1, wdl_brier, score_mae_when_available, calibration_ece, tactical_error]

@@ -1,0 +1,79 @@
+schema: open_shogiai_phase10r_target_semantics/v1
+frozen_as_of: "2026-08-21"
+canonical_perspective: current_side_to_move
+runtime_score:
+  unit: openshogiai_centipawn
+  maximum_non_mate_absolute: 28999
+  mate_namespace_owned_by_search: true
+  handcrafted_contribution: false
+  qsearch_semantics: evaluate the represented stand-pat leaf; negate only through search recursion
+heads:
+  behavior_policy:
+    classes: 13689
+    codec: from_to_promotion_then_drop_v1
+    loss: masked_cross_entropy_over_legal_moves
+    available_from: [aobazero, wcsc, denryu, pure_selfplay]
+    missing_legal_move_probability: unknown_not_zero
+  wdl:
+    classes: [loss, draw, win]
+    loss: source_masked_cross_entropy
+    available_from: [aobazero, wcsc, denryu, bootstrapped_crossplay, pure_selfplay]
+    encoding_perspective: current_side_to_move_after_legal_replay
+  score:
+    output: scalar
+    transform: signed_log1p_cp_div_log1p_3000
+    inverse: sign_y_times_expm1_abs_y_times_log1p_3000
+    clip_cp: 3000
+    loss: source_local_huber
+    available_from: [openshogiai_apery_teacher]
+  mate_kind: {classes: [mated, no_mate_label, mating], loss: masked_cross_entropy, available_from: [openshogiai_apery_teacher], cp_conversion: forbidden}
+  mate_distance: {transform: log1p_plies, loss: masked_huber_same_sign_only, available_from: [openshogiai_apery_teacher]}
+  candidate_ranking: {output: per_legal_move_logit, loss: source_local_listwise_or_pairwise, available_from: [openshogiai_apery_teacher], cross_teacher_pairs: forbidden}
+  uncertainty: {output: log_variance, loss: masked_gaussian_nll_for_score_and_brier_calibration_for_wdl, available_from: [openshogiai_apery_teacher, factual_wdl_sources]}
+source_lanes:
+  factual_game_record:
+    targets: [behavior_policy, wdl]
+    masks: {score: 0, mate_kind: 0, mate_distance: 0, candidate_ranking: 0}
+  openshogiai_apery_cp:
+    targets: [score, candidate_ranking, uncertainty]
+    masks: {wdl: source_dependent, mate_kind: 0, mate_distance: 0}
+  openshogiai_apery_mate:
+    targets: [mate_kind, mate_distance, candidate_ranking]
+    masks: {score: 0}
+  packed_sfen_value:
+    active: false
+    reason: No PackedSfenValue artifact is approved by the Phase 10R registry.
+    rule: Retain source FV_SCALE, perspective, qsearch/PV-leaf flag, and teacher identity; never join canonical cp without a new freeze.
+scale_contract:
+  fv_scale_is_model_output_scale: false
+  source_fv_scale_is_canonical_cp: false
+  unknown_scale_weight: 0.0
+  cross_source_numeric_average: false
+  output_calibration:
+    method: monotonic_affine_on_transformed_score_or_wdl_log_odds
+    fit_split: validation
+    frozen_before_arena: true
+    refit_after_arena: false
+move_codec:
+  board_squares: 81
+  normal_move_classes: 13122
+  drop_piece_order: [R, B, G, S, N, L, P]
+  drop_classes: 567
+  total_classes: 13689
+  square_order: rank_a_to_i_then_file_9_to_1
+  legality_mask_required: true
+  promotion_bit_required: true
+  drop_marker_required: true
+teacher:
+  name: Apery
+  version: 2.0.0
+  binary_sha256: 8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403
+  kkp_sha256: 422b23bced817ecb3430adf1d2621f5a7934263b4e46673ab80cf34633537fa5
+  kpp_sha256: 4906c48c201a102ec02217216929c20f73ab364e79be26e6213a02c04e454805
+  book_enabled: false
+  threads: 4
+  hash_mib: 1024
+  baseline_nodes: 25000
+  baseline_multipv: 3
+  score_perspective: current_side_to_move_at_root
+  labels_sha256: 195850b3ae7b1dce8a98185f2ba17f794a0200c92eafc672e11674d17d8cd3f4

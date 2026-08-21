@@ -1,0 +1,21 @@
+schema: open_shogiai_phase10r_active_learning/v1
+frozen_as_of: "2026-08-21"
+selection_split: train_only
+deduplicate_by: [canonical_position, history_group, teacher_config]
+signals:
+  model_teacher_score_disagreement: {weight: 1.0, minimum_cp: 400}
+  candidate_handcrafted_disagreement: {weight: 0.5, selection_only_no_handcrafted_target: true}
+  unstable_multipv: {weight: 1.0, top_gap_cp_maximum: 120, rank_instability_required: true}
+  tactical_or_mate_error: {weight: 1.5}
+  source_held_out_failure: {weight: 1.0}
+  uncertainty: {weight: 0.5, calibration_required: true}
+quotas: {maximum_per_game: 32, maximum_per_history_group: 8, mate_minimum_fraction_when_available: 0.10, opponent_furibisha_minimum_fraction_when_available: 0.10, one_signal_maximum_fraction: 0.40}
+teacher_budgets:
+  - {rung: 1m, unique_positions: 10000, nodes: 25000, multipv: 3}
+  - {rung: 10m, unique_positions: 100000, nodes: 25000, multipv: 4}
+  - {rung: 50m, unique_positions: 500000, nodes: 50000, multipv: 4}
+  - {rung: 100m, unique_positions: 1000000, nodes: 50000, multipv: 6}
+  - {rung: 500m, unique_positions: 3000000, nodes: 100000, multipv: 8}
+  - {rung: 1b, unique_positions: 5000000, nodes: 100000, multipv: 8}
+loop: [infer_candidates_with_frozen_checkpoint, score_disagreement_without_holdout_access, stratify_and_deduplicate, freeze_selection_manifest_and_hash, teacher_label_selected_positions, independently_replay_every_root_and_pv, append_source_preserving_labels, retrain_current_rung_only]
+rollback: {trigger: calibration_or_tactical_or_source_held_out_regression, action: restore_previous_checkpoint_and_exclude_new_label_batch_pending_diagnosis}

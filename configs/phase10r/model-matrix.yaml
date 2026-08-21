@@ -1,0 +1,72 @@
+schema: open_shogiai_phase10r_model_matrix/v1
+frozen_as_of: "2026-08-21"
+seed: 20260729
+matrix_policy: one historical control and two attributable sparse relational candidates
+runtime:
+  required_container: OSAVAL02
+  required_python_rust_wasm_parity: exact_integer_cp_and_move_index
+  browser_model_limit_bytes: 16777216
+  pure_value_only: true
+  random_initialization: true
+  third_party_weights: false
+variants:
+  - variant_id: dense-2287-control
+    role: historical_control_only
+    feature_families: [absolute_piece_planes, hand_counts, side_to_move, king_coordinates]
+    parameter_count: 309505
+    float32_size_bytes: 1238128
+    int8_size_bytes: 310396
+    expected_cpu_operations: 309504
+    incremental_update: none_full_reencode
+    m5_training_memory_estimate_bytes: 1073741824
+    browser_memory_estimate_bytes: 17825792
+    minimum_search_context_evaluations_per_second: 6000
+    eligible_for_final: false
+  - variant_id: sparse-pair-policy-wdl
+    role: pair_ablation_and_candidate
+    feature_families: [king_relative_board_and_hand, hashed_two_piece_relations, attack_defence_pin_check_flags, attack_maps_mobility_king_zone_material_phase_history]
+    components:
+      king_piece_embedding: {entries: 367416, dimension: 4, parameters: 1469664}
+      king_hand_embedding: {entries: 43092, dimension: 4, parameters: 172368}
+      pair_hash_embedding: {entries: 65536, dimension: 8, parameters: 524288}
+      scalar_projection: {input: 64, output: 32, parameters: 2080}
+      trunk: {input: 48, hidden: 128, layers: 2, parameters: 22784}
+      value_heads: {outputs: 8, parameters: 1032}
+      factorized_policy: {move_classes: 13689, move_dimension: 16, parameters: 221105}
+    parameter_count: 2413321
+    float32_size_bytes: 9657380
+    int8_size_bytes: 2417417
+    expected_cpu_operations: 36000
+    incremental_update: reversible accumulator; recompute moved/captured/drop tokens and affected attack rays
+    m5_training_memory_estimate_bytes: 3221225472
+    browser_memory_estimate_bytes: 33554432
+    minimum_search_context_evaluations_per_second: 3500
+    eligible_for_final: true
+  - variant_id: factorized-pair-triple-policy-score
+    role: primary_candidate
+    feature_families: [king_relative_board_and_hand, hashed_two_piece_relations, bounded_local_tactical_triples, attack_defence_pin_check_flags, attack_maps_mobility_king_zone_material_phase_history]
+    components:
+      king_piece_embedding: {entries: 367416, dimension: 4, parameters: 1469664}
+      king_hand_embedding: {entries: 43092, dimension: 4, parameters: 172368}
+      pair_hash_embedding: {entries: 65536, dimension: 8, parameters: 524288}
+      triple_hash_embedding: {entries: 32768, dimension: 8, parameters: 262144}
+      scalar_projection: {input: 64, output: 32, parameters: 2080}
+      trunk: {input: 56, hidden: 128, layers: 2, parameters: 23808}
+      value_heads: {outputs: 9, parameters: 1161}
+      factorized_policy: {move_classes: 13689, move_dimension: 16, parameters: 221105}
+    parameter_count: 2676618
+    float32_size_bytes: 10710568
+    int8_size_bytes: 2680714
+    expected_cpu_operations: 40000
+    incremental_update: pair accumulator plus at most 256 deterministic local tactical triples
+    m5_training_memory_estimate_bytes: 3758096384
+    browser_memory_estimate_bytes: 37748736
+    minimum_search_context_evaluations_per_second: 3000
+    eligible_for_final: true
+selection:
+  one_seed_per_variant: true
+  maximum_training_variants_per_scale: 2
+  advancement_requires: [pipeline_sanity, source_held_out_metrics, inference_speed, equal_wall_clock_gate]
+  offline_loss_alone_may_advance: false
+  tie_break_order: [higher_arena_score, higher_paired_bootstrap_lower, lower_latency, fewer_parameters]
+  quantized_strength_gate: separate_required_before_browser_release

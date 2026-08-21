@@ -1,0 +1,127 @@
+schema: open_shogiai_phase10r_dataset_mixture/v1
+frozen_as_of: "2026-08-21"
+deny_by_default: true
+public_weight_policy: >-
+  No source in this freeze may affect published weights while its registry
+  derived_weights_permission is pending. Local experimental weights are allowed.
+deduplication_priority: [reserved_holdout, validation, aobazero, wcsc, denryu, generated]
+global_rules:
+  split_before_position_extraction: true
+  one_row_per_canonical_position: true
+  attach_compatible_labels_with_masks: true
+  average_incompatible_scores: false
+  unknown_perspective_weight: 0.0
+  pending_or_denied_source_weight: 0.0
+  maximum_positions_per_game_per_epoch: 128
+  maximum_game_fraction: 0.02
+  maximum_opening_history_fraction: 0.05
+sources:
+  - source_id: aobazero
+    registry_artifacts: [aobazero-no-noise-exact100]
+    decision: approved_local_experimental
+    roles: [behavior_policy, factual_wdl, representation, teacher_position_pool]
+    maximum_stage_fraction: 0.35
+    sampling_weight: 1.0
+    deduplication_priority: 700
+    losses: [masked_behavior_policy_cross_entropy, factual_wdl_cross_entropy]
+    attribution: Preserve AobaZero project and source-host attribution.
+    may_affect_local_experimental_weights: true
+    may_affect_public_weights: false
+    holdout: phase3 game-group validation and final holdout remain protected
+  - source_id: wcsc
+    registry_artifacts:
+      - wcsc01-kifu
+      - wcsc02-kifu
+      - wcsc03-kifu
+      - wcsc04-kifu
+      - wcsc05-kifu
+      - wcsc06-kifu
+      - wcsc07-kifu
+      - wcsc08-kifu
+      - wcsc09-kifu
+      - wcsc10-kifu
+      - wcsc11-kifu
+      - wcsc12-kifu
+      - wcsc13-kifu
+      - wcsc14-kifu
+      - wcsc15-kifu
+      - wcsc16-kifu
+      - wcsc17-kifu
+      - wcsc18-kifu
+      - wcsc19-kifu
+      - wcsc20-kifu
+      - wcsc21-kifu
+      - wcsc22-kifu
+      - wcsc23-kifu
+      - wcsc24-kifu
+      - wcsc25-kifu
+      - wcsc26-kifu
+      - wcsc27-kifu
+      - wcsc28-kifu
+      - wcsc29-kifu
+      - wcsc31-kifu
+      - wcsc32-kifu
+    decision: approved_local_experimental
+    roles: [behavior_policy, factual_wdl, representation]
+    maximum_stage_fraction: 0.55
+    sampling_weight: 1.0
+    deduplication_priority: 600
+    losses: [masked_behavior_policy_cross_entropy, factual_wdl_cross_entropy]
+    attribution: Retain program name, game date, event name, and official CSA source.
+    may_affect_local_experimental_weights: true
+    may_affect_public_weights: false
+    holdout: WCSC33 through WCSC36 are reserved and may not be normalized or inspected
+  - source_id: denryu
+    registry_artifacts: [denryu-dr5-hardware3]
+    decision: approved_local_experimental
+    roles: [behavior_policy, factual_wdl, representation]
+    maximum_stage_fraction: 0.20
+    sampling_weight: 0.5
+    deduplication_priority: 500
+    losses: [masked_behavior_policy_cross_entropy, factual_wdl_cross_entropy]
+    attribution: Retain Denryu event, program names, dates, and official source.
+    may_affect_local_experimental_weights: true
+    may_affect_public_weights: false
+    holdout: Denryu 4 through 6 TSEC archives remain reserved
+  - source_id: openshogiai_apery_teacher
+    registry_artifacts: []
+    decision: approved_generated_supervision
+    roles: [centipawn_calibration, candidate_ranking, mate, hard_example_labeling]
+    maximum_stage_fraction: 0.35
+    sampling_weight: 1.0
+    deduplication_priority: 800
+    losses: [source_local_cp_huber, candidate_listwise_ranking, mate_kind, mate_distance]
+    attribution: Bind Apery identity, binary/eval hashes, options, nodes, MultiPV, and source records.
+    may_affect_local_experimental_weights: true
+    may_affect_public_weights: false
+    holdout: labels may be generated only for train positions selected without holdout access
+  - source_id: bootstrapped_crossplay
+    registry_artifacts: []
+    decision: generated_after_entry_gate
+    roles: [factual_wdl, hard_example_selection, teacher_relabel_pool]
+    maximum_stage_fraction: 0.25
+    sampling_weight: 0.5
+    deduplication_priority: 400
+    losses: [factual_wdl_cross_entropy]
+    attribution: Bind both engine/model hashes, starts, clocks, search options, and game records.
+    may_affect_local_experimental_weights: true
+    may_affect_public_weights: false
+    holdout: starts and descendants of protected holdouts are forbidden
+  - source_id: pure_selfplay
+    registry_artifacts: []
+    decision: generated_only_after_48_percent_gate
+    roles: [factual_wdl, behavior_policy]
+    maximum_stage_fraction: 0.40
+    sampling_weight: 0.5
+    deduplication_priority: 300
+    losses: [factual_wdl_cross_entropy, masked_behavior_policy_cross_entropy]
+    attribution: Bind candidate hash, generation, starts, clocks, and complete legal game records.
+    may_affect_local_experimental_weights: true
+    may_affect_public_weights: false
+    holdout: no protected start, position, history, or descendant may enter generation
+inactive_source_policy:
+  registry_states: [pending_permission, denied, reserved_holdout, approved_local_only]
+  sampling_weight: 0.0
+  maximum_stage_fraction: 0.0
+  may_affect_weights: false
+  activation: requires a new human-authorized freeze and new hashes

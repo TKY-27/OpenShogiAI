@@ -1,0 +1,28 @@
+schema: open_shogiai_phase10r_curriculum/v1
+frozen_as_of: "2026-08-21"
+seed: 20260729
+pipeline_sanity_command: make phase10r-sanity
+pipeline_sanity_failure_action: stop_all_training
+stages:
+  - {order: 1, stage_id: representation_policy_pretraining, sources: [aobazero, wcsc, denryu], heads: [behavior_policy], freeze: [], maximum_epochs_per_rung: 8}
+  - {order: 2, stage_id: source_specific_wdl_value_pretraining, sources: [aobazero, wcsc, denryu], heads: [wdl, uncertainty], freeze: [policy_move_embedding], maximum_epochs_per_rung: 8}
+  - {order: 3, stage_id: packed_sfen_value_and_ranking, sources: [openshogiai_apery_teacher], heads: [candidate_ranking, score, mate_kind, mate_distance], packed_sfen_value_lane: disabled_no_approved_source, maximum_epochs_per_rung: 12}
+  - {order: 4, stage_id: approved_teacher_calibration, sources: [openshogiai_apery_teacher], heads: [score, wdl, uncertainty, mate_kind, mate_distance], maximum_epochs_per_rung: 6}
+  - {order: 5, stage_id: hard_example_finetuning, sources: [openshogiai_apery_teacher], heads: [behavior_policy, wdl, score, mate_kind, mate_distance, candidate_ranking, uncertainty], hard_example_fraction_maximum: 0.25, maximum_epochs_per_rung: 4}
+  - {order: 6, stage_id: equal_wall_clock_screening, gate_sequence: [short_screen, arena_400, arena_800, practical_20s, final_1600]}
+  - {order: 7, stage_id: bootstrapped_crossplay, activation_gate: short_screen, maximum_replay_fraction: 0.25}
+  - {order: 8, stage_id: pure_selfplay, activation_gate: arena_400, minimum_score: 0.48, maximum_replay_fraction: 0.40}
+data_scales:
+  - {scale_id: 1m, streamed_examples: 1000000, teacher_label_cap: 10000}
+  - {scale_id: 10m, streamed_examples: 10000000, teacher_label_cap: 100000}
+  - {scale_id: 50m, streamed_examples: 50000000, teacher_label_cap: 500000}
+  - {scale_id: 100m, streamed_examples: 100000000, teacher_label_cap: 1000000}
+  - {scale_id: 500m, streamed_examples: 500000000, teacher_label_cap: 3000000}
+  - {scale_id: 1b, streamed_examples: 1000000000, teacher_label_cap: 5000000}
+expansion_gate:
+  all_required: [validation_primary_improves_by_at_least_0_002_relative, every_active_source_held_out_metric_does_not_regress_over_0_01_absolute, calibration_ece_does_not_regress_over_0_01, tactical_suite_has_zero_new_failures, inference_throughput_meets_variant_floor, equal_wall_clock_score_lower_bound_does_not_regress_over_0_02, disk_memory_and_thermal_receipts_pass]
+  plateau_definition: two consecutive completed rungs with less than 0.002 relative primary improvement and no Arena lower-bound improvement
+  plateau_action: rollback_to_best_checkpoint_and_stop_scale_expansion
+  time_alone_is_stopping_condition: false
+  larger_model_allowed_because_offline_loss_is_lower: false
+checkpointing: {every_optimizer_steps: 10000, keep_best: 2, keep_last: true, resumable_sampler_state: true, deterministic_manifest_required: true}
