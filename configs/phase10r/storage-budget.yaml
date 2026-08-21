@@ -1,0 +1,37 @@
+schema_version: 1
+storage_budget_id: phase10r-progressive-v1
+data_root:
+  environment: OPENSHOGI_DATA_ROOT
+  fallback: local/phase10r-data
+  raw_directory: raw
+  normalized_directory: normalized
+  checkpoints_directory: checkpoints
+  holdouts_directory: holdouts
+guardrails:
+  minimum_free_bytes: 161061273600
+  maximum_parallel_downloads: 1
+  maximum_single_download_bytes: 21474836480
+  require_size_estimate_before_download: true
+  require_checksum_before_activation: true
+  require_etag_or_last_modified_checkpoint: true
+  cleanup_before_verification: false
+progressive_targets:
+  - name: sample
+    positions: 1000000
+    maximum_download_bytes: 1073741824
+    action: bounded_format_and_legality_validation
+  - name: pilot
+    positions: 10000000
+    maximum_download_bytes: 10737418240
+    action: approved_sources_only_and_overlap_report
+  - name: medium
+    positions: 50000000
+    maximum_download_bytes: 53687091200
+    action: approved_sources_only_and_deduplicated_normalization
+  - name: large
+    positions: 100000000
+    maximum_download_bytes: 107374182400
+    action: explicit_recheck_of_rights_storage_and_holdout_leakage
+full_release_policy:
+  full_320gb_or_855gb_releases: do_not_download_in_phase10r_a
+  reason: Rights and storage are unresolved; curriculum need must be demonstrated first.

@@ -1,0 +1,40 @@
+schema_version: 1
+deduplication_id: phase10r-deterministic-v1
+identity_layers:
+  - name: exact_game
+    key: history.identity
+    action: drop_later_source_priority
+  - name: canonical_position
+    key: position.canonical_sfen
+    action: drop_later_source_priority
+  - name: transposition
+    key: position.transposition_key
+    action: drop_later_source_priority
+  - name: exact_position
+    key: position.identity
+    action: drop_later_source_priority
+  - name: raw_record
+    key: provenance.raw_record_sha256
+    action: overlap_report_only
+source_priority:
+  - aobazero
+  - wcsc
+  - denryu
+  - dlshogi-gct
+  - nodchip
+  - taya-yaneura
+  - qhapaq
+  - floodgate
+  - dl-suisho15b
+  - lishogi
+  - bonanza
+cross_source_lineage:
+  gct_floodgate: [dlshogi-gct, floodgate]
+  gct_aobazero: [dlshogi-gct, aobazero]
+  distilled_nodchip: [dl-suisho15b, nodchip]
+  taya_teacher: [dlshogi-gct, taya-yaneura]
+split_leakage:
+  compare_exact_game: true
+  compare_canonical_position: true
+  compare_transposition: true
+  unresolved_identity_policy: quarantine

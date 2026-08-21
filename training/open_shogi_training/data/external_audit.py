@@ -30,6 +30,7 @@ DEFAULT_MAX_HCPE3_CANDIDATES = 512
 
 _CSA_MOVE_RE = re.compile(r"^(?P<move>[+-][0-9]{4}[A-Z]{2})(?P<annotation>.*)$")
 _KIF_MOVE_RE = re.compile(r"^\s*(?P<number>[0-9]+)\s+(?P<move>\S+)(?:\s+(?P<rest>.*))?$")
+_KIF_EVAL_RE = re.compile(r"評価値\s+(?P<value>[-+]?\d+)(?:\s+読み筋\s+(?P<pv>.*))?")
 _SCORE_RE = re.compile(r"(?:^|[,'])v=(?P<value>[^,']+)")
 _RESULT_NAMES = {0: "draw", 1: "black_win", 2: "white_win"}
 
@@ -53,10 +54,7 @@ def parse_csa_sample(
     _check_bounds(raw, max_bytes=max_bytes)
     if strict_aobazero:
         adapt_aobazero_csa(raw)
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ExternalAuditFormatError("CSA sample must be UTF-8") from error
+    text, encoding = _decode_text(raw, format_name="CSA")
 
     records: list[dict[str, Any]] = []
     for game_index, game_lines in enumerate(_split_csa_games(text.splitlines())):
@@ -108,6 +106,7 @@ def parse_csa_sample(
                     search={"nodes": None, "playouts": None, "depth": None},
                     raw_record_sha256=_sha256(raw),
                     license_decision=license_decision,
+                    text_encoding=encoding,
                 )
             )
             _check_record_limit(records, max_records)
@@ -123,21 +122,52 @@ def parse_kif_sample(
     max_bytes: int = DEFAULT_MAX_SAMPLE_BYTES,
     max_records: int = DEFAULT_MAX_RECORDS,
 ) -> list[dict[str, Any]]:
-    """Read numbered KIF move lines while preserving Japanese move text."""
+    """Read numbered KIF move lines while preserving Japanese move text.
+
+    Official CSA/WCSC releases are commonly UTF-8, while Denryu archives use
+    CP932.  The selected encoding is retained in each record; no transcoding
+    is treated as a rights or legality decision.
+    """
 
     _check_bounds(raw, max_bytes=max_bytes)
-    try:
-        lines = raw.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ExternalAuditFormatError("KIF sample must be UTF-8") from error
-    move_lines = [match for line in lines if (match := _KIF_MOVE_RE.match(line))]
+    text, encoding = _decode_text(raw, format_name="KIF")
+    lines = text.splitlines()
+    move_lines = []
+    for line in lines:
+        match = _KIF_MOVE_RE.match(line)
+        if match is None:
+            continue
+        token = _kif_move_token(match.group("move"), match.group("rest"))
+        if any(
+            marker in token for marker in ("投了", "詰み", "持将棋", "中断", "千日手", "入玉宣言")
+        ):
+            continue
+        move_lines.append(match)
     if not move_lines:
         raise ExternalAuditFormatError("KIF sample has no numbered moves")
+    evaluations: dict[int, dict[str, Any]] = {}
+    current_number: int | None = None
+    for line in lines:
+        move_match = _KIF_MOVE_RE.match(line)
+        if move_match:
+            current_number = int(move_match.group("number"))
+            continue
+        if current_number is None or not line.lstrip().startswith("**"):
+            continue
+        evaluation = _KIF_EVAL_RE.search(line)
+        if evaluation:
+            evaluations[current_number] = {
+                "value": int(evaluation.group("value")),
+                "pv": evaluation.group("pv"),
+                "raw": line.strip(),
+            }
 
     records: list[dict[str, Any]] = []
     prefix: list[str] = []
     for index, match in enumerate(move_lines, start=1):
-        move = match.group("move")
+        move = _kif_move_token(match.group("move"), match.group("rest"))
+        move_number = int(match.group("number"))
+        evaluation = evaluations.get(move_number)
         prefix.append(move)
         digest = _sha256_text("kif-move-prefix\n" + "\n".join(prefix))
         records.append(
@@ -163,15 +193,21 @@ def parse_kif_sample(
                     "policy_distribution": None,
                     "wdl": {"raw": None, "normalized": None},
                     "result": None,
-                    "raw_source_score": None,
-                    "source_score_semantics": None,
+                    "raw_source_score": evaluation["value"] if evaluation else None,
+                    "source_score_semantics": (
+                        "KIF 対局 評価値 integer; unit and perspective retained"
+                        if evaluation
+                        else None
+                    ),
                     "score_perspective": "unknown",
                     "mate_representation": "not present in bounded move line",
                     "raw_move_suffix": match.group("rest"),
+                    "raw_evaluation": evaluation,
                 },
                 search={"nodes": None, "playouts": None, "depth": None},
                 raw_record_sha256=_sha256(raw),
                 license_decision=license_decision,
+                text_encoding=encoding,
             )
         )
         _check_record_limit(records, max_records)
@@ -492,15 +528,19 @@ def _normalized_record(
     search: Mapping[str, Any],
     raw_record_sha256: str,
     license_decision: Mapping[str, Any] | None,
+    text_encoding: str | None = None,
 ) -> dict[str, Any]:
+    source_artifact = {
+        "source_id": source_id,
+        "artifact_id": artifact_id,
+        "format": format_name,
+    }
+    if text_encoding is not None:
+        source_artifact["encoding"] = text_encoding
     return {
         "schema": NORMALIZED_SCHEMA,
         "record_id": record_id,
-        "source_artifact": {
-            "source_id": source_id,
-            "artifact_id": artifact_id,
-            "format": format_name,
-        },
+        "source_artifact": source_artifact,
         "position_identity": dict(position_identity),
         "history_identity": dict(history_identity),
         "labels": dict(labels),
@@ -593,6 +633,23 @@ def _sha256_bytes(raw: bytes) -> str:
 
 def _sha256_text(text: str) -> str:
     return _sha256(text.encode("utf-8"))
+
+
+def _decode_text(raw: bytes, *, format_name: str) -> tuple[str, str]:
+    for encoding in ("utf-8", "cp932"):
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    raise ExternalAuditFormatError(f"{format_name} sample is neither UTF-8 nor CP932")
+
+
+def _kif_move_token(first: str, rest: str | None) -> str:
+    """Keep full Japanese KIF notation, including ``同 銀(88)`` moves."""
+
+    candidate = " ".join(part for part in (first, rest or "") if part).strip()
+    match = re.match(r"^(?P<token>.*?(?:\([0-9]{2}\)|打))(?:\s+\(|$)", candidate)
+    return (match.group("token") if match else first).strip()
 
 
 __all__ = [

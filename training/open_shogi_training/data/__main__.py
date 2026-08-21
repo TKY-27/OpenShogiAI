@@ -26,6 +26,20 @@ from open_shogi_training.data.opening import (
     export_opening_jsonl,
 )
 from open_shogi_training.data.opening_v2 import build_opening_book_v2
+from open_shogi_training.data.phase10r_acquisition import (
+    acquire_artifact,
+    data_root_from_environment,
+)
+from open_shogi_training.data.phase10r_acquisition import (
+    dry_run as phase10r_dry_run,
+)
+from open_shogi_training.data.phase10r_adapters import (
+    normalize_source_file,
+    validate_kif_with_engine,
+    write_normalized_jsonl,
+)
+from open_shogi_training.data.phase10r_archive import inventory_archive, write_inventory
+from open_shogi_training.data.phase10r_registry import load_phase10r_registry
 from open_shogi_training.data.registry import RegistryError, load_source_registry
 from open_shogi_training.data.splits import SplitPolicy
 from open_shogi_training.selfplay.common import ArtifactRef, artifact_ref
@@ -134,6 +148,66 @@ def build_parser() -> argparse.ArgumentParser:
     opening_v2.add_argument("--maximum-plies", type=int, default=40)
     opening_v2.add_argument("--minimum-sample-count", type=int, default=2)
     opening_v2.add_argument("--maximum-teacher-loss-cp", type=int, default=80)
+
+    phase10r_validate = subparsers.add_parser(
+        "phase10r-validate",
+        help="validate the Phase 10R file-level rights registry",
+    )
+    phase10r_validate.add_argument(
+        "--registry", type=Path, default=Path("configs/phase10r/source-registry.yaml")
+    )
+
+    phase10r_dry_run = subparsers.add_parser(
+        "phase10r-dry-run",
+        help="print an approved Phase 10R acquisition plan without writes",
+    )
+    phase10r_dry_run.add_argument(
+        "--registry", type=Path, default=Path("configs/phase10r/source-registry.yaml")
+    )
+    phase10r_dry_run.add_argument("--artifact", action="append", dest="artifacts")
+    phase10r_dry_run.add_argument("--data-root", type=Path)
+
+    phase10r_acquire = subparsers.add_parser(
+        "phase10r-acquire",
+        help="resume one or more explicitly approved Phase 10R downloads",
+    )
+    phase10r_acquire.add_argument(
+        "--registry", type=Path, default=Path("configs/phase10r/source-registry.yaml")
+    )
+    phase10r_acquire.add_argument("--artifact", action="append", dest="artifacts", required=True)
+    phase10r_acquire.add_argument("--data-root", type=Path)
+    phase10r_acquire.add_argument(
+        "--purpose", choices=("training", "local-inspection"), default="training"
+    )
+
+    phase10r_inventory = subparsers.add_parser(
+        "phase10r-inventory",
+        help="inventory a ZIP archive without extracting it",
+    )
+    phase10r_inventory.add_argument("--archive", type=Path, required=True)
+    phase10r_inventory.add_argument("--output", type=Path)
+
+    phase10r_normalize = subparsers.add_parser(
+        "phase10r-normalize-sample",
+        help="normalize one bounded sample into ignored gzip JSONL",
+    )
+    phase10r_normalize.add_argument(
+        "--registry", type=Path, default=Path("configs/phase10r/source-registry.yaml")
+    )
+    phase10r_normalize.add_argument("--input", type=Path, required=True)
+    phase10r_normalize.add_argument("--artifact", required=True)
+    phase10r_normalize.add_argument("--output", type=Path, required=True)
+    phase10r_normalize.add_argument("--format")
+    phase10r_normalize.add_argument("--max-records", type=int, default=100_000)
+
+    phase10r_kif = subparsers.add_parser(
+        "phase10r-validate-kif",
+        help="convert one bounded KIF game and replay it with the Rust rule engine",
+    )
+    phase10r_kif.add_argument("--input", type=Path, required=True)
+    phase10r_kif.add_argument("--output", type=Path, required=True)
+    phase10r_kif.add_argument("--cli", type=Path, required=True)
+    phase10r_kif.add_argument("--max-moves", type=int, default=10_000)
     return parser
 
 
@@ -245,6 +319,85 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "artifactSha256": report.artifact.sha256,
                     "artifactSize": report.artifact.size,
                 }
+            )
+            return 0
+        if arguments.command == "phase10r-validate":
+            registry = load_phase10r_registry(arguments.registry)
+            _emit_json(
+                {
+                    "schema": "phase10r_registry_validation/v1",
+                    "registry_id": registry.registry_id,
+                    "registry_sha256": registry.sha256,
+                    "source_count": len(registry.sources),
+                    "artifact_count": len(registry.artifacts),
+                    "states": registry.by_state(),
+                    "approved_training_artifacts": [
+                        artifact.artifact_id for artifact in registry.approved_artifacts()
+                    ],
+                }
+            )
+            return 0
+        if arguments.command == "phase10r-dry-run":
+            registry = load_phase10r_registry(arguments.registry)
+            _emit_json(
+                phase10r_dry_run(
+                    registry,
+                    arguments.artifacts,
+                    data_root=arguments.data_root,
+                    minimum_free_bytes=int(registry.policy["minimum_free_bytes"]),
+                )
+            )
+            return 0
+        if arguments.command == "phase10r-acquire":
+            registry = load_phase10r_registry(arguments.registry)
+            results = [
+                acquire_artifact(
+                    registry,
+                    artifact_id,
+                    data_root=arguments.data_root or data_root_from_environment(),
+                    purpose=arguments.purpose,
+                    minimum_free_bytes=int(registry.policy["minimum_free_bytes"]),
+                    max_single_download_bytes=int(registry.policy["max_single_download_bytes"]),
+                ).as_dict()
+                for artifact_id in arguments.artifacts
+            ]
+            _emit_json(
+                {
+                    "schema": "phase10r_acquisition_report/v1",
+                    "results": results,
+                }
+            )
+            return 0
+        if arguments.command == "phase10r-inventory":
+            inventory = inventory_archive(arguments.archive)
+            if arguments.output:
+                write_inventory(arguments.archive, arguments.output, inventory)
+            _emit_json(inventory.as_dict())
+            return 0
+        if arguments.command == "phase10r-normalize-sample":
+            registry = load_phase10r_registry(arguments.registry)
+            artifact = registry.artifact(arguments.artifact)
+            records = normalize_source_file(
+                arguments.input,
+                source_id=artifact.source_id,
+                artifact_id=artifact.artifact_id,
+                format_name=arguments.format,
+                compression=artifact.compression,
+                source_revision=artifact.source_revision,
+                license_decision=artifact.as_dict(),
+                max_records=arguments.max_records,
+            )
+            report = write_normalized_jsonl(records, arguments.output)
+            _emit_json({**report, "artifact_id": artifact.artifact_id})
+            return 0
+        if arguments.command == "phase10r-validate-kif":
+            _emit_json(
+                validate_kif_with_engine(
+                    arguments.cli,
+                    arguments.input,
+                    arguments.output,
+                    max_moves=arguments.max_moves,
+                )
             )
             return 0
         registry = load_source_registry(arguments.registry)

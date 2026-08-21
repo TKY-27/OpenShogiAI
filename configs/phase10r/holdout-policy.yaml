@@ -1,0 +1,30 @@
+schema_version: 1
+holdout_policy_id: phase10r-recent-source-holdout-v1
+default_action: reserve_before_normalization
+reserved_artifacts:
+  - wcsc33-kifu
+  - wcsc34-kifu
+  - wcsc35-kifu
+  - wcsc36-kifu
+  - denryu-dr6-tsec
+  - denryu-dr5-tsec
+  - denryu-dr4-tsec
+  - floodgate-public-evaluation-test
+reserved_families:
+  - recent_wcsc_finals
+  - recent_denryu_tsec
+  - designated_position_events
+  - public_evaluation_sets
+  - unpublished_or_permission_pending_teacher_derivatives
+rules:
+  no_training_reads: true
+  no_public_test_inspection: true
+  no_overlap_release_before_final_holdout: true
+  holdout_hashes_recorded_without_positions: true
+  source_priority_does_not_override_holdout: true
+  pending_permission_is_not_a_holdout_release: true
+split_names:
+  train: train
+  validation: validation
+  test: test
+  reserved: reserved_holdout

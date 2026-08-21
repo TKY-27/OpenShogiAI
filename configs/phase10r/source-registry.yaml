@@ -1,0 +1,1930 @@
+schema_version: 1
+registry_id: phase10r-external-shogi-data
+as_of: "2026-08-21"
+policy:
+  data_root_env: OPENSHOGI_DATA_ROOT
+  default_data_root: local/phase10r-data
+  minimum_free_bytes: 161061273600
+  max_single_download_bytes: 21474836480
+  max_parallel_downloads: 1
+  max_requests_per_second: 1.0
+  raw_data_ignored: true
+  normalized_data_ignored: true
+  checkpoint_policy: >-
+    Keep resumable .part objects and HTTP ETag/Last-Modified metadata until the
+    final object is checksum-verified; never delete an incomplete object automatically.
+sources:
+  - source_id: aobazero
+    publisher: AobaZero project / Aya
+    official_page: https://github.com/kobanium/aobazero
+    state: approved
+    reason: Existing OpenShogiAI approval is limited to the exact 100 no-noise CSA objects.
+    rights_scope: exact existing Phase 3 catalog only; live records and new revisions remain pending.
+    artifact_ids: [aobazero-no-noise-exact100]
+  - source_id: dlshogi-gct
+    publisher: Tadao Yamaoka / dlshogi
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    state: pending_permission
+    reason: Public release article and file names were found, but no formal data reuse grant was found.
+    rights_scope: inventory only until training and derived-weight permission are confirmed.
+    artifact_ids: [gct-selfplay-hcpe3, gct-floodgate-hcpe3, gct-taya36-hcpe3, gct-model-taya36-hcpe3, gct-aobazero-hcpe, gct-mixed-hcpe, gct-unique-selfplay-hcpe3, gct-suisho-entering-king-hcpe]
+  - source_id: nodchip
+    publisher: nodchip dataset publisher
+    official_page: https://huggingface.co/nodchip
+    state: pending_permission
+    reason: Dataset pages expose repository metadata, but data and derived-weight rights are not established by that metadata alone.
+    rights_scope: no bulk download or training until a rights chain is recorded.
+    artifact_ids: [nodchip-hao-depth9, nodchip-tanuki-2024-07-30, nodchip-suisho5-depth9, nodchip-suisho5-depth9-entering-king]
+  - source_id: taya-yaneura
+    publisher: たややん / YaneuraOu ecosystem
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    state: pending_permission
+    reason: Exact artifact names are known from the public release index, but permission scope is unresolved.
+    rights_scope: do not train on 36SFEN, 5247, KIF, or PSV artifacts until permission is pinned.
+    artifact_ids: [taya-36sfen, taya-5247, taya-kif, taya-psv]
+  - source_id: qhapaq
+    publisher: Qhapaq project
+    official_page: https://qhapaq.hatenablog.com/entry/2021/11/23/220251
+    state: pending_permission
+    reason: The author requests disclosure when trained evaluation functions are used in tournaments or published; redistribution and derived-weight terms remain unresolved.
+    rights_scope: audit and permission draft only; no training activation.
+    artifact_ids: [qhapaq-qpd-train]
+  - source_id: floodgate
+    publisher: Computer Shogi Association / Floodgate operators
+    official_page: https://www.computer-shogi.org/
+    state: pending_permission
+    reason: Public reachability is not treated as permission for third-party ML training or redistribution.
+    rights_scope: exact filters and source rights must be approved before acquisition.
+    artifact_ids: [floodgate-filtered-records, floodgate-public-evaluation-test]
+  - source_id: dl-suisho15b
+    publisher: penguinkumimanu / DL水匠15b data release
+    official_page: https://huggingface.co/datasets/penguinkumimanu/Knowledge_distilled_dataset_by_DLSuisho15b
+    state: pending_permission
+    reason: README documents transformation lineage and quality caveats, not a complete reuse and redistribution grant.
+    rights_scope: do not download the approximately 855 GB release or train on it.
+    artifact_ids: [dl-suisho15b-knowledge-distilled]
+  - source_id: wcsc
+    publisher: Computer Shogi Association
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    state: approved
+    reason: Official archive page states that game-record use is free with program, date, event, or source attribution.
+    rights_scope: raw game-record training is approved with the required attribution; derived weights and redistribution remain separately marked pending.
+    artifact_ids: [wcsc01-kifu, wcsc02-kifu, wcsc03-kifu, wcsc04-kifu, wcsc05-kifu, wcsc06-kifu, wcsc07-kifu, wcsc08-kifu, wcsc09-kifu, wcsc10-kifu, wcsc11-kifu, wcsc12-kifu, wcsc13-kifu, wcsc14-kifu, wcsc15-kifu, wcsc16-kifu, wcsc17-kifu, wcsc18-kifu, wcsc19-kifu, wcsc20-kifu, wcsc21-kifu, wcsc22-kifu, wcsc23-kifu, wcsc24-kifu, wcsc25-kifu, wcsc26-kifu, wcsc27-kifu, wcsc28-kifu, wcsc29-kifu, wcsc31-kifu, wcsc32-kifu, wcsc33-kifu, wcsc34-kifu, wcsc35-kifu, wcsc36-kifu]
+  - source_id: denryu
+    publisher: 電竜戦 / Denryu-sen
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    state: approved
+    reason: Hardware 3 official archive states that game-record use has no restrictions; other event families remain separately gated.
+    rights_scope: only the exact hardware-3 archive is approved for raw-record training; production, TSEC, and designated-position archives are pending or holdout.
+    artifact_ids: [denryu-dr5-hardware3, denryu-dr6-production, denryu-dr6-tsec, denryu-dr5-production, denryu-dr5-tsec, denryu-dr4-hardware2, denryu-dr4-production, denryu-dr4-tsec, denryu-dr3-hardware1, denryu-dr3-production]
+  - source_id: lishogi
+    publisher: Lishogi
+    official_page: https://lishogi.org/api
+    state: pending_permission
+    reason: API rate limits and site terms were reviewed, but the terms grant Lishogi a license rather than a third-party ML redistribution grant.
+    rights_scope: no unauthenticated export or training; use only after account and ML rights are authorized.
+    artifact_ids: [lishogi-games-api]
+  - source_id: bonanza
+    publisher: Bonanza project / maintained source mirror
+    official_page: https://github.com/ianfab/bonanza
+    state: approved_local_only
+    reason: Bonanza source and evaluation tables are retained as historical prior art only; no trained-table import is authorized.
+    rights_scope: local inspection and independent implementation research; no training, production import, or redistribution of third-party tables.
+    artifact_ids: [bonanza-fv-bin-prior-art]
+artifacts:
+  - artifact_id: aobazero-no-noise-exact100
+    source_id: aobazero
+    artifact_kind: published_set
+    exactness: exact_catalog_set
+    exact_artifact_name: "w4745.csa through w4235.csa in steps of five, excluding w4495.csa, w4425.csa, and w4420.csa"
+    source_revision: OpenShogiAI Phase 3 pinned catalog
+    source_url: http://www.yss-aya.com/aobazero/no_noise/
+    official_page: https://github.com/kobanium/aobazero
+    publisher: AobaZero project / Aya
+    license: public_domain_per_existing_provenance
+    license_evidence:
+      - url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README_en.md
+        quote: "USI engine aobaz belongs to GPL v3. Others are in the public domain."
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: approved
+    commercial_use_permission: pending_permission
+    attribution: Preserve AobaZero project and source-host attribution.
+    size_bytes: null
+    sha256: null
+    format: csa
+    compression: none
+    availability: existing exact catalog in OpenShogiAI provenance
+    reason: Existing approval is not expanded to live AobaZero records or new revisions.
+    holdout_role: none
+    sample_plan: Existing 100-object Phase 3 evidence only.
+  - artifact_id: gct-selfplay-hcpe3
+    source_id: dlshogi-gct
+    artifact_kind: file_pattern
+    exactness: published_pattern
+    exact_artifact_name: hcpe3/selfplay_gct-???.hcpe3.xz
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "GCTの学習に使用したデータセットを公開"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute dlshogi/GCT and the exact release if later approved.
+    size_bytes: 84000000000
+    sha256: null
+    format: hcpe3
+    compression: xz
+    availability: public Drive folder reported; not acquired
+    reason: Release intent is not a complete reuse grant; file-level manifest and permission are missing.
+    holdout_role: none
+    sample_plan: Bounded header sample only after permission.
+  - artifact_id: gct-floodgate-hcpe3
+    source_id: dlshogi-gct
+    artifact_kind: file_pattern
+    exactness: published_pattern
+    exact_artifact_name: hcpe3/selfplay_gct???_floodgate26*.hcpe3.xz
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "floodgate"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute dlshogi/GCT and Floodgate where later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe3
+    compression: xz
+    availability: public release index; not acquired
+    reason: Underlying Floodgate rights and GCT transformation rights are unresolved.
+    holdout_role: none
+    sample_plan: Do not sample until permission covers both lineages.
+  - artifact_id: gct-taya36-hcpe3
+    source_id: dlshogi-gct
+    artifact_kind: file_pattern
+    exactness: published_pattern
+    exact_artifact_name: hcpe3/taya36.hcpe3.xz
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "taya36.hcpe.xz"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute the original Taya/GCT release if later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe
+    compression: xz
+    availability: public release index; not acquired
+    reason: Source lineage and permission for transformed positions are unresolved.
+    holdout_role: none
+    sample_plan: Do not sample until permission is explicit.
+  - artifact_id: gct-model-taya36-hcpe3
+    source_id: dlshogi-gct
+    artifact_kind: file_pattern
+    exactness: published_pattern
+    exact_artifact_name: hcpe3/model-0000???_taya36.hcpe3.xz
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "model-0000???_taya36.hcpe3.xz"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute original release and teacher model lineage if later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe3
+    compression: xz
+    availability: public release index; not acquired
+    reason: This is a teacher/model-labelled derivative and needs an explicit rights chain.
+    holdout_role: none
+    sample_plan: No download before rights review.
+  - artifact_id: gct-aobazero-hcpe
+    source_id: dlshogi-gct
+    artifact_kind: directory
+    exactness: published_directory
+    exact_artifact_name: aobazero/hcpe
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "aobazero/hcpe"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute AobaZero and GCT if later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe
+    compression: unknown
+    availability: public release index; not acquired
+    reason: Mixed lineage and exact file manifest are unresolved.
+    holdout_role: none
+    sample_plan: Do not sample until source rights are reconciled.
+  - artifact_id: gct-mixed-hcpe
+    source_id: dlshogi-gct
+    artifact_kind: directory
+    exactness: published_directory
+    exact_artifact_name: gct/hcpe/play-001
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "play-001"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve all component-source attribution if later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe
+    compression: unknown
+    availability: public release index; not acquired
+    reason: Mixed Floodgate, Denryu, and local records make rights and overlap unresolved.
+    holdout_role: none
+    sample_plan: No sample before component rights audit.
+  - artifact_id: gct-unique-selfplay-hcpe3
+    source_id: dlshogi-gct
+    artifact_kind: directory
+    exactness: published_directory
+    exact_artifact_name: selfplay-unique-900xx and 902xx/901xx/903xx
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "selfplay-unique"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute GCT and the Taya/Yaneura source lineage if later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe3
+    compression: unknown
+    availability: public release index; not acquired
+    reason: Source-specific mutual-position construction and rights are unresolved.
+    holdout_role: none
+    sample_plan: No sample before permission.
+  - artifact_id: gct-suisho-entering-king-hcpe
+    source_id: dlshogi-gct
+    artifact_kind: directory
+    exactness: published_directory
+    exact_artifact_name: suisho/hcpe
+    source_revision: 2021-05-06 public release article
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: Tadao Yamaoka / dlshogi GCT
+    license: public_release_no_formal_license_found
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "水匠の入玉宣言用教師データ"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute Suisho and GCT if later approved.
+    size_bytes: null
+    sha256: null
+    format: hcpe
+    compression: unknown
+    availability: public release index; not acquired
+    reason: The article reports permission context for Taya data, not a complete third-party ML grant.
+    holdout_role: none
+    sample_plan: No sample before permission.
+  - artifact_id: nodchip-hao-depth9
+    source_id: nodchip
+    artifact_kind: dataset_repository
+    exactness: exact_repository
+    exact_artifact_name: shogi_hao_depth9/*.bin
+    source_revision: Hugging Face repository main revision reviewed 2026-08-21
+    source_url: https://huggingface.co/datasets/nodchip/shogi_hao_depth9/tree/main
+    official_page: https://huggingface.co/datasets/nodchip/shogi_hao_depth9
+    publisher: nodchip
+    license: repository_metadata_mit_data_scope_unresolved
+    license_evidence:
+      - url: https://huggingface.co/datasets/nodchip/shogi_hao_depth9/tree/main
+        quote: "PackedSfenValue"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute nodchip and Hao lineage if later approved.
+    size_bytes: 320002979440
+    sha256: null
+    format: packed_sfen_value
+    compression: none
+    availability: public repository; no shard downloaded
+    reason: The 320 GB repository metadata does not establish data, derivative, or commercial rights.
+    holdout_role: none
+    sample_plan: Metadata-only audit; no full download.
+  - artifact_id: nodchip-tanuki-2024-07-30
+    source_id: nodchip
+    artifact_kind: dataset_repository
+    exactness: exact_repository
+    exact_artifact_name: tanuki-.nnue-pytorch-2024-07-30.1
+    source_revision: Hugging Face repository reviewed 2026-08-21
+    source_url: https://huggingface.co/datasets/nodchip/tanuki-.nnue-pytorch-2024-07-30.1
+    official_page: https://huggingface.co/nodchip
+    publisher: nodchip
+    license: repository_metadata_data_scope_unresolved
+    license_evidence:
+      - url: https://huggingface.co/nodchip/tanuki-.nnue-pytorch-2024-07-30.1
+        quote: "tanuki-.nnue-pytorch-2024-07-30.1"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute nodchip/Tanuki if later approved.
+    size_bytes: null
+    sha256: null
+    format: packed_sfen_value
+    compression: unknown
+    availability: public repository; not acquired
+    reason: Exact release terms and data lineage require confirmation.
+    holdout_role: none
+    sample_plan: Metadata-only audit.
+  - artifact_id: nodchip-suisho5-depth9
+    source_id: nodchip
+    artifact_kind: dataset_repository
+    exactness: exact_repository
+    exact_artifact_name: shogi_suisho5_depth9
+    source_revision: Hugging Face repository reviewed 2026-08-21
+    source_url: https://huggingface.co/datasets/nodchip/shogi_suisho5_depth9
+    official_page: https://huggingface.co/nodchip
+    publisher: nodchip
+    license: repository_metadata_data_scope_unresolved
+    license_evidence:
+      - url: https://huggingface.co/datasets/nodchip/shogi_suisho5_depth9
+        quote: "shogi_suisho5_depth9"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute nodchip/Suisho if later approved.
+    size_bytes: null
+    sha256: null
+    format: packed_sfen_value
+    compression: unknown
+    availability: public repository; not acquired
+    reason: Rights for source and teacher-derived data are unresolved.
+    holdout_role: none
+    sample_plan: Metadata-only audit.
+  - artifact_id: nodchip-suisho5-depth9-entering-king
+    source_id: nodchip
+    artifact_kind: dataset_repository
+    exactness: exact_repository
+    exact_artifact_name: shogi_suisho5_depth9_entering_king
+    source_revision: Hugging Face repository reviewed 2026-08-21
+    source_url: https://huggingface.co/datasets/nodchip/shogi_suisho5_depth9_entering_king
+    official_page: https://huggingface.co/nodchip
+    publisher: nodchip
+    license: repository_metadata_data_scope_unresolved
+    license_evidence:
+      - url: https://huggingface.co/datasets/nodchip/shogi_suisho5_depth9_entering_king
+        quote: "shogi_suisho5_depth9_entering_king"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute nodchip/Suisho if later approved.
+    size_bytes: null
+    sha256: null
+    format: packed_sfen_value
+    compression: unknown
+    availability: public repository; not acquired
+    reason: Rights for source and teacher-derived data are unresolved.
+    holdout_role: none
+    sample_plan: Metadata-only audit.
+  - artifact_id: taya-36sfen
+    source_id: taya-yaneura
+    artifact_kind: published_file
+    exactness: exact_named_artifact
+    exact_artifact_name: 36SFEN
+    source_revision: Public GCT release index reviewed 2026-08-21
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: たややん / YaneuraOu ecosystem
+    license: permission_scope_unresolved
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "taya36"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute たややん and the exact release if later approved.
+    size_bytes: null
+    sha256: null
+    format: sfen
+    compression: unknown
+    availability: named in release material; not acquired
+    reason: Exact file URL and permission chain are not pinned.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: taya-5247
+    source_id: taya-yaneura
+    artifact_kind: published_file
+    exactness: exact_named_artifact
+    exact_artifact_name: "5247"
+    source_revision: Public GCT release index reviewed 2026-08-21
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: たややん / YaneuraOu ecosystem
+    license: permission_scope_unresolved
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "5247"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute たややん and the exact release if later approved.
+    size_bytes: null
+    sha256: null
+    format: unknown_text_or_binary
+    compression: unknown
+    availability: named in release material; not acquired
+    reason: Exact file URL and permission chain are not pinned.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: taya-kif
+    source_id: taya-yaneura
+    artifact_kind: published_file
+    exactness: exact_named_artifact
+    exact_artifact_name: KIF
+    source_revision: Public GCT release index reviewed 2026-08-21
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: たややん / YaneuraOu ecosystem
+    license: permission_scope_unresolved
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "KIF"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute たややん and the exact release if later approved.
+    size_bytes: null
+    sha256: null
+    format: kif
+    compression: unknown
+    availability: named in release material; not acquired
+    reason: Exact file URL and permission chain are not pinned.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: taya-psv
+    source_id: taya-yaneura
+    artifact_kind: published_file
+    exactness: exact_named_artifact
+    exact_artifact_name: PSV
+    source_revision: Public GCT release index reviewed 2026-08-21
+    source_url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    publisher: たややん / YaneuraOu ecosystem
+    license: permission_scope_unresolved
+    license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "PSV"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute たややん and the exact release if later approved.
+    size_bytes: null
+    sha256: null
+    format: packed_sfen_value
+    compression: unknown
+    availability: named in release material; not acquired
+    reason: Exact file URL and permission chain are not pinned.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: qhapaq-qpd-train
+    source_id: qhapaq
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: QPD_train.7z
+    source_revision: GitHub release dataset reviewed 2026-08-21
+    source_url: https://github.com/qhapaq-49/qhapaq-bin/releases/download/dataset/QPD_train.7z
+    official_page: https://qhapaq.hatenablog.com/entry/2021/11/23/220251
+    publisher: Qhapaq project
+    license: author_notice_requires_use_disclosure
+    license_evidence:
+      - url: https://qhapaq.hatenablog.com/entry/2021/11/23/220251
+        quote: "大会などに出場させる場合や、評価関数を公開する場合などには、このデータを利用したことを明記してください。"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Disclosure of QPD use is required; confirm exact wording with the author.
+    size_bytes: 11304930
+    sha256: null
+    format: teacher_data_archive
+    compression: 7z
+    availability: exact public release URL; not acquired
+    reason: Disclosure notice does not resolve all redistribution, commercial, and derived-weight questions.
+    holdout_role: none
+    sample_plan: Permission request before archive download.
+  - artifact_id: floodgate-filtered-records
+    source_id: floodgate
+    artifact_kind: filtered_archive
+    exactness: filter_definition_not_artifact
+    exact_artifact_name: Floodgate records filtered by rights-approved program/time/source policy
+    source_revision: Phase 10R audit definition
+    source_url: https://www.computer-shogi.org/
+    official_page: https://www.computer-shogi.org/
+    publisher: Computer Shogi Association / Floodgate operators
+    license: permission_unresolved
+    license_evidence:
+      - url: https://www.computer-shogi.org/
+        quote: "Official source index only; no third-party training grant inferred."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve program, event, date, and source attribution if approved.
+    size_bytes: null
+    sha256: null
+    format: csa_or_kif
+    compression: unknown
+    availability: source exists; no bulk query or download performed
+    reason: Requires program-level and operator-level permission before collection.
+    holdout_role: none
+    sample_plan: Permission request and exact filter manifest first.
+  - artifact_id: floodgate-public-evaluation-test
+    source_id: floodgate
+    artifact_kind: published_test_set
+    exactness: existing_audit_artifact
+    exact_artifact_name: dlshogi public evaluation test set
+    source_revision: Existing Phase 10A audit decision
+    source_url: https://www.computer-shogi.org/
+    official_page: https://www.computer-shogi.org/
+    publisher: Computer Shogi Association / Floodgate operators
+    license: denied_for_training
+    license_evidence:
+      - url: https://www.computer-shogi.org/
+        quote: "Existing Phase 10A audit decision is preserved; no public-test training."
+    state: denied
+    training_permission: denied
+    derived_weights_permission: denied
+    redistribution_permission: denied
+    commercial_use_permission: denied
+    attribution: Do not use as training data.
+    size_bytes: null
+    sha256: null
+    format: csa_or_kif
+    compression: unknown
+    availability: existing audit record; not acquired
+    reason: Evaluation/test contamination and unresolved reuse terms.
+    holdout_role: public_evaluation_only
+    sample_plan: Never download for training.
+  - artifact_id: dl-suisho15b-knowledge-distilled
+    source_id: dl-suisho15b
+    artifact_kind: dataset_repository
+    exactness: exact_repository_revision
+    exact_artifact_name: Knowledge_distilled_dataset_by_DLSuisho15b
+    source_revision: Hugging Face README revision ca5fae2 reviewed 2026-08-21
+    source_url: https://huggingface.co/datasets/penguinkumimanu/Knowledge_distilled_dataset_by_DLSuisho15b/raw/main/README.md
+    official_page: https://huggingface.co/datasets/penguinkumimanu/Knowledge_distilled_dataset_by_DLSuisho15b
+    publisher: penguinkumimanu / DL水匠15b
+    license: transformation_notice_no_complete_rights_chain
+    license_evidence:
+      - url: https://huggingface.co/datasets/penguinkumimanu/Knowledge_distilled_dataset_by_DLSuisho15b/raw/main/README.md
+        quote: "約160億局面"
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Attribute nodchip, Hao, たややん, DL水匠15b, and the release if approved.
+    size_bytes: 855000000000
+    sha256: null
+    format: packed_sfen_value
+    compression: unknown
+    availability: public repository; no bulk download performed
+    reason: README records lineage and caveats but not sufficient ML/redistribution permission.
+    holdout_role: none
+    sample_plan: README/metadata only; explicitly exclude from bulk acquisition.
+  - artifact_id: denryu-dr5-hardware3
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu_dr5hdw3.zip
+    source_revision: Denryu hardware 3 official archive
+    source_url: https://denryu-sen.jp/denryusen/dr5_hardware3/kifu_dr5hdw3.zip
+    official_page: https://golan.sakura.ne.jp/denryusen/dr5_hardware3/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: free_use_no_record_restrictions_stated
+    license_evidence:
+      - url: https://golan.sakura.ne.jp/denryusen/dr5_hardware3/dr1_live.php
+        quote: "棋譜利用は制限等ありませんので、ご自由にお使いください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution.
+    size_bytes: 2200967
+    sha256: 3aa6b8d21ba0f586a9f8c04425425883453887a8cf403d0e598a4e11ee2ee79e
+    format: kif
+    compression: zip
+    availability: bounded archive acquired under raw-sample; no normalized data committed
+    reason: Exact hardware-3 archive is approved for raw game-record training under the cited notice.
+    holdout_role: none
+    sample_plan: Inventory all 132 KIF games; CP932 decode; KIF legality gate remains required.
+  - artifact_id: denryu-dr6-production
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu_dr6production.zip
+    source_revision: Denryu 6 production archive
+    source_url: https://denryu-sen.jp/denryusen/dr6_production/kifu_dr6production.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 3211045
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: Do not generalize hardware-3 wording to production events without confirmation.
+    holdout_role: recent_event_candidate
+    sample_plan: Permission request before acquisition; reserve recent events from train splits.
+  - artifact_id: denryu-dr6-tsec
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu_dr6tsec.zip
+    source_revision: Denryu 6 TSEC archive
+    source_url: https://denryu-sen.jp/denryusen/dr6_tsec/kifu_dr6tsec.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 4708773
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: Recent TSEC material is reserved from training pending rights and holdout policy.
+    holdout_role: recent_tsec_holdout
+    sample_plan: Hold out; no acquisition in Phase 10R-A.
+  - artifact_id: denryu-dr5-production
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kif_dr5_production.zip
+    source_revision: Denryu 5 production archive
+    source_url: https://denryu-sen.jp/denryusen/dr5_production/kif_dr5_production.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 4554787
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: Hardware-3 wording is not generalized to production archives.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: denryu-dr5-tsec
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kif_dr5_tsec.zip
+    source_revision: Denryu 5 TSEC archive
+    source_url: https://denryu-sen.jp/denryusen/dr5_tsec/kif_dr5_tsec.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 14532684
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: TSEC events are held out until rights and leakage policy are settled.
+    holdout_role: recent_tsec_holdout
+    sample_plan: Hold out; no acquisition in Phase 10R-A.
+  - artifact_id: denryu-dr4-hardware2
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kif_dr4_hdw2.zip
+    source_revision: Denryu hardware 2 archive
+    source_url: https://denryu-sen.jp/denryusen/dr4_hardware2/kif_dr4_hdw2.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 3552823
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: No archive-specific unrestricted-use notice was found.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: denryu-dr4-production
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kif_dr4prd.zip
+    source_revision: Denryu 4 production archive
+    source_url: https://denryu-sen.jp/denryusen/dr4_production/kif_dr4prd.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 5005136
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: No archive-specific unrestricted-use notice was found.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: denryu-dr4-tsec
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kif_dr4_tsec.zip
+    source_revision: Denryu 4 TSEC archive
+    source_url: https://denryu-sen.jp/denryusen/dr4_tsec/kif_dr4_tsec.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 9638798
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: TSEC events are held out until rights and leakage policy are settled.
+    holdout_role: recent_tsec_holdout
+    sample_plan: Hold out; no acquisition in Phase 10R-A.
+  - artifact_id: denryu-dr3-hardware1
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: dr3_hardware1_kifu.zip
+    source_revision: Denryu hardware 1 archive
+    source_url: https://denryu-sen.jp/denryusen/dr3_hardware1/dr3_hardware1_kifu.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 3361972
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: No archive-specific unrestricted-use notice was found.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: denryu-dr3-production
+    source_id: denryu
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kif_dr3.zip
+    source_revision: Denryu 3 production archive
+    source_url: https://denryu-sen.jp/denryusen/dr3_production/kif_dr3.zip
+    official_page: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+    publisher: 電竜戦 / Denryu-sen
+    license: rights_statement_not_found_for_this_archive
+    license_evidence:
+      - url: https://denryu-sen.jp/denryusen/dr_link/dr1_live.php
+        quote: "Official archive link; no specific unrestricted-use statement located for this event."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Preserve Denryu-sen event, program names, dates, and official source attribution if approved.
+    size_bytes: 3826732
+    sha256: null
+    format: kif
+    compression: zip
+    availability: official direct archive; not acquired
+    reason: No archive-specific unrestricted-use notice was found.
+    holdout_role: none
+    sample_plan: Permission request before acquisition.
+  - artifact_id: lishogi-games-api
+    source_id: lishogi
+    artifact_kind: api_stream
+    exactness: api_not_fixed_artifact
+    exact_artifact_name: Lishogi game export API
+    source_revision: API documentation reviewed 2026-08-21
+    source_url: https://lishogi.org/api
+    official_page: https://lishogi.org/terms-of-service
+    publisher: Lishogi
+    license: terms_license_not_third_party_ml_grant
+    license_evidence:
+      - url: https://lishogi.org/api
+        quote: "If you get an HTTP 429 response, please wait a full minute before resuming your requests."
+    state: pending_permission
+    training_permission: pending_permission
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Follow Lishogi terms and obtain explicit ML/data permission before use.
+    size_bytes: null
+    sha256: null
+    format: pgn_or_json
+    compression: stream
+    availability: API available; no game export performed
+    reason: Rate limiting is operationally documented, but terms do not grant third-party training rights.
+    holdout_role: none
+    sample_plan: No unauthenticated export; require account authorization and rights decision.
+  - artifact_id: bonanza-fv-bin-prior-art
+    source_id: bonanza
+    artifact_kind: source_and_weight_artifact
+    exactness: exact_source_mirror
+    exact_artifact_name: fv.bin / Bonanza evaluation-table concepts
+    source_revision: maintained source mirror reviewed 2026-08-21
+    source_url: https://github.com/ianfab/bonanza
+    official_page: https://github.com/ianfab/bonanza
+    publisher: Bonanza project
+    license: bonanza_source_terms_commercial_restriction
+    license_evidence:
+      - url: https://github.com/ianfab/bonanza
+        quote: "Without a specific permission, any means of commercial applications are prohibited."
+    state: approved_local_only
+    training_permission: approved_local_only
+    derived_weights_permission: denied
+    redistribution_permission: denied
+    commercial_use_permission: denied
+    attribution: Keep Bonanza attribution for local historical inspection; do not ship third-party tables.
+    size_bytes: null
+    sha256: null
+    format: bonanza_kpp_kkp
+    compression: none
+    availability: source mirror available; no table import performed
+    reason: Prior-art inspection is allowed locally; OpenShogiAI uses independently implemented features and fresh initialization.
+    holdout_role: none
+    sample_plan: No training or production import of third-party fv.bin/book.bin/hash.bin.
+  - artifact_id: wcsc01-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu1.lzh
+    source_revision: WCSC 1 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu1.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 20696
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc02-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu2.lzh
+    source_revision: WCSC 2 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu2.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 36216
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc03-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu3.lzh
+    source_revision: WCSC 3 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu3.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 69698
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc04-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu4.lzh
+    source_revision: WCSC 4 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu4.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 65062
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc05-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu5.lzh
+    source_revision: WCSC 5 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu5.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 127787
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc06-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu6.lzh
+    source_revision: WCSC 6 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu6.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 265502
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc07-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu7.lzh
+    source_revision: WCSC 7 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu7.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 298811
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc08-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu8.lzh
+    source_revision: WCSC 8 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu8.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 413876
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc09-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu9.lzh
+    source_revision: WCSC 9 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu9.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 388910
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc10-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu10.lzh
+    source_revision: WCSC 10 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu10.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 554417
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc11-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu11.lzh
+    source_revision: WCSC 11 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu11.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 653980
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc12-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: kifu12.lzh
+    source_revision: WCSC 12 official archive
+    source_url: https://www.computer-shogi.org/kifu/kifu12.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 798838
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc13-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc13_kifu.lzh
+    source_revision: WCSC 13 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc13_kifu.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 544054
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc14-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc14_kifu.lzh
+    source_revision: WCSC 14 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc14_kifu.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 484688
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc15-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc15_kifu.lzh
+    source_revision: WCSC 15 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc15_kifu.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 742408
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc16-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc16_kifu.lzh
+    source_revision: WCSC 16 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc16_kifu.lzh
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 607473
+    sha256: null
+    format: csa
+    compression: lzh
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; replay CSA.
+  - artifact_id: wcsc17-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc17.zip
+    source_revision: WCSC 17 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc17.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 173477
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc18-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc18_kifu.zip
+    source_revision: WCSC 18 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc18_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 177114
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc19-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc19_kifu.zip
+    source_revision: WCSC 19 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc19_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 183281
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc20-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc20_kifu.zip
+    source_revision: WCSC 20 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc20_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 228991
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc21-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc21_kifu.zip
+    source_revision: WCSC 21 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc21_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 173218
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc22-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc22_kifu.zip
+    source_revision: WCSC 22 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc22_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 202315
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc23-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc23_kifu.zip
+    source_revision: WCSC 23 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc23_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 179443
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc24-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc24_kifu.zip
+    source_revision: WCSC 24 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc24_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 172678
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc25-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc25_kifu.zip
+    source_revision: WCSC 25 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc25_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 172504
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc26-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc26_kifu.zip
+    source_revision: WCSC 26 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc26_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 210782
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc27-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc27_kifu.zip
+    source_revision: WCSC 27 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc27_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 202682
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc28-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc28_kifu.zip
+    source_revision: WCSC 28 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc28_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 248364
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc29-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc29_kifu.zip
+    source_revision: WCSC 29 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc29_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 260392
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: none
+    sample_plan: Acquire progressively after free-space check; inventory then replay CSA.
+  - artifact_id: wcsc31-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc31_kifu.zip
+    source_revision: WCSC 31 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc31_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 265998
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Official archive page allows game-record use with attribution.
+    holdout_role: recent_archive_candidate
+    sample_plan: Acquire only after split policy reserves recent finals.
+  - artifact_id: wcsc32-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc32_kifu.zip
+    source_revision: WCSC 32 archive fetched 2026-08-21
+    source_url: https://www.computer-shogi.org/kifu/wcsc32_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: approved
+    training_permission: approved
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 297175
+    sha256: d6b8ed2b4b971f488800835d2f8e5fe3a2026c5bf893b5c3e161c8a0d48eac03
+    format: csa
+    compression: zip
+    availability: bounded archive acquired under raw-sample; no normalized data committed
+    reason: Official archive page allows game-record use with attribution; this exact SHA is pinned.
+    holdout_role: recent_archive_candidate
+    sample_plan: Inventory and Rust-replay bounded sample; reserve later final split as policy requires.
+  - artifact_id: wcsc33-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc33_kifu.zip
+    source_revision: WCSC 33 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc33_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 1248004
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Recent final archive is reserved to prevent split leakage and future holdout inspection.
+    holdout_role: recent_final_holdout
+    sample_plan: Do not acquire or inspect in Phase 10R-A.
+  - artifact_id: wcsc34-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc34_kifu.zip
+    source_revision: WCSC 34 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc34_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 1552701
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Recent final archive is reserved to prevent split leakage and future holdout inspection.
+    holdout_role: recent_final_holdout
+    sample_plan: Do not acquire or inspect in Phase 10R-A.
+  - artifact_id: wcsc35-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc35_kifu.zip
+    source_revision: WCSC 35 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc35_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 1672525
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Recent final archive is reserved to prevent split leakage and future holdout inspection.
+    holdout_role: recent_final_holdout
+    sample_plan: Do not acquire or inspect in Phase 10R-A.
+  - artifact_id: wcsc36-kifu
+    source_id: wcsc
+    artifact_kind: exact_release_archive
+    exactness: exact_file
+    exact_artifact_name: wcsc36_kifu.zip
+    source_revision: WCSC 36 official archive
+    source_url: https://www.computer-shogi.org/kifu/wcsc36_kifu.zip
+    official_page: https://www.computer-shogi.org/kifu/kifu.html
+    publisher: Computer Shogi Association
+    license: free_use_with_attribution
+    license_evidence:
+      - url: https://www.computer-shogi.org/kifu/kifu.html
+        quote: "棋譜利用は自由ですが、新聞・雑誌・インターネット等の記事に使用(掲載)するときには、対局プログラム名と対局日時、大会名または出典を明記してください。"
+    state: reserved_holdout
+    training_permission: reserved_holdout
+    derived_weights_permission: pending_permission
+    redistribution_permission: pending_permission
+    commercial_use_permission: pending_permission
+    attribution: Program name, game date, event name, or source must be retained.
+    size_bytes: 1421658
+    sha256: null
+    format: csa
+    compression: zip
+    availability: official archive; not acquired
+    reason: Recent final archive is reserved to prevent split leakage and future holdout inspection.
+    holdout_role: recent_final_holdout
+    sample_plan: Do not acquire or inspect in Phase 10R-A.

@@ -1,0 +1,108 @@
+{
+  "schema": "phase10r_data_foundation_manifest/v1",
+  "phase": "10R-A",
+  "as_of": "2026-08-21",
+  "timezone": "Asia/Tokyo",
+  "branch": "codex/phase10r-data-foundation",
+  "data_root_policy": {
+    "environment": "OPENSHOGI_DATA_ROOT",
+    "fallback": "local/phase10r-data",
+    "raw_data_tracked_by_git": false,
+    "normalized_data_tracked_by_git": false,
+    "minimum_free_bytes": 161061273600,
+    "free_bytes_observed_after_acquisition": 346804416512
+  },
+  "preserved_failed_phase10": {
+    "result": "FAILED_OFFLINE_GATE",
+    "preserved_copy": "artifacts/phase10r/failed-phase10-offline-gate/campaign-report.json.gz",
+    "original_uncompressed_sha256": "7453b399eb17d690f59f71441c70d69ec5fe23344605ed17c457a24e82bc1935",
+    "compressed_copy_sha256": "bfd190c223bbaf3fa54335780a67c4e1d00a9bea4ab79e9d816a5cebc1775ffb",
+    "arena_started": false,
+    "public_test_inspected": false,
+    "holdout_inspected": false,
+    "training_started": false
+  },
+  "registry": {
+    "path": "configs/phase10r/source-registry.yaml",
+    "sha256": "391a0b45af69a2ac66d9f007096436b6c65d65d6ba0c33c868a66d309d0d78e4",
+    "source_count": 11,
+    "artifact_count": 68,
+    "states": {
+      "approved": 33,
+      "approved_local_only": 1,
+      "pending_permission": 26,
+      "denied": 1,
+      "reserved_holdout": 7
+    }
+  },
+  "acquired_objects": [
+    {
+      "artifact_id": "wcsc32-kifu",
+      "relative_path": "raw/wcsc32-kifu/wcsc32_kifu.zip",
+      "size_bytes": 297175,
+      "sha256": "d6b8ed2b4b971f488800835d2f8e5fe3a2026c5bf893b5c3e161c8a0d48eac03",
+      "etag": "\"ff96e06244d1d545d037702c170c1803\"",
+      "last_modified": "Tue, 03 Feb 2026 12:26:09 GMT",
+      "status": "verified"
+    },
+    {
+      "artifact_id": "denryu-dr5-hardware3",
+      "relative_path": "raw/denryu-dr5-hardware3/kifu_dr5hdw3.zip",
+      "size_bytes": 2200967,
+      "sha256": "3aa6b8d21ba0f586a9f8c04425425883453887a8cf403d0e598a4e11ee2ee79e",
+      "etag": "\"219587-62d9eedbe0540\"",
+      "last_modified": "Sat, 08 Feb 2025 10:27:57 GMT",
+      "status": "verified"
+    }
+  ],
+  "archive_inventories": [
+    {
+      "artifact_id": "wcsc32-kifu",
+      "archive_format": "zip",
+      "entry_count": 293,
+      "regular_csa_file_count": 279,
+      "total_uncompressed_bytes": 519128,
+      "archive_sha256": "d6b8ed2b4b971f488800835d2f8e5fe3a2026c5bf893b5c3e161c8a0d48eac03"
+    },
+    {
+      "artifact_id": "denryu-dr5-hardware3",
+      "archive_format": "zip",
+      "entry_count": 135,
+      "regular_kif_file_count": 132,
+      "total_uncompressed_bytes": 12016210,
+      "archive_sha256": "3aa6b8d21ba0f586a9f8c04425425883453887a8cf403d0e598a4e11ee2ee79e"
+    }
+  ],
+  "bounded_normalization": {
+    "wcsc32_first_csa": {
+      "format": "csa",
+      "encoding": "cp932",
+      "source_record_count": 320,
+      "validation": "derived UTF-8/V3.0 view; 10 of 10 bounded games accepted by Rust"
+    },
+    "denryu_first_kif": {
+      "format": "kif",
+      "encoding": "cp932",
+      "played_move_count": 96,
+      "terminal": "千日手",
+      "raw_evaluation_and_pv_preserved": true,
+      "validation": "printed-source-square KIF-to-CSA conversion; 1 of 1 bounded game accepted by Rust"
+    }
+  },
+  "overlap": {
+    "canonical_cross_source_overlap": "unavailable_until_canonical_join",
+    "transposition_overlap": "unavailable_until_canonical_join",
+    "split_leakage_scan": "not_run_on_external_training_splits; no external split created",
+    "raw_record_hash_is_dedup_key": false
+  },
+  "verification_boundaries": {
+    "baseline_make_check_before_phase10r_source_changes": "passed",
+    "full_make_check_after_final_changes": "passed",
+    "training": false,
+    "teacher_relabeling": false,
+    "self_play": false,
+    "arena": false,
+    "promotion": false,
+    "push_release_deploy": false
+  }
+}

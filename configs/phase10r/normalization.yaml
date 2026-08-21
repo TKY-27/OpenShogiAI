@@ -1,0 +1,53 @@
+schema_version: 1
+normalization_id: phase10r-source-preserving-v1
+record_schema: phase10r_normalized_record/v1
+source_identity:
+  retain_source_id: true
+  retain_artifact_id: true
+  retain_exact_artifact_name: true
+  retain_source_revision: true
+  retain_raw_record_sha256: true
+  retain_parser_version: true
+position:
+  canonical_position_required_before_training: true
+  retain_history: true
+  retain_side_to_move: true
+  retain_legal_move_map: true
+  retain_raw_position_encoding: true
+  unknown_position_policy: quarantine
+score:
+  retain_raw_value: true
+  retain_semantics: true
+  retain_perspective: true
+  retain_scale: true
+  retain_mate_representation: true
+  unknown_semantics_policy: quarantine
+formats:
+  csa:
+    adapter: csa_source_preserving
+    text_encodings: [utf-8, cp932]
+    legality: open-shogi-cli-rule-engine
+  kif:
+    adapter: kif_source_preserving
+    text_encodings: [utf-8, cp932]
+    legality: kif-to-csa-then-open-shogi-cli-rule-engine
+  hcpe:
+    adapter: hcpe_fixed_38_byte
+    legality: packed-position-decoder-then-open-shogi-cli-rule-engine
+  hcpe3:
+    adapter: hcpe3_variable_record
+    legality: packed-position-decoder-then-open-shogi-cli-rule-engine
+  packed_sfen_value:
+    adapter: packed_sfen_value_fixed_40_byte
+    legality: packed-position-decoder-then-open-shogi-cli-rule-engine
+  binpack:
+    adapter: packed_sfen_value_fixed_40_byte
+    legality: packed-position-decoder-then-open-shogi-cli-rule-engine
+validation:
+  reject_malformed_kings: true
+  reject_invalid_hands: true
+  reject_illegal_moves: true
+  reject_bad_score_perspective: true
+  reject_bad_move_index: true
+  roundtrip_required: true
+  source_bytes_are_immutable: true

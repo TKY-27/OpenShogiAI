@@ -18,6 +18,9 @@ htmlcov/
 /training/data/processed/
 /artifacts/*
 !/artifacts/README.md
+!/artifacts/phase10r/
+/artifacts/phase10r/*
+!/artifacts/phase10r/data-foundation-manifest.json
 /local/*
 !/local/README.md
 
