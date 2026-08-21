@@ -21,7 +21,8 @@ export UV_CACHE_DIR
 	feature-ablation phase4-migrate-label-manifest phase5-arena \
 	phase5-arena-verify phase6-validate-config \
 	phase7-validate-config phase7-plan phase7-commands phase7-prepare-games \
-	phase7-analyze phase7-curate phase7-verify phase10-verify-frozen
+	phase7-analyze phase7-curate phase7-verify phase10-verify-frozen \
+	phase10r-validate phase10r-sanity phase10r-micro-overfit phase10r-memory
 
 PHASE2_ARENA_DIR ?= artifacts/phase2-arena
 PHASE2_GIT_COMMIT ?= $(shell git rev-parse --verify HEAD)
@@ -98,6 +99,10 @@ help:
 	@echo "  make phase7-curate   Publish quarantined hard-example candidates"
 	@echo "  make phase7-verify   Revalidate the complete Phase 7 evidence chain"
 	@echo "  make phase10-verify-frozen Verify the frozen Phase 10 plan, configs, and hashes"
+	@echo "  make phase10r-validate Verify the frozen Phase 10R-B architecture and hashes"
+	@echo "  make phase10r-sanity Run bounded Phase 10R pipeline semantic gates"
+	@echo "  make phase10r-micro-overfit Prove the tiny multi-head pipeline can memorize"
+	@echo "  make phase10r-memory Validate M5/browser model memory estimates"
 	@echo "  make wasm-build      Build the Wasm engine and regenerate interface bindings"
 	@echo "  make wasm-web-check  Verify committed Wasm bindings are reproducible"
 
@@ -190,6 +195,18 @@ phase3-validate-registry:
 
 phase10-verify-frozen:
 	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10 verify --root .
+
+phase10r-validate:
+	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r validate --root .
+
+phase10r-sanity:
+	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r sanity --root .
+
+phase10r-micro-overfit:
+	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r micro-overfit
+
+phase10r-memory:
+	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r memory --root .
 
 phase3-dry-run:
 	PYTHONPATH=training uv run python -m open_shogi_training.data dry-run \
