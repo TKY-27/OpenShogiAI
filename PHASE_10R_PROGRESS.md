@@ -8,8 +8,8 @@ The campaign is **blocked before the 1m rung**. No bulk acquisition, normalizati
 existing Phase 10R-A samples, training, teacher relabeling, Arena, cross-play, self-play, model
 promotion, holdout inspection, push, release, or deployment was performed.
 
-The clean execution branch is `codex/phase10r-curriculum`, commit
-`91018fd3e2a539d7c00888f3cca8bd8870f460f1`. The objective requested
+The clean execution branch is `codex/phase10r-curriculum`, with the latest execution-infrastructure
+commit `414fa0b`. The objective requested
 `codex/phase10r-execution`, but the immutable execution prompt requires
 `codex/phase10r-curriculum`; the prompt's exact branch lock was treated as the more restrictive
 rule.
@@ -44,7 +44,7 @@ rule.
 - Receipts and append-only events: `local/phase10r-runs/`
 - Machine report: `local/phase10r-runs/PHASE10R_EXECUTION_REPORT.json`
 - Human report: `local/phase10r-runs/PHASE10R_EXECUTION_REPORT.md`
-- Latest preflight receipt: `local/phase10r-runs/20260821T141635.336464Z-preflight.json`
+- Latest preflight receipt: `local/phase10r-runs/20260821T141935.148033Z-preflight.json`
 
 ## Exact next command
 
