@@ -1,0 +1,116 @@
+schema: open_shogi_phase10_statistical_gates/v1
+frozen_as_of: "2026-08-21"
+score_definition: win plus one half draw divided by finished win-loss-draw games; max-plies and incomplete games are not silently draws
+confidence_method: Wilson score interval on half-draw score with confidence_level 0.95, reported together with paired-color bootstrap
+multiple_candidate_policy: fixed two-variant matrix followed by one winner; no threshold tuning after results
+
+gates:
+  - gate_id: data_integrity
+    order: 1
+    requirements:
+      validator_exit_code: 0
+      pending_or_denied_training_rows: 0
+      cross_split_exact_canonical_duplicates: 0
+      public_holdout_training_rows: 0
+      unknown_perspective_value_rows: 0
+      incompatible_score_averages: 0
+      unverified_game_group_rows: 0
+
+  - gate_id: offline_gate
+    order: 2
+    applies_to: pure_learned
+    validation_only: true
+    requirements:
+      approved_teacher_cp_raw_mae_maximum: 870.0
+      approved_teacher_cp_pearson_minimum: 0.40
+      engine_bestmove_agreement_minimum: 0.18
+      mate_sign_accuracy_minimum: 0.90
+      source_style_report_required: true
+      cross_runtime_exact_cp_agreement: true
+      minimum_search_context_inferences_per_second: 3000
+      maximum_search_slowdown_vs_pure_2x128: 1.50
+    failure_action: stop_variant_before_arena
+
+  - gate_id: arena_pilot_40
+    order: 3
+    applies_to: pure_learned
+    games: 40
+    paired_start_positions: 20
+    unique_paired_starts_per_group: 5
+    equal_wall_clock: true
+    requirements:
+      minimum_finished_games: 40
+      minimum_decisive_games: 8
+      minimum_score_rate: 0.30
+      maximum_illegal_moves: 0
+      maximum_crashes: 0
+      maximum_tactical_regressions: 0
+      maximum_side_score_gap: 0.20
+    failure_action: stop_variant
+
+  - gate_id: supervised_48_entry
+    order: 4
+    applies_to: pure_learned
+    purpose: frozen prerequisite for any Phase 10 self-play
+    games: 160
+    paired_start_positions: 80
+    unique_paired_starts_per_group: 20
+    equal_wall_clock: true
+    requirements:
+      minimum_finished_games: 160
+      minimum_decisive_games: 32
+      minimum_score_rate: 0.48
+      minimum_wilson_lower: 0.40
+      minimum_start_group_score_rate: 0.40
+      maximum_side_score_gap: 0.15
+      maximum_illegal_moves: 0
+      maximum_crashes: 0
+      maximum_tactical_regressions: 0
+    pass_action: permit_one_bounded_200_game_selfplay_generation_without_promotion
+    failure_action: no_selfplay_and_stop
+
+  - gate_id: final_pure_learned_55
+    order: 5
+    applies_to: pure_learned
+    purpose: final Phase 10 objective against fixed handcrafted-experimental
+    games: 400
+    paired_start_positions: 200
+    unique_paired_starts_per_group: 50
+    equal_wall_clock: true
+    requirements:
+      minimum_finished_games: 400
+      minimum_decisive_games: 80
+      minimum_score_rate: 0.55
+      minimum_wilson_lower: 0.50
+      minimum_start_group_score_rate: 0.50
+      maximum_side_score_gap: 0.10
+      maximum_illegal_moves: 0
+      maximum_crashes: 0
+      maximum_tactical_regressions: 0
+      handcrafted_runtime_score_contribution: false
+      third_party_weights: false
+    pass_action: record_objective_met_but_do_not_promote
+    failure_action: record_objective_not_met_and_do_not_promote
+
+arena_contract:
+  incumbent: handcrafted-experimental
+  movetime_ms: 10
+  depth_cap: 8
+  hash_mib_per_player: 32
+  max_plies: 128
+  paired_colors: true
+  opening_enabled: false
+  seed: 20260821
+  start_group_weights:
+    general_opening: 0.25
+    ibisha: 0.25
+    opponent_furibisha: 0.25
+    hard_middlegame_endgame: 0.25
+  tactical_suite: configs/evaluation/overall_champion_tactical_suite.json
+  tactical_suite_sha256: 90648b1fd1c6e2dacadc30204e1161e79815ba0bb7df2afd498450c9c8d4f79a
+
+holdout_gate:
+  maximum_phase10_final_holdout_inspections: 1
+  inspect_only_after_final_pure_learned_candidate_and_all_hyperparameters_are_hash_frozen: true
+  public_test_inspections: 0
+  holdout_result_may_select_or_retrain: false

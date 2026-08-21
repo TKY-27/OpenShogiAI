@@ -1,0 +1,95 @@
+schema: open_shogi_phase10_split_policy/v1
+frozen_as_of: "2026-08-21"
+split_salt: open-shogi-ai-phase10-v1-20260821
+assignment_unit: protected_game_or_history_group_before_position_extraction
+addition_stable: true
+
+canonical_position:
+  serialization: canonical SFEN board, hands, and side-to-move; move number omitted
+  hash: sha256
+  mirror_equivalence: false
+  color_rotation_equivalence: false
+  exact_cross_format_comparison_requires_legal_replay: true
+
+protected_group:
+  exact_game_identity_first: true
+  history_group_identity: sha256 of canonical initial SFEN plus the first min(24, game ply count) legal USI moves
+  source_lineage_grouping: true
+  start_position_descendants_grouped: true
+  near_duplicate_policy: Group exact histories and protected start descendants; report other similarity but do not merge non-identical boards heuristically.
+
+assignment:
+  ratios_basis_points: {train: 8000, validation: 1000, final_holdout: 1000}
+  hash_input: split_salt NUL canonical source-lineage ID NUL protected-group SHA-256 bytes
+  cross_split_duplicate_priority: [public_test_holdout, final_holdout, source_held_out, validation, train]
+  same_priority_duplicate_rule: retain lexicographically smallest source artifact ID then record ID
+  positions_from_one_group_share_split: true
+  split_after_position_extraction: false
+
+cross_source_duplicates:
+  one_training_row_per_canonical_position: true
+  label_attachment: Preserve source-specific target objects and masks on one row; never average incompatible numeric scores.
+  training_precedence:
+    - approved OpenShogiAI teacher calibration label
+    - approved factual WDL
+    - approved MCTS policy distribution
+    - approved source-local alpha-beta value
+  holdout_precedence_over_training: true
+  lineage_unknown_means_no_training: true
+
+style_coverage:
+  classifier: Existing OpenShogiAI opening sequence/position-structure classifier; never a single rook-file test.
+  train_sampling_caps:
+    maximum_ibisha_fraction: 0.60
+    maximum_other_or_unknown_fraction: 0.60
+    minimum_opponent_furibisha_fraction_when_available: 0.10
+  arena_start_pool:
+    require_unique_legal_positions: true
+    minimum_unique_per_group: 50
+    maximum_pair_reuse: 1
+    groups: [general_opening, ibisha, opponent_furibisha, hard_middlegame_endgame]
+    insufficient_group_action: fail screening-plan construction; do not duplicate or synthesize starts
+
+immutable_holdouts:
+  - holdout_id: phase3-legacy-final-test
+    source: aobazero-no-noise-exact100
+    current_rows: 1064
+    current_manifest_sha256: edeab652bd825410f46bab3010d3e8a017f33cd281cd0f28329d8eaab2a2cb54
+    prior_inspections: 1
+    training_allowed: false
+    validation_allowed: false
+    arena_start_allowed: false
+    phase10_maximum_additional_inspections: 1
+    inspection_condition: Exactly one fully frozen pure-learned finalist after all model and Arena selection is complete.
+  - holdout_id: tayayan-public-test-family
+    source_artifacts: [tayayan-gokaku-36-sfen, tayayan-gokaku-36-generated-5247]
+    manifest_sha256: null
+    training_allowed: false
+    validation_allowed: false
+    arena_start_allowed: false
+    maximum_inspections: 0
+    status: reserved_but_not_authorized_or_acquired
+  - holdout_id: dlshogi-public-evaluation-test
+    source_artifacts: [dlshogi-public-evaluation-test]
+    manifest_sha256: null
+    training_allowed: false
+    validation_allowed: false
+    arena_start_allowed: false
+    maximum_inspections: 0
+    status: immutable_public_test_not_authorized_or_acquired
+
+source_held_out_generalization:
+  enabled_for_active_sources: true
+  current_tests:
+    - test_id: aobazero-game-held-out
+      source: aobazero-no-noise-exact100
+      split: final_holdout
+      selection_use: prohibited
+  future_rule: Each newly authorized source must reserve at least 10% of protected groups before normalization and must be evaluated by a model trained with that entire source omitted.
+  future_activation_allowed_under_this_plan: false
+
+inspection_log:
+  required_fields: [holdout_id, artifact_sha256, candidate_sha256, purpose, timestamp_utc, git_commit, result_sha256]
+  append_only: true
+  selection_from_holdout_result: false
+  public_result_comparison_before_finalist_freeze: false

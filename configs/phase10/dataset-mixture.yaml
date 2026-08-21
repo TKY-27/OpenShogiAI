@@ -1,0 +1,311 @@
+schema: open_shogi_phase10_dataset_mixture/v1
+frozen_as_of: "2026-08-21"
+audit_catalog: configs/data_sources_external.yaml
+audit_manifest: artifacts/phase10a/audit-manifest.json
+deny_by_default: true
+
+roles:
+  - policy_pretraining
+  - value_wdl_pretraining
+  - ranking_supervision
+  - opening_start_position_pool
+  - validation
+  - external_holdout
+
+global_rules:
+  one_training_row_per_canonical_position: true
+  attach_compatible_labels_as_masks: true
+  average_cross_source_scores: false
+  convert_unknown_scores_to_centipawns: false
+  pending_license_weight: 0.0
+  rejected_weight: 0.0
+  per_game_epoch_cap_fraction: 0.02
+  per_opening_prefix_epoch_cap_fraction: 0.05
+  source_weight_renormalization: within_active_stage_only
+
+derived_controls:
+  - control_id: openshogiai-apery-v2-labels
+    artifact_subset: artifacts/phase4/teacher/labels-v2/labels.jsonl bound by manifest.json
+    provenance: OpenShogiAI-selected positions analyzed by the approved separate Apery v2.0.0 teacher
+    roles: [ranking_supervision, validation]
+    stage_weights:
+      representation_policy: 0.0
+      source_value: 0.0
+      canonical_calibration: 1.0
+      hard_position_finetune: 0.75
+    maximum_contribution_fraction: 1.0
+    runtime_score_contribution: false
+    release_constraint: Teacher binaries, evaluation files, raw labels, and generated weights remain unpublished pending their own review.
+
+sources:
+  - artifact_id: aobazero-no-noise-exact100
+    audit_status: approved
+    curriculum_decision: accepted
+    exact_artifact_subset: configs/data_source_objects/aobazero_no_noise.yaml exact 100-object catalog only
+    roles: [value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation]
+    prohibited_roles: [policy_pretraining, external_holdout]
+    stage_weights:
+      representation_policy: 1.0
+      source_value: 1.0
+      canonical_calibration: 1.0
+      hard_position_finetune: 0.25
+    maximum_contribution_fraction: 1.0
+    deduplication_priority: 500
+    target_constraints: Use only legally replayed positions, verified factual outcomes, and OpenShogiAI-teacher labels; ignore raw AobaZero v annotations because semantics and perspective are unknown.
+    attribution_release_constraints: Public Domain evidence is pinned for this exact catalog; do not expand the catalog. Generated-weight distribution remains pending independent review.
+
+  - artifact_id: aobazero-no-noise-w4745-sample
+    audit_status: approved
+    curriculum_decision: accepted
+    exact_artifact_subset: w4745.csa only, already contained in aobazero-no-noise-exact100
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights:
+      representation_policy: 0.0
+      source_value: 0.0
+      canonical_calibration: 0.0
+      hard_position_finetune: 0.0
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Format-audit fixture only; never count it as a second source or second training copy.
+    attribution_release_constraints: Inherits the exact-100 decision; the transient sample body is not a separately released training artifact.
+
+  - artifact_id: aobazero-live-no-noise-sample-index
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Current index hash differs from pinned evidence; no discovery or catalog expansion.
+    attribution_release_constraints: Training, derived weights, redistribution, commercial use, and attribution remain pending.
+
+  - artifact_id: aobazero-daily-public-records
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Exact manifest and dataset-specific permission are absent.
+    attribution_release_constraints: All downstream rights and attribution requirements remain pending.
+
+  - artifact_id: dlshogi-gct-hcpe3-selfplay
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none; pattern hcpe3/selfplay_gct-???.hcpe3.xz is not an exact manifest
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: If ever reauthorized, MCTS visits and source eval remain separate target lanes; no cp conversion.
+    attribution_release_constraints: No formal downstream dataset grant; all required rights remain pending.
+
+  - artifact_id: dlshogi-gct-floodgate-hcpe3
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Floodgate lineage is not source-authorized; no labels or starts may enter any split.
+    attribution_release_constraints: Exact files and downstream rights remain pending.
+
+  - artifact_id: dlshogi-gct-taya36-hcpe3
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Taya-derived lineage is protected as a contamination group.
+    attribution_release_constraints: Rights remain pending; cannot be approved by this plan.
+
+  - artifact_id: dlshogi-gct-model-taya36-hcpe3
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Model and Taya lineage are unresolved and protected.
+    attribution_release_constraints: Training and derived-weight permission remain pending.
+
+  - artifact_id: dlshogi-gct-aobazero-hcpe
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Confirmed AobaZero lineage makes crosswalk and exact dedup mandatory before any future use.
+    attribution_release_constraints: Converted artifact rights and derived-weight terms remain pending.
+
+  - artifact_id: dlshogi-gct-floodgate-play-hcpe
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Mixed Floodgate, tournament, and local lineage cannot be separated.
+    attribution_release_constraints: Source-level permissions and attribution are unresolved.
+
+  - artifact_id: dlshogi-gct-taya36-rl-hcpe
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Protected Taya lineage; exact overlap is unknown and must not be treated as zero.
+    attribution_release_constraints: Rights remain pending.
+
+  - artifact_id: dlshogi-gct-yaneura36-rl-hcpe
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Exact identity inventory, perspective, FV_SCALE, and permission are absent.
+    attribution_release_constraints: Rights remain pending.
+
+  - artifact_id: dlshogi-gct-suisho-teacher-hcpe
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Publication permission is not a downstream training grant; source score stays uninterpreted.
+    attribution_release_constraints: Training, derived weights, redistribution, and commercial use remain pending.
+
+  - artifact_id: nodchip-shogi-hao-depth9
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none; representative shard metadata is evidence only
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: PSV score, perspective, FV_SCALE, mate encoding, and game grouping must be proven before future use.
+    attribution_release_constraints: HF metadata is not accepted as a dataset-file grant; rights remain pending.
+
+  - artifact_id: nodchip-tanuki-nnue-pytorch-2024-07-30-1
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none; representative shard metadata is evidence only
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: PSV score, perspective, FV_SCALE, mate encoding, and overlap with Hao are unknown.
+    attribution_release_constraints: Dataset-file and derived-weight rights remain pending.
+
+  - artifact_id: tayayan-gokaku-36-sfen
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none; entire named set is reserved as a public-test family
+    roles: [external_holdout]
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 1000
+    target_constraints: Reserve lineage only; do not download or inspect until holdout rights and manifest are approved.
+    attribution_release_constraints: Public availability is not permission; all reuse conditions remain pending.
+
+  - artifact_id: tayayan-gokaku-36-generated-5247
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none; entire named derivative is reserved with the original Taya family
+    roles: [external_holdout]
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 1000
+    target_constraints: Treat original and derivative as one protected family; reported overlap is not independently remeasured.
+    attribution_release_constraints: Rights and exact encoding remain pending.
+
+  - artifact_id: tayayan-suisho-teacher-kif
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: KIF must be legally replayed and joined to exact game identities; score semantics are not inferred.
+    attribution_release_constraints: Complete downstream rights remain pending.
+
+  - artifact_id: tayayan-suisho-teacher-psv
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: PSV scale, perspective, mate encoding, and KIF/PSV duplicate relation remain unknown.
+    attribution_release_constraints: Complete downstream rights remain pending.
+
+  - artifact_id: qhapaq-qpd-train
+    audit_status: pending
+    curriculum_decision: deferred
+    exact_artifact_subset: none; QPD_train.7z was not inspected
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Internal format and source lineage are unknown; no acquisition under this plan.
+    attribution_release_constraints: Attribution is known to be required for event/publication use, while other rights remain pending.
+
+  - artifact_id: dlshogi-public-evaluation-test
+    audit_status: denied
+    curriculum_decision: rejected
+    exact_artifact_subset: none; reserve the named public-test lineage if later manifested
+    roles: [external_holdout]
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 1100
+    target_constraints: Never train, tune, calibrate, select, or choose Arena starts from this public test.
+    attribution_release_constraints: Holdout designation is known; acquisition and publication require a later rights decision.
+
+  - artifact_id: open-shogiai-floodgate
+    audit_status: denied
+    curriculum_decision: rejected
+    exact_artifact_subset: none
+    roles: []
+    prohibited_roles: [policy_pretraining, value_wdl_pretraining, ranking_supervision, opening_start_position_pool, validation, external_holdout]
+    stage_weights: {representation_policy: 0.0, source_value: 0.0, canonical_calibration: 0.0, hard_position_finetune: 0.0}
+    maximum_contribution_fraction: 0.0
+    deduplication_priority: 0
+    target_constraints: Source remains disabled and disallowed for machine learning.
+    attribution_release_constraints: Training, derived weights, and redistribution are denied.

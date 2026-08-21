@@ -18,7 +18,7 @@
     "release_performed": false
   },
   "storage_pre_audit": {
-    "path": "/Users/anag2bgod/Projects/OpenShogiAI",
+    "path": ".",
     "free_bytes_before": 345509875712,
     "free_gib_before": 321.77,
     "minimum_free_bytes": 214748364800,

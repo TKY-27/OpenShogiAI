@@ -21,7 +21,7 @@ scope:
     Missing permission is recorded as pending and is not inferred from public reachability.
 
 storage_pre_audit:
-  inspected_path: /Users/anag2bgod/Projects/OpenShogiAI
+  inspected_path: .
   inspected_at: "2026-08-21T00:00:00+09:00"
   free_bytes_before: 345509875712
   free_gib_before: 321.77
@@ -720,7 +720,7 @@ artifacts:
 
 decision_counts:
   approved: 2
-  pending: 15
+  pending: 18
   denied: 2
   note: >-
     The approved count includes the existing exact catalog and its bounded w4745 sample;

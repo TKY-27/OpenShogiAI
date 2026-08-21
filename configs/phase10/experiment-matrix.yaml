@@ -1,0 +1,111 @@
+schema: open_shogi_phase10_experiment_matrix/v1
+frozen_as_of: "2026-08-21"
+matrix_policy: smallest_pair_that_tests_capacity_plus_tactical_features_against_the_current_pure_control
+seed: 20260729
+
+architecture_contract:
+  runtime_container: OSAVAL01
+  runtime_architecture_version: 1
+  trunk: uniform-width fully connected ReLU MLP
+  runtime_output: one side-to-move scalar value
+  training_only_heads: [binary_policy_agreement_diagnostic]
+  runtime_handcrafted_features: none
+  allowed_inputs: [absolute_color_piece_planes, normalized_hand_counts, side_to_move, king_coordinates, deterministic_pseudo_attack_maps]
+  forbidden_changes: [convolutional_trunk, transformer_trunk, residual_runtime_score, composite_runtime_score, third_party_initialization, external_policy_head]
+  note: Pseudo-attack maps are deterministic position features, not a handcrafted score contribution.
+
+variants:
+  - variant_id: pure-v1-2x128-control
+    eligibility: pure_learned_objective
+    features:
+      board_planes: true
+      hand_counts: true
+      side_to_move: true
+      king_coordinates: true
+      pseudo_attacks: false
+      input_dimension: 2287
+    model:
+      hidden_layers: 2
+      hidden_dimension: 128
+      activation: relu
+      dropout: 0.10
+      output_scale_cp: 1200.0
+    parameters: {training: 309634, exported: 309505}
+    maximum_float32_artifact_bytes: 1300000
+    purpose: Reproduce the current pure learned control under the new curriculum.
+
+  - variant_id: pure-v1-3x256-attacks
+    eligibility: pure_learned_objective
+    features:
+      board_planes: true
+      hand_counts: true
+      side_to_move: true
+      king_coordinates: true
+      pseudo_attacks: true
+      input_dimension: 2449
+    model:
+      hidden_layers: 3
+      hidden_dimension: 256
+      activation: relu
+      dropout: 0.10
+      output_scale_cp: 1200.0
+    parameters: {training: 759298, exported: 759041}
+    maximum_float32_artifact_bytes: 3100000
+    purpose: Test one bounded capacity increase plus already-implemented tactical position features.
+
+diagnostic_controls:
+  - control_id: residual-v1-2x128-historical
+    evaluator_kind: residual
+    new_training_run: false
+    objective_eligible: false
+    evidence: PHASE_9_REPORT.md residual 2x128 equal-wall-clock gate
+  - control_id: handcrafted-experimental-fixed
+    evaluator_kind: handcrafted-experimental
+    new_training_run: false
+    objective_eligible: false
+    role: fixed Arena opponent only
+
+dataset_rungs:
+  - rung_id: pilot
+    train_unique_cap: 7042
+    validation_unique_cap: 1894
+    hard_position_cap: 1000
+    variants: [pure-v1-2x128-control, pure-v1-3x256-attacks]
+    expansion_gate: offline_gate
+  - rung_id: approved_exact100_full
+    train_unique_cap: 12000
+    validation_unique_cap: all_immutable_validation_rows
+    hard_position_cap: 2000
+    variants: [best_pilot_variant_only]
+    expansion_gate: arena_pilot_40
+    rule: Use only additional unique non-test positions from the same exact approved 100 games; do not acquire a new source.
+  - rung_id: self_play_generation_1
+    train_unique_cap: 50000
+    validation_unique_cap: unchanged
+    hard_position_cap: 5000
+    variants: [supervised_48_entry_winner_only]
+    expansion_gate: supervised_48_entry
+    rule: Factual WDL only; no teacher relabeling and no promotion.
+
+selection:
+  training_replicates_per_variant: 1
+  deterministic_seed_count: 1
+  checkpoint_selection_split: validation
+  final_holdout_selection_use: false
+  compare_variants_on_equal_examples_and_steps: true
+  tie_break_order:
+    - higher arena score rate
+    - higher validation bestmove agreement
+    - lower approved-teacher cp MAE
+    - fewer exported parameters
+  maximum_new_supervised_training_runs: 3
+  maximum_new_arena_candidates: 2
+
+performance_constraints:
+  reference_host: Apple M5 24GB
+  maximum_exported_parameters: 800000
+  maximum_runtime_model_bytes: 4194304
+  minimum_search_context_inferences_per_second: 3000
+  maximum_search_slowdown_vs_pure_2x128: 1.50
+  cross_runtime_cp_difference: 0
+  quantization_for_strength_gates: float32

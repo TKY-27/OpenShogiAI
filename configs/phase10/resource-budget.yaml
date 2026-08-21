@@ -1,0 +1,57 @@
+schema: open_shogi_phase10_resource_budget/v1
+frozen_as_of: "2026-08-21"
+reference_host:
+  platform: Apple M5
+  physical_memory_bytes: 25769803776
+  physical_memory_gib: 24
+
+memory:
+  maximum_process_tree_rss_bytes: 17179869184
+  maximum_process_tree_rss_gib: 16
+  maximum_aggregate_working_memory_bytes: 21474836480
+  maximum_aggregate_working_memory_gib: 20
+  maximum_mps_training_workers: 1
+  maximum_teacher_workers: 1
+  maximum_cpu_threads_per_training_process: 4
+  maximum_dataloader_workers: 2
+  maximum_batch_size: 512
+  memory_probe_interval_seconds: 1
+  breach_action: terminate_current_stage_and_mark_resource_failure
+
+disk:
+  inspected_filesystem: .
+  minimum_free_bytes: 214748364800
+  minimum_free_gib: 200
+  maximum_incremental_phase10_bytes: 34359738368
+  maximum_incremental_phase10_gib: 32
+  allocations_bytes:
+    raw_and_normalized_approved_data: 2147483648
+    teacher_labels_and_indexes: 8589934592
+    checkpoints_and_exports: 8589934592
+    arena_and_selfplay_artifacts: 8589934592
+    logs_reports_and_headroom: 6442450944
+  preflight_required_before_each_stage: true
+  check_during_streaming_every_bytes: 1073741824
+  full_external_dataset_download_allowed: false
+  decompressed_json_materialization_allowed: false
+  breach_action: stop_before_write_and_preserve_existing_artifacts
+
+time:
+  maximum_single_supervised_run_wall_seconds: 3600
+  maximum_pilot_arena_wall_seconds: 900
+  maximum_entry_arena_wall_seconds: 3600
+  maximum_first_selfplay_generation_wall_seconds: 7200
+  long_job_requires_new_authorization: true
+
+arena:
+  concurrent_games: 1
+  hash_mib_per_player: 32
+  process_memory_ceiling_bytes: 4294967296
+
+artifact_retention:
+  keep_best_checkpoints_per_run: 1
+  keep_last_checkpoint: true
+  keep_epoch_checkpoints: false
+  retain_raw_external_scores: true
+  retain_normalized_duplicate_rows: false
+  commit_generated_weights_or_datasets: false

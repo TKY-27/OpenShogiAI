@@ -21,7 +21,7 @@ export UV_CACHE_DIR
 	feature-ablation phase4-migrate-label-manifest phase5-arena \
 	phase5-arena-verify phase6-validate-config \
 	phase7-validate-config phase7-plan phase7-commands phase7-prepare-games \
-	phase7-analyze phase7-curate phase7-verify
+	phase7-analyze phase7-curate phase7-verify phase10-verify-frozen
 
 PHASE2_ARENA_DIR ?= artifacts/phase2-arena
 PHASE2_GIT_COMMIT ?= $(shell git rev-parse --verify HEAD)
@@ -97,6 +97,7 @@ help:
 	@echo "  make phase7-analyze  Teacher-analyze all recorded move positions"
 	@echo "  make phase7-curate   Publish quarantined hard-example candidates"
 	@echo "  make phase7-verify   Revalidate the complete Phase 7 evidence chain"
+	@echo "  make phase10-verify-frozen Verify the frozen Phase 10 plan, configs, and hashes"
 	@echo "  make wasm-build      Build the Wasm engine and regenerate interface bindings"
 	@echo "  make wasm-web-check  Verify committed Wasm bindings are reproducible"
 
@@ -186,6 +187,9 @@ phase3-clean-worktree:
 phase3-validate-registry:
 	PYTHONPATH=training uv run python -m open_shogi_training.data validate-registry \
 		--registry "$(PHASE3_REGISTRY)"
+
+phase10-verify-frozen:
+	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10 verify --root .
 
 phase3-dry-run:
 	PYTHONPATH=training uv run python -m open_shogi_training.data dry-run \

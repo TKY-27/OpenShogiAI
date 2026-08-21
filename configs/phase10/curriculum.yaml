@@ -1,0 +1,162 @@
+schema: open_shogi_phase10_curriculum/v1
+frozen_as_of: "2026-08-21"
+seed: 20260729
+final_runtime_evaluator: pure_learned
+handcrafted_runtime_score_contribution: false
+third_party_initial_weights: false
+
+target_semantics:
+  canonical_perspective: side_to_move
+  position_identity: canonical SFEN board, hands, and side-to-move with move number omitted; no mirror or color rotation
+  factual_wdl:
+    encoding: {win: 1.0, draw: 0.0, loss: -1.0}
+    loss: source_masked_brier
+    rule: Convert black/white result only when the legally replayed side-to-move is known.
+  wdl_probabilities:
+    loss: source_local_cross_entropy
+    rule: Keep W/D/L probabilities and their declared perspective; never map them to centipawns.
+  hcpe3_mcts_policy:
+    loss: masked_cross_entropy
+    normalization: candidate visit count divided by the positive sum of candidate visits
+    missing_legal_moves: masked_unknown
+    rule: Preserve raw visits, playout count, temperature metadata, and selected move; do not treat visits as alpha-beta scores.
+    active_in_frozen_plan: false
+    inactive_reason: No audited hcpe3 artifact has approved training and derived-weight rights.
+  alpha_beta_centipawns:
+    loss: source_local_huber
+    clipping: only the approved OpenShogiAI teacher's predeclared 3000 cp clip
+    rule: Compare or regress cp only within one documented engine/config/FV_SCALE lane.
+  mate_scores:
+    loss: signed_mate_margin
+    runtime_mapping: none
+    rule: Keep mate kind, sign, and distance separate; supervise sign and ordering, never fabricate a centipawn value.
+  fv_scale:
+    rule: Retain source-native scale metadata. No cross-source rescaling without an official formula and a new frozen-plan revision.
+  unknown_score:
+    value_loss_mask: 0.0
+    rule: Preserve raw value for provenance but exclude it from value, calibration, and ranking objectives.
+
+stages:
+  - stage_id: representation_policy
+    order: 1
+    active: true
+    input_roles: [value_wdl_pretraining]
+    trainable_components: [feature_trunk, value_head]
+    objectives:
+      factual_wdl_weight: 1.0
+      policy_distribution_weight: 0.0
+      teacher_cp_weight: 0.0
+      mate_margin_weight: 0.0
+      ranking_weight: 0.0
+    dataset_size:
+      pilot_unique_positions: 7042
+      maximum_unique_positions: all approved train-split canonical positions
+    epochs: {minimum: 2, maximum: 12, patience: 3, minimum_delta: 0.002}
+    output: representation checkpoint selected only on validation WDL loss
+    notes: Policy pretraining was considered and is frozen off because the only policy-distribution candidates are license-pending hcpe3 artifacts. The existing binary policy-agreement head is not a move policy and is not used as a substitute.
+
+  - stage_id: source_value
+    order: 2
+    active: true
+    input_roles: [value_wdl_pretraining]
+    trainable_components: [feature_trunk, value_head]
+    objectives:
+      factual_wdl_weight: 1.0
+      source_local_value_weight: 0.0
+      cross_source_score_weight: 0.0
+    dataset_size:
+      pilot_unique_positions: 7042
+      maximum_unique_positions: all approved train-split canonical positions with verified outcomes
+    epochs: {minimum: 1, maximum: 8, patience: 2, minimum_delta: 0.002}
+    output: source-value checkpoint
+    notes: AobaZero raw v annotations have unknown semantics and perspective, so only factual verified outcomes are active.
+
+  - stage_id: canonical_calibration
+    order: 3
+    active: true
+    input_roles: [ranking_supervision]
+    teacher: openshogiai-apery-v2-labels
+    trainable_components: [feature_trunk, value_head, policy_agreement_diagnostic_head]
+    objectives:
+      approved_teacher_cp_huber_weight: 1.0
+      factual_wdl_weight: 0.2
+      same_teacher_candidate_ranking_weight: 0.15
+      signed_mate_margin_weight: 0.15
+      binary_policy_agreement_diagnostic_weight: 0.05
+    dataset_size:
+      pilot_train_unique_positions: 7042
+      pilot_validation_unique_positions: 1894
+      maximum_unique_positions: all approved non-test canonical positions labeled by the frozen teacher config
+    epochs: {minimum: 2, maximum: 20, patience: 3, minimum_delta: 0.002}
+    output: canonical pure-learned checkpoint
+    notes: Centipawn labels, mate labels, factual outcomes, and rankings retain separate masks and losses. Only the value trunk/head are exported.
+
+  - stage_id: hard_position_finetune
+    order: 4
+    active: true
+    input_roles: [ranking_supervision]
+    selection:
+      from_splits: [train]
+      maximum_unique_positions: 2000
+      maximum_fraction_of_epoch: 0.25
+      maximum_positions_per_game: 16
+      strata:
+        teacher_absolute_error_top_fraction: 0.20
+        sign_disagreement: include_all_within_cap
+        mate_positions: include_all_within_cap
+        close_multipv_gap_cp: 120
+        opponent_furibisha: include_all_within_cap
+        ibisha: include_all_within_cap
+    objectives:
+      approved_teacher_cp_huber_weight: 1.0
+      factual_wdl_weight: 0.2
+      same_teacher_candidate_ranking_weight: 0.25
+      signed_mate_margin_weight: 0.25
+    epochs: {minimum: 1, maximum: 6, patience: 2, minimum_delta: 0.001}
+    output: one frozen candidate per model variant
+
+  - stage_id: equal_wall_clock_screening
+    order: 5
+    active: true
+    depends_on: hard_position_finetune
+    opponent: handcrafted-experimental
+    opening_book: disabled
+    budget: {movetime_ms: 10, depth_cap: 8, hash_mib_per_player: 32, max_plies: 128}
+    paired_colors: true
+    start_groups:
+      general_opening: 0.25
+      ibisha: 0.25
+      opponent_furibisha: 0.25
+      hard_middlegame_endgame: 0.25
+    screen_sequence: [offline_gate, arena_pilot_40, supervised_48_entry]
+    output: immutable arena reports; no registry mutation
+
+  - stage_id: bounded_self_play
+    order: 6
+    active: false
+    activation_gate: supervised_48_entry
+    activation_rule: Activate only after the exact gate validator returns pass for a pure-learned candidate.
+    first_generation_limit:
+      games: 200
+      paired_colors: true
+      unique_start_pairs: 100
+      maximum_new_train_positions: 50000
+      teacher_relabel_positions: 0
+    output: factual WDL replay only
+    promotion_allowed: false
+
+expansion_conditions:
+  larger_approved_train_population:
+    all_required:
+      - offline_gate passes on the pilot population
+      - validation learning curves do not peak in the first two epochs
+      - no source, game, opening-prefix, or style cap is violated
+      - projected disk use remains within resource-budget.yaml
+  self_play:
+    all_required:
+      - supervised_48_entry passes
+      - pure_learned runtime artifact verifies in Python and Rust
+      - zero test/public-holdout inspection was used for selection
+  external_source_activation:
+    allowed: false
+    rule: Requires a new rights audit, exact manifest, overlap report, frozen-plan revision, new hashes, and explicit authorization; Luna may not perform it.
