@@ -21,7 +21,7 @@ rule.
 - `make phase10r-sanity`: passed.
 - `make phase10r-micro-overfit`: passed (`12` rows, final loss `8.46417333377758e-06`).
 - `make phase10r-memory`: passed.
-- `make check`: passed (`157` CLI, `102` core, `9` integration, and `485` Python tests, plus
+- `make check`: passed (`157` CLI, `102` core, `9` integration, and `488` Python tests, plus
   build/Wasm checks).
 - Phase 10R registry validation: passed; `33` approved training artifacts, `68` total artifacts.
 - Phase 10R dry-run: passed; free space observed above the frozen `150 GiB` floor.
