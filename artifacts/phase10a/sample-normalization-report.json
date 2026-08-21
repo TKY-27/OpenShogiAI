@@ -1,0 +1,177 @@
+{
+  "schema": "phase10a_sample_normalization_report/v1",
+  "normalization_schema": "phase10a_normalized_record/v1",
+  "as_of": "2026-08-21",
+  "purpose": "bounded format validation and source-preserving audit normalization; not a training dataset",
+  "external_samples": [
+    {
+      "source_id": "aobazero-no-noise",
+      "artifact_id": "w4745.csa",
+      "format": "csa",
+      "adapter": "parse_csa_sample(strict_aobazero=True)",
+      "input": {
+        "byte_size": 19762,
+        "sha256": "6a08c7a9f519ce81505bbdf7c51905781413ddf8955a955b1b5b1d61a2703aad",
+        "compression": "none",
+        "retrieval_scope": "one exact member of existing approved 100-object catalog",
+        "retained_in_repository": false
+      },
+      "strict_envelope": {
+        "passed": true,
+        "existing_adapter": "adapt_aobazero_csa",
+        "normalized_csa_bytes": 909,
+        "move_count": 109,
+        "annotation_count": 109,
+        "comment_count": 33,
+        "terminal": "%TORYO",
+        "source_datetime": "2026-07-17T01:57:19"
+      },
+      "normalized_summary": {
+        "record_count": 109,
+        "format": "csa",
+        "exact_position_identity_count": 0,
+        "policy_distribution_record_count": 0,
+        "position_identity_namespace": "csa_move_prefix",
+        "position_identity_exact": false,
+        "serialized_normalized_record_array_bytes": 153410
+      },
+      "label_preservation": {
+        "played_move": "retained",
+        "best_move": "null; not declared by CSA move line",
+        "policy_distribution": "null; AobaZero annotation remains raw",
+        "wdl_result": "raw terminal retained; normalized winner not inferred",
+        "raw_source_score": "v field retained as float or raw string",
+        "source_score_semantics": "unknown / source annotation retained",
+        "score_perspective": "unknown",
+        "mate_representation": "raw CSA terminal retained",
+        "nodes_playouts_depth": "null",
+        "source_artifact_record_ids": "source_id, artifact_id, game index, ply index",
+        "provenance_license_decision": {
+          "decision": "approved_scope_only",
+          "training_allowed": "approved for existing exact catalog",
+          "redistribution_allowed": "approved for existing exact catalog",
+          "derived_weights_allowed": "pending",
+          "commercial_use_allowed": "pending",
+          "attribution_requirements": "pending"
+        }
+      },
+      "example_normalized_record": {
+        "record_id": "game-0000-ply-0001",
+        "position_identity": {
+          "namespace": "csa_move_prefix",
+          "digest_sha256": "fa0437837139bde0874ef97e474f6d00141197096d444a7046d347f57722d567",
+          "exact": false
+        },
+        "played_move": "+2726FU",
+        "raw_source_score": 0.521,
+        "raw_annotation_present": true,
+        "result": "%TORYO",
+        "raw_record_sha256": "6a08c7a9f519ce81505bbdf7c51905781413ddf8955a955b1b5b1d61a2703aad"
+      }
+    }
+  ],
+  "format_fixtures": [
+    {
+      "fixture_id": "csa-minimal",
+      "format": "csa",
+      "adapter": "parse_csa_sample",
+      "fixture_bytes": 39,
+      "record_count": 1,
+      "exact_position_identity_count": 0,
+      "policy_distribution_record_count": 0,
+      "status": "parsed",
+      "training_data": false
+    },
+    {
+      "fixture_id": "kif-numbered-move",
+      "format": "kif",
+      "adapter": "parse_kif_sample",
+      "fixture_bytes": 59,
+      "record_count": 1,
+      "exact_position_identity_count": 0,
+      "policy_distribution_record_count": 0,
+      "status": "parsed",
+      "training_data": false
+    },
+    {
+      "fixture_id": "hcpe-fixed-38",
+      "format": "hcpe",
+      "adapter": "parse_hcpe_sample",
+      "fixture_bytes": 38,
+      "record_count": 1,
+      "exact_position_identity_count": 1,
+      "policy_distribution_record_count": 0,
+      "raw_fields": ["hcp", "eval", "bestMove16", "gameResult", "dummy"],
+      "status": "parsed",
+      "training_data": false
+    },
+    {
+      "fixture_id": "hcpe3-variable-visits",
+      "format": "hcpe3",
+      "adapter": "parse_hcpe3_sample",
+      "fixture_bytes": 50,
+      "record_count": 1,
+      "exact_position_identity_count": 0,
+      "policy_distribution_record_count": 1,
+      "raw_fields": ["hcp", "moveNum", "result", "gameInfo", "selectedMove16", "eval", "candidateNum", "move16", "visitNum"],
+      "candidate_visits": [3, 1],
+      "derived_probabilities": [0.75, 0.25],
+      "playouts": 4,
+      "status": "parsed",
+      "training_data": false
+    },
+    {
+      "fixture_id": "packed-sfen-value-40",
+      "format": "packed_sfen_value",
+      "adapter": "parse_packed_sfen_value_sample",
+      "fixture_bytes": 40,
+      "record_count": 1,
+      "exact_position_identity_count": 1,
+      "policy_distribution_record_count": 0,
+      "raw_fields": ["sfen", "score", "move", "gamePly", "game_result", "padding"],
+      "status": "parsed",
+      "training_data": false
+    },
+    {
+      "fixture_id": "binpack-alias",
+      "format": "binpack",
+      "adapter": "parse_packed_sfen_value_sample(format_name=binpack)",
+      "fixture_bytes": 40,
+      "record_count": 1,
+      "exact_position_identity_count": 1,
+      "policy_distribution_record_count": 0,
+      "status": "parsed",
+      "training_data": false
+    }
+  ],
+  "negative_fixtures": [
+    {
+      "format": "hcpe",
+      "input": "5 bytes",
+      "result": "rejected as non-multiple of 38 bytes"
+    },
+    {
+      "format": "hcpe3",
+      "input": "5 bytes",
+      "result": "rejected as truncated header"
+    },
+    {
+      "format": "packed_sfen_value",
+      "input": "5 bytes",
+      "result": "rejected as non-multiple of 40 bytes"
+    }
+  ],
+  "overlap_fixture": {
+    "purpose": "regression test only; not an external overlap result",
+    "same_packed_sfen_record_across_two_sources": 1,
+    "split_position_overlap": 1,
+    "exact_game_overlap": "unavailable because PackedSfenValue fixture has no exact history identity",
+    "external_cross_source_overlap": "not measured without artifact bodies and exact identities"
+  },
+  "limitations": [
+    "CSA/KIF/HCPE3 move prefixes are not board-replayed and therefore are not exact canonical positions.",
+    "Unknown score semantics, perspective, and mate representation remain explicit unknown/raw fields.",
+    "QPD internal format was not inspected because the archive was not downloaded.",
+    "No normalized dataset body is included in this repository."
+  ]
+}

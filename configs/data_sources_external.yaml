@@ -1,0 +1,727 @@
+schema_version: 1
+audit_id: phase10a-external-data-audit
+as_of: "2026-08-21"
+timezone: Asia/Tokyo
+scope:
+  official_sources_only: true
+  bounded_samples_only: true
+  downloaded_training_data: false
+  prohibited_actions:
+    - model_training
+    - self_play
+    - arena_campaigns
+    - teacher_relabeling_at_scale
+    - promotion_decisions
+    - architecture_changes
+    - unknown_license_downloads
+    - push
+    - release
+  license_rule: >-
+    A repository license is not treated as a license for release assets or datasets.
+    Missing permission is recorded as pending and is not inferred from public reachability.
+
+storage_pre_audit:
+  inspected_path: /Users/anag2bgod/Projects/OpenShogiAI
+  inspected_at: "2026-08-21T00:00:00+09:00"
+  free_bytes_before: 345509875712
+  free_gib_before: 321.77
+  minimum_free_bytes: 214748364800
+  headroom_before_bytes: 130761510912
+  approved_local_budget_bytes: 1073741824
+  bounded_external_data_bytes: 19762
+  official_evidence_snapshot_bytes: 28677
+  total_local_bytes: 48439
+  free_bytes_after: 345509801984
+  full_downloads_allowed: false
+  decompression_allowed: false
+  normalization_budget_basis: >-
+    One-gigabyte audit budget covers metadata and bounded samples only. Full GCT,
+    nodchip, tanuki, teacher, or QPD artifacts require a later storage and rights decision.
+  guardrail: >-
+    Stop before the budget is exceeded or free disk falls below 200 GiB. No candidate
+    full artifact was downloaded in Phase 10A.
+
+size_estimate_conventions:
+  measured_bytes: exact response or official API/UI value, with its scope stated
+  decompressed_bytes: exact only for uncompressed/fixed-layout artifacts; otherwise an estimate
+  normalized_bytes: source-preserving JSON estimate only, not a generated dataset
+  json_record_range_bytes: [300, 800]
+  unknown_size_policy: null_with_reason
+
+artifacts:
+  - artifact_id: aobazero-no-noise-exact100
+    canonical_source_id: aobazero-no-noise
+    exact_artifact_name: >-
+      Catalog set w4745.csa through w4235.csa in steps of five, excluding w4495.csa,
+      w4425.csa, and w4420.csa; see the exact versioned catalog.
+    artifact_name_is_set: true
+    official_page: http://www.yss-aya.com/aobazero/
+    direct_artifact_location: http://www.yss-aya.com/aobazero/no_noise/
+    author_publisher: AobaZero project; official record host by Aya
+    publication_date: null
+    byte_size: null
+    byte_size_upper_bound: 104857600
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 4646400
+      max_bytes: 12390400
+      basis: 15488 observed Phase 3 positions times 300-800 bytes
+    compression: none
+    format: CSA with AobaZero annotations
+    sha256: null
+    stated_license_or_terms: Public Domain for the audited project material
+    exact_license_evidence:
+      - url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README_en.md
+        quote: "USI engine aobaz belongs to GPL v3. Others are in the public domain. Detail is in licenses."
+        evidence_sha256: 018bf5496101d0034f8a6559324c298b6adcec88d608e288b6bc49108b6975bc
+        evidence_scope: existing OpenShogiAI exact 100-object decision
+      - url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README.md
+        quote: "それ以外はpublic domainです。"
+        evidence_sha256: cfb7bafc4e7942ae8efef2dd9b86bc8d4585c80335400d76b53fa21446220181
+    training_allowed: approved
+    derived_weights_allowed: pending
+    redistribution_allowed: approved
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: exact catalog previously approved; live index revalidation drifted
+    status: approved
+    reason: >-
+      This is the only external data scope already approved in OpenShogiAI provenance.
+      Approval is limited to the exact catalog and does not expand to other AobaZero data.
+    existing_provenance: configs/data_sources.yaml and configs/data_source_objects/aobazero_no_noise.yaml
+
+  - artifact_id: aobazero-no-noise-w4745-sample
+    canonical_source_id: aobazero-no-noise
+    exact_artifact_name: w4745.csa
+    official_page: http://www.yss-aya.com/aobazero/no_noise/sample.html
+    direct_artifact_location: http://www.yss-aya.com/aobazero/no_noise/w4745.csa
+    author_publisher: AobaZero project; official record host by Aya
+    publication_date: null
+    byte_size: 19762
+    decompressed_size_bytes: 19762
+    normalized_size_bytes: 153410
+    compression: none
+    format: CSA with AobaZero annotations
+    sha256: 6a08c7a9f519ce81505bbdf7c51905781413ddf8955a955b1b5b1d61a2703aad
+    stated_license_or_terms: inherited from approved exact 100-object AobaZero scope
+    exact_license_evidence:
+      - url: https://raw.githubusercontent.com/kobanium/aobazero/5eb944165300d5b88924c917a147e80d9d173eed/README_en.md
+        quote: "USI engine aobaz belongs to GPL v3. Others are in the public domain. Detail is in licenses."
+        evidence_scope: existing approved catalog
+    training_allowed: approved
+    derived_weights_allowed: pending
+    redistribution_allowed: approved
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: bounded sample retrieved and deleted after hashing/parsing
+    status: approved
+    reason: exact member of the existing approved catalog; sample used only for format validation
+
+  - artifact_id: aobazero-live-no-noise-sample-index
+    canonical_source_id: aobazero-no-noise
+    exact_artifact_name: sample.html
+    official_page: http://www.yss-aya.com/aobazero/no_noise/sample.html
+    direct_artifact_location: http://www.yss-aya.com/aobazero/no_noise/sample.html
+    author_publisher: AobaZero project; official record host by Aya
+    publication_date: null
+    byte_size: 24617
+    decompressed_size_bytes: 24617
+    normalized_size_bytes: null
+    compression: none
+    format: HTML manifest/index
+    sha256: 23f45efcaecd760e1c25a99d2b920a17ad28bcd92c1ada05a41556471a105bf5
+    stated_license_or_terms: not a dataset license; rights inherited only where existing evidence applies
+    exact_license_evidence:
+      - url: configs/data_source_objects/aobazero_evidence.yaml
+        quote: "Pinned prior sample index SHA-256 is 178b6bfdd4a128eef14bc1ae7d057fae3781230cef9dc5cc3e2351291e15f9ad."
+        evidence_scope: existing exact-catalog gate
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: available; current content differs from pinned evidence
+    status: pending
+    reason: >-
+      Current SHA-256 differs from the versioned evidence snapshot, so no catalog expansion
+      or new permission is inferred. Existing approved files remain limited to the old catalog.
+
+  - artifact_id: aobazero-daily-public-records
+    canonical_source_id: aobazero-daily-records
+    exact_artifact_name: daily Google Drive CSA records / official AobaZero public records
+    artifact_name_is_set: true
+    official_page: https://github.com/kobanium/aobazero
+    direct_artifact_location: https://drive.google.com/drive/folders/1dbE5xWGQLsduR00oxEGPpZQJtQr_EQ75
+    author_publisher: AobaZero project
+    publication_date: null
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: none
+    format: CSA
+    sha256: null
+    stated_license_or_terms: public availability described; no exact dataset release permission reviewed
+    exact_license_evidence:
+      - url: https://github.com/TadaoYamaoka/DeepLearningShogi/wiki/%E3%81%B5%E3%81%8B%E3%81%86%E3%82%89%E7%8E%8B%E3%81%AE%E5%AD%A6%E7%BF%92%E6%89%8B%E9%A0%86/0b69360878a8b4f693764ef7e1dd963c004e5fa5
+        quote: "AobaZero records are available as CSA records, with daily additions linked from the project materials."
+        evidence_scope: format/availability only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public location reported; exact manifest not sampled
+    status: pending
+    reason: no exact artifact manifest and no dataset-specific permission beyond existing 100-object scope
+
+  - artifact_id: dlshogi-gct-hcpe3-selfplay
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: "hcpe3/selfplay_gct-???.hcpe3.xz"
+    artifact_name_is_pattern: true
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    byte_size_observed_aggregate: 84000000000
+    decompressed_size_bytes: null
+    decompressed_size_estimate:
+      min_bytes: 84000000000
+      max_bytes: 420000000000
+      basis: 84GB Google Drive folder UI aggregate; compression ratio and exact file list unavailable
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 150000000000
+      max_bytes: 400000000000
+      basis: author-stated 500 million initial positions and 300-800 bytes per normalized row
+    compression: xz
+    format: hcpe3
+    sha256: null
+    stated_license_or_terms: data made public to foster competition; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "GCTの学習に使用したデータセットを公開"
+        evidence_scope: publication/availability, not a grant of reuse rights
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: exact release terms and per-file manifest are missing
+
+  - artifact_id: dlshogi-gct-floodgate-hcpe3
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: "hcpe3/selfplay_gct???_floodgate26*.hcpe3.xz"
+    artifact_name_is_pattern: true
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: xz
+    format: hcpe3
+    sha256: null
+    stated_license_or_terms: public dataset description; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "floodgateの棋譜から26手目まで"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: exact files, sizes, and reuse terms are missing
+
+  - artifact_id: dlshogi-gct-taya36-hcpe3
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: "hcpe3/selfplay_gct???_taya36.hcpe3.xz"
+    artifact_name_is_pattern: true
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: xz
+    format: hcpe3
+    sha256: null
+    stated_license_or_terms: public dataset description; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "たややん互角局面集の初期局面からGCTで生成"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: this artifact is directly derived from the Taya holdout family and needs explicit rights and split handling
+
+  - artifact_id: dlshogi-gct-model-taya36-hcpe3
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: "hcpe3/selfplay_model-0000???_taya36.hcpe3.xz"
+    artifact_name_is_pattern: true
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: xz
+    format: hcpe3
+    sha256: null
+    stated_license_or_terms: public dataset description; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "たややん互角局面集の初期局面からGCTモデルで生成"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: model lineage, data permission, and derived-weight conditions are not separately granted
+
+  - artifact_id: dlshogi-gct-aobazero-hcpe
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: aobazero/hcpe
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: unknown
+    format: hcpe converted from AobaZero CSA records
+    sha256: null
+    stated_license_or_terms: source lineage reported; no GCT artifact license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "aobazero/hcpe AobaZeroの棋譜をhcpeに変換"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: likely lineage overlap with AobaZero, but exact source objects and rights are not manifest-bound
+
+  - artifact_id: dlshogi-gct-floodgate-play-hcpe
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: gct/hcpe/play-001
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: unknown
+    format: hcpe
+    sha256: null
+    stated_license_or_terms: includes Floodgate, Denryu-sen, and local records; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "floodgate, 電竜戦, ローカル対局"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: mixed-source contents require source-level rights and overlap manifests
+
+  - artifact_id: dlshogi-gct-taya36-rl-hcpe
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: gct/hcpe/selfplay-unique-900xx/...902xx
+    artifact_name_is_pattern: true
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: unknown
+    format: hcpe
+    sha256: null
+    stated_license_or_terms: public dataset description; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "たややん互角局面集のGCTのRLデータ"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: direct Taya-derived lineage creates contamination risk; exact identity inventory is missing
+
+  - artifact_id: dlshogi-gct-yaneura36-rl-hcpe
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: gct/hcpe/selfplay-unique-901xx/...903xx
+    artifact_name_is_pattern: true
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: unknown
+    format: hcpe
+    sha256: null
+    stated_license_or_terms: public dataset description; no formal dataset license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "やねうら互角局面集のGCTのRLデータ"
+        evidence_scope: provenance/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: exact identity inventory and source permission are missing
+
+  - artifact_id: dlshogi-gct-suisho-teacher-hcpe
+    canonical_source_id: dlshogi-gct-public-datasets
+    exact_artifact_name: suisho/hcpe
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+    direct_artifact_location: https://drive.google.com/drive/u/3/folders/1Lkh4HL0tMx9p3NNbHue9lvh_HOSBGxhv
+    author_publisher: Tadao Yamaoka / dlshogi GCT; Suisho lineage
+    publication_date: "2021-05-06"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: unknown
+    format: hcpe
+    sha256: null
+    stated_license_or_terms: Discord publication permission described; no complete reusable license
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/05/06/223701
+        quote: "たややんさんには、discord で公開の許可をもらっています。"
+        evidence_scope: permission for the author's publication context, not all downstream rights
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive folder reported; not downloaded
+    status: pending
+    reason: a publication permission is not a complete grant for training, weights, redistribution, and commercial use
+
+  - artifact_id: nodchip-shogi-hao-depth9
+    canonical_source_id: nodchip-public-teacher-data
+    exact_artifact_name: "kifu.tag=train.depth=9.num_positions=1000000000.start_time=??????????.thread_index=???.bin"
+    artifact_name_is_pattern: true
+    official_page: https://huggingface.co/datasets/nodchip/shogi_hao_depth9
+    direct_artifact_location: https://huggingface.co/datasets/nodchip/shogi_hao_depth9/tree/main
+    author_publisher: nodchip
+    publication_date: "2024-03-02"
+    byte_size: 320002979440
+    decompressed_size_bytes: 320002979440
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 2400022345800
+      max_bytes: 6400059588800
+      basis: fixed 40-byte PackedSfenValue rows and 300-800 bytes per normalized row
+    compression: none at dataset-record level; repository storage may use Xet/LFS
+    format: YaneuraOu PackedSfenValue / packed SFEN binpack
+    sha256: null
+    representative_shard:
+      exact_artifact_name: kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=000.bin
+      byte_size: 289626920
+      sha256: 878e58fde10423e797499065d2d27717d99651f9536a27a7d72818db077e5fc1
+    stated_license_or_terms: Hugging Face dataset card metadata says MIT; dataset-file grant not independently evidenced
+    exact_license_evidence:
+      - url: https://huggingface.co/datasets/nodchip/shogi_hao_depth9
+        quote: "Format: YaneuraOu PackedSfenValue; generated with Hao depth 9; unshuffled."
+        evidence_scope: format/lineage
+      - url: https://huggingface.co/api/datasets/nodchip/shogi_hao_depth9
+        quote: "cardData.license: mit"
+        evidence_scope: repository metadata only; not accepted as sufficient dataset rights evidence
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public dataset metadata and shards listed; full artifact not downloaded
+    status: pending
+    reason: 320GB artifact exceeds the Phase 10A budget and exact dataset license scope is unresolved
+
+  - artifact_id: nodchip-tanuki-nnue-pytorch-2024-07-30-1
+    canonical_source_id: tanuki-nnue-teacher-data
+    exact_artifact_name: "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1722714224.thread_index=000.bin"
+    official_page: https://huggingface.co/datasets/nodchip/tanuki-.nnue-pytorch-2024-07-30.1
+    direct_artifact_location: https://huggingface.co/datasets/nodchip/tanuki-.nnue-pytorch-2024-07-30.1/tree/main
+    author_publisher: nodchip / tanuki-
+    publication_date: "2024-12-01"
+    byte_size: 320002292200
+    decompressed_size_bytes: 320002292200
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 2400017191500
+      max_bytes: 6400045844000
+      basis: fixed 40-byte PackedSfenValue rows and 300-800 bytes per normalized row
+    compression: none at dataset-record level; repository storage may use Xet/LFS
+    format: YaneuraOu PackedSfenValue / packed SFEN binpack
+    sha256: null
+    representative_shard:
+      exact_artifact_name: kifu.tag=train.depth=9.num_positions=1000000000.start_time=1722714224.thread_index=000.bin
+      byte_size: 307882720
+      sha256: 1843119f6fa7953a1aca5ad5cb310ae78f1e288ab551d3b0d86986c62cd766e7
+    stated_license_or_terms: Hugging Face dataset card metadata says MIT; dataset-file grant not independently evidenced
+    exact_license_evidence:
+      - url: https://huggingface.co/datasets/nodchip/tanuki-.nnue-pytorch-2024-07-30.1
+        quote: "Format: YaneuraOu PackedSfenValue; generated using tanuki-.nnue-pytorch-2024-07-30.1; unshuffled."
+        evidence_scope: format/lineage
+      - url: https://huggingface.co/api/datasets/nodchip/tanuki-.nnue-pytorch-2024-07-30.1
+        quote: "cardData.license: mit"
+        evidence_scope: repository metadata only; not accepted as sufficient dataset rights evidence
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public dataset metadata and shards listed; full artifact not downloaded
+    status: pending
+    reason: 320GB artifact exceeds the Phase 10A budget and exact dataset license scope is unresolved
+
+  - artifact_id: tayayan-gokaku-36-sfen
+    canonical_source_id: tayayan-gokaku-positions
+    exact_artifact_name: 36SFEN.txt / たややん互角局面集
+    official_page: https://yaneuraou.yaneu.com/2020/11/12/tayayan-36sfens/
+    direct_artifact_location: https://drive.google.com/file/d/1-gUxwl6XTIiw-amsNAsJSUmjluxU28kF/view?usp=sharing
+    author_publisher: たややん; publication page by やねうらお
+    publication_date: "2020-11-12"
+    byte_size: 384535
+    decompressed_size_bytes: 384535
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 587100
+      max_bytes: 1562800
+      basis: 1957 positions times 300-800 bytes per source-preserving row
+    compression: none
+    format: SFEN text
+    sha256: null
+    stated_license_or_terms: courtesy/publication permission; no formal reuse license found
+    exact_license_evidence:
+      - url: https://yaneuraou.yaneu.com/2020/11/12/tayayan-36sfens/
+        quote: "たややん氏のご厚意により公開"
+        evidence_scope: publication permission, not a complete rights grant
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive file reachable; not downloaded
+    status: pending
+    reason: public availability and courtesy do not answer all required reuse questions; preserve as immutable holdout candidate
+    public_test_holdout: true
+
+  - artifact_id: tayayan-gokaku-36-generated-5247
+    canonical_source_id: tayayan-gokaku-positions
+    exact_artifact_name: Taya-derived 5247-position file
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2021/09/20/222018
+    direct_artifact_location: https://drive.google.com/file/d/1aM7fkTD6_7U61IcrOG8BI__shrZK4bHb/view?usp=sharing
+    author_publisher: Tadao Yamaoka; derived from たややん互角局面集
+    publication_date: "2021-09-20"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 1574100
+      max_bytes: 4197600
+      basis: 5247 positions times 300-800 bytes per source-preserving row
+    compression: unknown
+    format: SFEN/position text (exact release encoding to verify)
+    sha256: null
+    stated_license_or_terms: public release; no formal reuse license found
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2021/09/20/222018
+        quote: "元のたややん互角局面集1957局面に対し、同一局面は1895局面"
+        evidence_scope: contents/overlap evidence, not a license grant
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive file reported; not downloaded
+    status: pending
+    reason: derived/duplicate relation to the original set is documented, but rights and exact encoding remain unresolved
+    public_test_holdout: true
+
+  - artifact_id: tayayan-suisho-teacher-kif
+    canonical_source_id: tayayan-public-teacher-data
+    exact_artifact_name: 水匠による1手200万手棋譜データ集 KIF version
+    official_page: https://note.com/tayayan_ts/n/nacdfae58b4ef?magazine_key=m024e7c154df0
+    direct_artifact_location: https://drive.google.com/file/d/10RuQMETwYclRggui0eb2CZGNVNVNxgdh/view?usp=drive_link
+    author_publisher: たややん
+    publication_date: "2023-10-14"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 45000000000
+      max_bytes: 120000000000
+      basis: author-stated approximately 150 million positions times 300-800 bytes per normalized row
+    compression: unknown
+    format: KIF
+    sha256: null
+    stated_license_or_terms: public data collection described; no formal reuse license found
+    exact_license_evidence:
+      - url: https://note.com/tayayan_ts/n/nacdfae58b4ef?magazine_key=m024e7c154df0
+        quote: "水匠による1手200万手棋譜データ集(約1億5000万局面)"
+        evidence_scope: publication/contents only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive file reported; exact byte metadata unavailable without download
+    status: pending
+    reason: large teacher collection has no complete rights statement and exceeds the bounded audit scope
+
+  - artifact_id: tayayan-suisho-teacher-psv
+    canonical_source_id: tayayan-public-teacher-data
+    exact_artifact_name: 水匠による1手200万手棋譜データ集 PSV version
+    official_page: https://note.com/tayayan_ts/n/nacdfae58b4ef?magazine_key=m024e7c154df0
+    direct_artifact_location: https://drive.google.com/file/d/1R9kI3xDKeoIjyFPD0RS6K-1wwcko75fr/view?usp=drive_link
+    author_publisher: たややん
+    publication_date: "2023-10-14"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    normalized_size_estimate:
+      min_bytes: 45000000000
+      max_bytes: 120000000000
+      basis: author-stated approximately 150 million positions times 300-800 bytes per normalized row
+    compression: unknown
+    format: PackedSfenValue / PSV
+    sha256: null
+    stated_license_or_terms: public data collection described; no formal reuse license found
+    exact_license_evidence:
+      - url: https://note.com/tayayan_ts/n/nacdfae58b4ef?magazine_key=m024e7c154df0
+        quote: "PSV版"
+        evidence_scope: publication/format only
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public Drive file reported; exact byte metadata unavailable without download
+    status: pending
+    reason: large teacher collection has no complete rights statement and exceeds the bounded audit scope
+
+  - artifact_id: qhapaq-qpd-train
+    canonical_source_id: qhapaq-public-teacher-data
+    exact_artifact_name: QPD_train.7z
+    official_page: https://qhapaq.hatenablog.com/entry/2021/11/23/220251
+    direct_artifact_location: https://github.com/qhapaq-49/qhapaq-bin/releases/download/dataset/QPD_train.7z
+    author_publisher: Qhapaq / qhapaq-49
+    publication_date: "2021-11-23"
+    byte_size: 11304930
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: 7z
+    format: Qhapaq Pretty Daabi teacher data; internal format not inspected
+    sha256: null
+    stated_license_or_terms: conditional terms in the official Qhapaq publication
+    exact_license_evidence:
+      - url: https://qhapaq.hatenablog.com/entry/2021/11/23/220251
+        quote: "これを使って学習した評価関数を大会に出したり公開する場合はデータを使った旨を書いてくださいね"
+        evidence_scope: attribution condition for a trained evaluation function
+      - url: https://api.github.com/repos/qhapaq-49/qhapaq-bin/releases/tags/dataset
+        quote: "QPD_train.7z; file terms must be followed"
+        evidence_scope: release asset and terms pointer
+    training_allowed: pending
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: attribution required for event/publication use of a trained evaluation function
+    current_availability: public GitHub release asset; not downloaded because internal terms were not audited
+    status: pending
+    reason: some conditional attribution terms are explicit, but redistribution, commercial use, and exact derived-weight scope remain unresolved
+
+  - artifact_id: dlshogi-public-evaluation-test
+    canonical_source_id: dlshogi-public-test-data
+    exact_artifact_name: public evaluation test dataset referenced by dlshogi
+    official_page: https://tadaoyamaoka.hatenablog.com/entry/2025/12/20/152940
+    direct_artifact_location: null
+    author_publisher: Tadao Yamaoka / dlshogi
+    publication_date: "2025-12-20"
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: unknown
+    format: unknown pending exact artifact inspection
+    sha256: null
+    stated_license_or_terms: public test dataset; no reuse license reviewed
+    exact_license_evidence:
+      - url: https://tadaoyamaoka.hatenablog.com/entry/2025/12/20/152940
+        quote: "公開評価用のテストデータ"
+        evidence_scope: holdout designation only
+    training_allowed: denied
+    derived_weights_allowed: pending
+    redistribution_allowed: pending
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: public page; artifact location not resolved
+    status: denied
+    reason: public evaluation test data must remain an immutable final holdout and cannot be used for training
+    immutable_holdout: true
+
+  - artifact_id: open-shogiai-floodgate
+    canonical_source_id: floodgate-existing-provenance
+    exact_artifact_name: Floodgate public CSA records
+    official_page: https://wdoor.c.u-tokyo.ac.jp/shogi/
+    direct_artifact_location: https://wdoor.c.u-tokyo.ac.jp/shogi/
+    author_publisher: Floodgate / University of Tokyo host
+    publication_date: null
+    byte_size: null
+    decompressed_size_bytes: null
+    normalized_size_bytes: null
+    compression: none
+    format: CSA
+    sha256: null
+    stated_license_or_terms: Unverified in existing OpenShogiAI registry
+    exact_license_evidence: []
+    training_allowed: denied
+    derived_weights_allowed: denied
+    redistribution_allowed: denied
+    commercial_use_allowed: pending
+    attribution_requirements: pending
+    current_availability: source disabled in existing registry; not downloaded
+    status: denied
+    reason: existing provenance marks the source unverified and disallows ML use; no Phase 10A reauthorization
+
+decision_counts:
+  approved: 2
+  pending: 15
+  denied: 2
+  note: >-
+    The approved count includes the existing exact catalog and its bounded w4745 sample;
+    it does not approve any new AobaZero scope. Counts are artifact records, not source families.
