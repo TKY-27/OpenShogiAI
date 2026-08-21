@@ -48,6 +48,18 @@ style_coverage:
     minimum_unique_per_group: 50
     maximum_pair_reuse: 1
     groups: [general_opening, ibisha, opponent_furibisha, hard_middlegame_endgame]
+    membership_semantics: overlapping control and descriptive tags; groups are not mutually exclusive
+    group_predicates:
+      general_opening: position index below 24; umbrella control that may also carry an Ibisya or opponent-Furibisha tag
+      ibisha: existing authoritative classifier returns ibisha for the source continuation
+      opponent_furibisha: existing authoritative classifier returns ibisha-vs-furibisha for the source continuation
+      hard_middlegame_endgame: position index at least 24 and classifier is unclassified or furibisha; exclusive later-position residual
+    canonical_deduplication: one central position row; overlapping membership never duplicates the row
+    split_protection: resolve protected history priority, then exclude every canonical identity present in the legacy final holdout
+    selection_seed: 20260821
+    reserve_paired_starts_per_group: 200
+    reserve_allocation: general opening first, then Ibisya, opponent-Furibisha, and hard middle/endgame; globally canonical-distinct
+    maximum_reserved_positions_per_source_game_per_group: 5
     insufficient_group_action: fail screening-plan construction; do not duplicate or synthesize starts
 
 immutable_holdouts:

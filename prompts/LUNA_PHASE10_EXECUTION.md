@@ -134,6 +134,21 @@ group: general opening, Ibisya, opponent-Furibisha, and hard middle/endgame. The
 final gates use 5, 20, and 50 distinct paired starts from every group. A start may appear in at most
 one pair per Arena. If any group is short, stop; do not duplicate, synthesize, or borrow positions.
 
+The repaired start-pool semantics are frozen and overlapping at eligibility time:
+
+- `general_opening` is the umbrella predicate `position_index < 24`;
+- Ibisya and opponent-Furibisha are authoritative classifier tags and may overlap the umbrella;
+- `hard_middlegame_endgame` is the legacy later-position residual: `position_index >= 24` with an
+  unclassified or Furibisha continuation; it remains exclusive of the two style tags;
+- the central manifest contains one row per canonical position, while deterministic allocation
+  assigns each reserved start to exactly one reporting group and prohibits cross-group reuse.
+
+Before any execution, verify `artifacts/phase10/start-pool-manifest.json`,
+`artifacts/phase10/start-pool-overlap-report.json`, and
+`artifacts/phase10/start-pool-legality-report.json`. The reserve is 200 positions per group under
+seed `20260821`, capped at five reserved positions per source game per assigned group. Do not
+regenerate it from a pending source or admit any legacy-final-test/public-test identity.
+
 ## Exact architecture and experiment matrix
 
 Use random initialization and float32 strength artifacts. Both candidates export the existing
@@ -230,8 +245,10 @@ generation 7,200 seconds. Do not start a job whose conservative estimate exceeds
 2. Verify frozen hashes and resource preflight. Publish a read-only preflight report.
 3. Implement minimal Phase 10 adapters/validators/loss behavior and focused regression tests. Do not
    redesign adjacent code.
-4. Build immutable game/history/canonical-position and start-pool manifests. Verify zero cross-split
-   duplicates and style coverage. Stop on a failed integrity gate.
+4. Reuse the frozen immutable start-pool artifacts. Build the remaining game/history/canonical
+   training manifests and verify source/provenance bindings. Confirm zero legacy-final-test
+   canonical/history overlap; unavailable public-test overlap must remain explicitly unmeasured,
+   never reported as zero. Stop on a failed integrity gate.
 5. Run only bounded parser/dataset/overfit smokes. Then execute the two pilot variants in order, one
    MPS worker at a time.
 6. Apply offline gates. Run at most the eligible 40-game pilots. Choose at most one winner under the

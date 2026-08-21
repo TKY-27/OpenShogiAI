@@ -8,6 +8,7 @@ Phase 10 execution contract.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -43,6 +44,8 @@ from open_shogi_training.models.network import (
 
 PHASE10_SCHEMA = "open_shogiai_phase10_execution/v1"
 MANIFEST_SCHEMA = "open_shogiai_phase10_manifest/v1"
+START_POOL_SCHEMA = "open_shogiai_phase10_start_pool/v2"
+START_POOL_OVERLAP_SCHEMA = "open_shogiai_phase10_start_pool_overlap/v1"
 TARGET_SCHEMA = "open_shogiai_phase10_targets/v1"
 SEED = 20260729
 ARENA_SEED = 20260821
@@ -51,6 +54,9 @@ OUTPUT_SCALE_CP = 1_200.0
 MAX_HISTORY_PLIES = 24
 MAX_GAME_FRACTION_BASIS_POINTS = 200
 MAX_OPENING_GROUP_FRACTION_BASIS_POINTS = 500
+START_POOL_MINIMUM_UNIQUE = 50
+START_POOL_RESERVE_PER_GROUP = 200
+START_POOL_MAXIMUM_PER_GAME_PER_GROUP = 5
 START_GROUPS = (
     "general_opening",
     "ibisha",
@@ -318,6 +324,8 @@ def phase10_losses(
 
 
 def _style_group(sfen: str, move: str, position_index: int) -> str:
+    """Return the legacy exclusive group used only for repair diagnostics."""
+
     if not isinstance(move, str) or not move:
         return "general_opening" if position_index < 24 else "hard_middlegame_endgame"
     classification = _classify_opening(canonical_position_sfen(sfen), move)
@@ -328,6 +336,30 @@ def _style_group(sfen: str, move: str, position_index: int) -> str:
     if position_index < 24 and classification in {"unclassified", "furibisha"}:
         return "general_opening"
     return "hard_middlegame_endgame"
+
+
+def start_group_memberships(sfen: str, move: str, position_index: int) -> tuple[str, ...]:
+    """Return overlapping Arena-control and descriptive style memberships."""
+
+    if (
+        not isinstance(position_index, int)
+        or isinstance(position_index, bool)
+        or position_index < 0
+    ):
+        raise Phase10ExecutionError("start-pool position index is invalid")
+    groups: list[str] = []
+    if position_index < MAX_HISTORY_PLIES:
+        groups.append("general_opening")
+    classification = "unclassified"
+    if isinstance(move, str) and move:
+        classification = _classify_opening(canonical_position_sfen(sfen), move)
+        if classification == "ibisha":
+            groups.append("ibisha")
+        elif classification == "ibisha-vs-furibisha":
+            groups.append("opponent_furibisha")
+    if position_index >= MAX_HISTORY_PLIES and classification in {"unclassified", "furibisha"}:
+        groups.append("hard_middlegame_endgame")
+    return tuple(group for group in START_GROUPS if group in groups)
 
 
 def _load_positions(
@@ -399,6 +431,426 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise Phase10ExecutionError(f"JSON artifact {path} must be an object")
     return value
+
+
+def _rank_start_candidate(group: str, identity: str, position_identity: str) -> bytes:
+    digest = hashlib.sha256()
+    for value in ("phase10-arena-start-v2", str(ARENA_SEED), group, identity, position_identity):
+        digest.update(value.encode("ascii"))
+        digest.update(b"\x00")
+    return digest.digest()
+
+
+def _construct_start_pool(
+    positions: list[dict[str, Any]],
+    history_by_game: dict[str, str],
+    *,
+    source_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Protect splits, deduplicate canonically, and reserve distinct paired starts."""
+
+    rows_by_game: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    splits_by_history: dict[str, set[str]] = defaultdict(set)
+    splits_by_canonical: dict[str, set[str]] = defaultdict(set)
+    for row in positions:
+        game_id = row["gameId"]
+        rows_by_game[game_id].append(row)
+        splits_by_history[history_by_game[game_id]].add(row["split"])
+        splits_by_canonical[canonical_state_sha256(row["sfen"])].add(row["split"])
+    for game_rows in rows_by_game.values():
+        game_rows.sort(key=lambda row: row["positionIndex"])
+
+    allowed_splits = {"train", "validation", "test"}
+    if any(not splits <= allowed_splits for splits in splits_by_history.values()):
+        raise Phase10ExecutionError("start-pool source contains an unknown split")
+    effective_history_split = {
+        history_id: min(splits, key=_priority) for history_id, splits in splits_by_history.items()
+    }
+    final_holdout_canonical = {
+        identity for identity, splits in splits_by_canonical.items() if "test" in splits
+    }
+
+    eligible_rows = [
+        row
+        for row in positions
+        if row.get("sourceId") == source_id
+        and row.get("split") != "test"
+        and row.get("eligible") is True
+        and row.get("terminalTail") is False
+        and row.get("remainingPlies", 0) > 0
+    ]
+    protected_rows: list[dict[str, Any]] = []
+    for row in eligible_rows:
+        history_id = history_by_game[row["gameId"]]
+        identity = canonical_state_sha256(row["sfen"])
+        if row["split"] != effective_history_split[history_id]:
+            continue
+        if identity in final_holdout_canonical:
+            continue
+        protected_rows.append(row)
+
+    canonical_winners: dict[str, dict[str, Any]] = {}
+    for row in protected_rows:
+        identity = canonical_state_sha256(row["sfen"])
+        previous = canonical_winners.get(identity)
+        key = (_priority(row["split"]), row["gameId"], row["positionIndex"])
+        if previous is None:
+            canonical_winners[identity] = row
+            continue
+        previous_key = (
+            _priority(previous["split"]),
+            previous["gameId"],
+            previous["positionIndex"],
+        )
+        if key < previous_key:
+            canonical_winners[identity] = row
+
+    candidates: dict[str, dict[str, Any]] = {}
+    group_identities: dict[str, set[str]] = {group: set() for group in START_GROUPS}
+    for identity, row in canonical_winners.items():
+        memberships = start_group_memberships(
+            row["sfen"], row.get("moveUsi", ""), row["positionIndex"]
+        )
+        if not memberships:
+            raise Phase10ExecutionError("protected start has no Arena group membership")
+        pid = position_id(row["gameId"], row["positionIndex"])
+        game_rows = rows_by_game[row["gameId"]]
+        moves_to_position = [item["moveUsi"] for item in game_rows[: row["positionIndex"]]]
+        candidate = {
+            "positionId": pid,
+            "canonicalStateSha256": identity,
+            "sfen": canonical_position_sfen(row["sfen"]),
+            "sideToMove": row["sideToMove"],
+            "initialSfen": canonical_position_sfen(game_rows[0]["sfen"]),
+            "movesToPosition": moves_to_position,
+            "sourceMoveUsi": row["moveUsi"],
+            "sourceNextSfen": canonical_position_sfen(row["nextSfen"]),
+            "sourceArtifactId": "aobazero-no-noise-exact100",
+            "sourceId": row["sourceId"],
+            "sourceGameSha256": row["gameId"],
+            "sourceRawSha256": row["rawSha256"],
+            "sourcePositionIndex": row["positionIndex"],
+            "sourceSplit": row["split"],
+            "historyGroupId": history_by_game[row["gameId"]],
+            "eligibleGroups": list(memberships),
+            "openingClassification": (
+                _classify_opening(canonical_position_sfen(row["sfen"]), row["moveUsi"])
+                if row.get("moveUsi")
+                else "unclassified"
+            ),
+        }
+        candidates[identity] = candidate
+        for group in memberships:
+            group_identities[group].add(identity)
+
+    for group in START_GROUPS:
+        if len(group_identities[group]) < START_POOL_MINIMUM_UNIQUE:
+            raise Phase10ExecutionError(
+                f"style start pool {group} has only {len(group_identities[group])} unique positions"
+            )
+
+    used_identities: set[str] = set()
+    reserved_by_group: dict[str, list[str]] = {group: [] for group in START_GROUPS}
+    selected_candidates: dict[str, dict[str, Any]] = {}
+    for group in START_GROUPS:
+        ranked = sorted(
+            group_identities[group],
+            key=lambda identity: (
+                _rank_start_candidate(group, identity, candidates[identity]["positionId"]),
+                candidates[identity]["positionId"],
+            ),
+        )
+        per_game: Counter[str] = Counter()
+        for identity in ranked:
+            if identity in used_identities:
+                continue
+            candidate = candidates[identity]
+            game_id = candidate["sourceGameSha256"]
+            if per_game[game_id] >= START_POOL_MAXIMUM_PER_GAME_PER_GROUP:
+                continue
+            reserved_by_group[group].append(candidate["positionId"])
+            per_game[game_id] += 1
+            used_identities.add(identity)
+            selected = dict(candidate)
+            selected["assignedGroup"] = group
+            selected["selectionRank"] = len(reserved_by_group[group])
+            selected_candidates[identity] = selected
+            if len(reserved_by_group[group]) == START_POOL_RESERVE_PER_GROUP:
+                break
+        if len(reserved_by_group[group]) != START_POOL_RESERVE_PER_GROUP:
+            raise Phase10ExecutionError(
+                f"start pool {group} cannot reserve {START_POOL_RESERVE_PER_GROUP} "
+                "globally distinct positions under the per-game cap"
+            )
+
+    overlap: dict[str, int] = {}
+    for index, left in enumerate(START_GROUPS):
+        for right in START_GROUPS[index + 1 :]:
+            overlap[f"{left}__{right}"] = len(group_identities[left] & group_identities[right])
+
+    legacy_raw: Counter[str] = Counter()
+    legacy_unique: dict[str, set[str]] = {group: set() for group in START_GROUPS}
+    canonical_prefixes: dict[str, set[tuple[str, ...]]] = defaultdict(set)
+    for row in eligible_rows:
+        identity = canonical_state_sha256(row["sfen"])
+        group = _style_group(row["sfen"], row.get("moveUsi", ""), row["positionIndex"])
+        legacy_raw[group] += 1
+        legacy_unique[group].add(identity)
+        game_rows = rows_by_game[row["gameId"]]
+        canonical_prefixes[identity].add(
+            tuple(item["moveUsi"] for item in game_rows[: row["positionIndex"]])
+        )
+
+    source_distribution: dict[str, Any] = {}
+    for group in START_GROUPS:
+        group_rows = [
+            candidate
+            for candidate in selected_candidates.values()
+            if candidate["assignedGroup"] == group
+        ]
+        source_distribution[group] = {
+            "positions": len(group_rows),
+            "games": len({row["sourceGameSha256"] for row in group_rows}),
+            "historyGroups": len({row["historyGroupId"] for row in group_rows}),
+            "splits": dict(sorted(Counter(row["sourceSplit"] for row in group_rows).items())),
+            "openingClassifications": dict(
+                sorted(Counter(row["openingClassification"] for row in group_rows).items())
+            ),
+        }
+
+    group_summary = {
+        group: {
+            "predicate": {
+                "general_opening": "positionIndex < 24 (umbrella control)",
+                "ibisha": "authoritative classifier == ibisha (descriptive subgroup)",
+                "opponent_furibisha": (
+                    "authoritative classifier == ibisha-vs-furibisha (descriptive subgroup)"
+                ),
+                "hard_middlegame_endgame": (
+                    "positionIndex >= 24 and classifier is unclassified or furibisha "
+                    "(exclusive later-position residual)"
+                ),
+            }[group],
+            "uniqueEligible": len(group_identities[group]),
+            "reservedDistinct": len(reserved_by_group[group]),
+            "positionIds": reserved_by_group[group],
+        }
+        for group in START_GROUPS
+    }
+    start_pool = {
+        "selection": {
+            "seed": ARENA_SEED,
+            "membershipSemantics": "overlapping_control_and_descriptive_tags",
+            "allocationSemantics": "globally_canonical_distinct_assigned_group",
+            "minimumUniquePerGroup": START_POOL_MINIMUM_UNIQUE,
+            "reservePairedStartsPerGroup": START_POOL_RESERVE_PER_GROUP,
+            "maximumPerSourceGamePerAssignedGroup": START_POOL_MAXIMUM_PER_GAME_PER_GROUP,
+            "ranking": (
+                "sha256(phase10-arena-start-v2 NUL seed NUL group NUL "
+                "canonicalStateSha256 NUL positionId)"
+            ),
+            "groupAllocationOrder": list(START_GROUPS),
+        },
+        "counts": {
+            "inputRows": len(positions),
+            "eligibleNonTestRows": len(eligible_rows),
+            "protectedRowsBeforeCanonicalDedup": len(protected_rows),
+            "protectedCanonicalCandidates": len(canonical_winners),
+            "reservedCanonicalPositions": len(selected_candidates),
+            "finalHoldoutCanonicalIdentitiesExcluded": len(final_holdout_canonical),
+            "eligibleRowsExcludedByHistoryPriorityOrHoldout": (
+                len(eligible_rows) - len(protected_rows)
+            ),
+        },
+        "groups": group_summary,
+        "positions": sorted(selected_candidates.values(), key=lambda row: row["positionId"]),
+        "sourceDistribution": source_distribution,
+    }
+    overlap_report = {
+        "schema": START_POOL_OVERLAP_SCHEMA,
+        "groupSemantics": "overlapping",
+        "groupEligibleCanonicalCounts": {
+            group: len(group_identities[group]) for group in START_GROUPS
+        },
+        "exactCanonicalOverlapBetweenGroups": overlap,
+        "splitLeakage": {
+            "legacyFinalHoldoutCanonicalOverlap": 0,
+            "legacyFinalHoldoutHistoryGroupOverlap": 0,
+            "publicTestInspections": 0,
+            "legacyFinalHoldoutCandidateEvaluations": 0,
+            "eligibleCandidatePopulation": {
+                "canonicalPositions": len(canonical_winners),
+                "trainingCanonicalOverlap": sum(
+                    "train" in splits_by_canonical[identity] for identity in canonical_winners
+                ),
+                "validationCanonicalOverlap": sum(
+                    "validation" in splits_by_canonical[identity] for identity in canonical_winners
+                ),
+                "legacyFinalHoldoutCanonicalOverlap": 0,
+            },
+            "reservedPopulation": {
+                "canonicalPositions": len(selected_candidates),
+                "trainingCanonicalOverlap": sum(
+                    "train" in splits_by_canonical[identity] for identity in selected_candidates
+                ),
+                "validationCanonicalOverlap": sum(
+                    "validation" in splits_by_canonical[identity]
+                    for identity in selected_candidates
+                ),
+                "legacyFinalHoldoutCanonicalOverlap": 0,
+            },
+            "reservedByAssignedGroup": {
+                group: {
+                    "canonicalPositions": sum(
+                        row["assignedGroup"] == group for row in selected_candidates.values()
+                    ),
+                    "trainingCanonicalOverlap": sum(
+                        row["assignedGroup"] == group and "train" in splits_by_canonical[identity]
+                        for identity, row in selected_candidates.items()
+                    ),
+                    "validationCanonicalOverlap": sum(
+                        row["assignedGroup"] == group
+                        and "validation" in splits_by_canonical[identity]
+                        for identity, row in selected_candidates.items()
+                    ),
+                    "legacyFinalHoldoutCanonicalOverlap": 0,
+                }
+                for group in START_GROUPS
+            },
+            "externalHoldouts": {
+                "tayayan-public-test-family": {
+                    "status": "not_authorized_or_acquired",
+                    "exactOverlap": None,
+                },
+                "dlshogi-public-evaluation-test": {
+                    "status": "not_authorized_or_acquired",
+                    "exactOverlap": None,
+                },
+            },
+        },
+        "duplicateDiagnosis": {
+            "eligibleRows": len(eligible_rows),
+            "eligibleCanonicalPositions": len(
+                {canonical_state_sha256(row["sfen"]) for row in eligible_rows}
+            ),
+            "duplicateRowsAfterCanonicalization": len(eligible_rows)
+            - len({canonical_state_sha256(row["sfen"]) for row in eligible_rows}),
+            "canonicalPositionsReachedByMultipleMovePrefixes": sum(
+                len(prefixes) > 1 for prefixes in canonical_prefixes.values()
+            ),
+            "legacyExclusiveRawCounts": dict(legacy_raw),
+            "legacyExclusiveUniqueCounts": {
+                group: len(legacy_unique[group]) for group in START_GROUPS
+            },
+        },
+    }
+    return start_pool, overlap_report
+
+
+def build_phase10_start_pool_manifest(
+    *,
+    positions_path: Path,
+    dataset_manifest_path: Path,
+    audit_manifest_path: Path,
+    output_path: Path,
+    overlap_output_path: Path,
+    source_id: str = "aobazero-no-noise",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build the frozen, provenance-complete Arena start-pool artifacts."""
+
+    positions, _, history_by_game = _load_positions(positions_path)
+    dataset_manifest = _read_json(dataset_manifest_path)
+    audit_manifest = _read_json(audit_manifest_path)
+    if dataset_manifest.get("schema") != "phase3_dataset_manifest/v1":
+        raise Phase10ExecutionError("start-pool dataset manifest schema is invalid")
+    if dataset_manifest.get("datasetId") != "aobazero-no-noise-pd-sample100":
+        raise Phase10ExecutionError("start-pool dataset is outside the approved exact-100 scope")
+    source = dataset_manifest.get("source")
+    if not isinstance(source, dict) or source.get("sourceId") != source_id:
+        raise Phase10ExecutionError("start-pool dataset source identity is invalid")
+    if source.get("machineLearningAllowed") is not True or source.get("license") != "Public Domain":
+        raise Phase10ExecutionError("start-pool dataset source is not approved")
+    positions_binding = dataset_manifest.get("artifacts", {}).get(positions_path.name)
+    if not isinstance(positions_binding, dict):
+        raise Phase10ExecutionError("dataset manifest does not bind the positions artifact")
+    if (
+        positions_binding.get("sha256") != sha256_file(positions_path)
+        or positions_binding.get("size") != positions_path.stat().st_size
+        or positions_binding.get("records") != len(positions)
+    ):
+        raise Phase10ExecutionError("positions artifact differs from its approved manifest")
+    audited = {
+        item.get("artifact_id"): item
+        for item in audit_manifest.get("artifacts", [])
+        if isinstance(item, dict)
+    }
+    exact100 = audited.get("aobazero-no-noise-exact100")
+    if not isinstance(exact100, dict) or exact100.get("status") != "approved":
+        raise Phase10ExecutionError("Phase 10A did not approve the exact-100 artifact")
+
+    start_pool, overlap_report = _construct_start_pool(
+        positions, history_by_game, source_id=source_id
+    )
+    manifest = {
+        "schema": START_POOL_SCHEMA,
+        "controlSchema": PHASE10_SCHEMA,
+        "inputs": {
+            "positions": {
+                "path": positions_path.name,
+                "sha256": sha256_file(positions_path),
+                "size": positions_path.stat().st_size,
+                "rows": len(positions),
+            },
+            "datasetManifest": {
+                "path": dataset_manifest_path.name,
+                "sha256": sha256_file(dataset_manifest_path),
+                "size": dataset_manifest_path.stat().st_size,
+            },
+            "phase10aAuditManifest": {
+                "path": "artifacts/phase10a/audit-manifest.json",
+                "sha256": sha256_file(audit_manifest_path),
+                "size": audit_manifest_path.stat().st_size,
+            },
+        },
+        "source": {
+            "sourceId": source_id,
+            "artifactId": "aobazero-no-noise-exact100",
+            "datasetId": dataset_manifest["datasetId"],
+            "auditDecision": "approved",
+            "license": source["license"],
+            "machineLearningAllowed": source["machineLearningAllowed"],
+            "redistributable": source.get("redistributable"),
+        },
+        "canonicalIdentity": (
+            "SFEN board, hands, and side-to-move; move number omitted; no mirror or color rotation"
+        ),
+        "historyIdentity": (
+            "sha256(canonical initial SFEN plus NUL-delimited first up-to-24 legal USI moves)"
+        ),
+        "holdoutPolicy": {
+            "priority": [
+                "public_test",
+                "final_holdout",
+                "source_held_out",
+                "validation",
+                "train",
+            ],
+            "legacyFinalHoldoutAllowed": False,
+            "externalPublicTestAllowed": False,
+            "publicTestInspections": 0,
+            "legacyFinalHoldoutCandidateEvaluations": 0,
+        },
+        **start_pool,
+    }
+    overlap_report = {
+        **overlap_report,
+        "startPoolSchema": START_POOL_SCHEMA,
+        "inputs": manifest["inputs"],
+        "source": manifest["source"],
+    }
+    write_json_atomic(output_path, manifest)
+    write_json_atomic(overlap_output_path, overlap_report)
+    return manifest, overlap_report
 
 
 def build_phase10_manifest(
@@ -508,40 +960,13 @@ def build_phase10_manifest(
         if example.split == "test":
             raise Phase10ExecutionError("final holdout leaked into active examples")
 
-    eligible_start_rows = [
-        row
-        for row in positions
-        if row.get("sourceId") == source_id
-        and row.get("split") != "test"
-        and row.get("eligible") is True
-        and row.get("terminalTail") is False
-        and row.get("remainingPlies", 0) > 0
-    ]
-    starts_by_group: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    seen_start_states: set[str] = set()
-    for row in eligible_start_rows:
-        identity = canonical_state_sha256(row["sfen"])
-        if identity in seen_start_states:
-            continue
-        seen_start_states.add(identity)
-        group = style_by_pid[position_id(row["gameId"], row["positionIndex"])]
-        starts_by_group[group].append(
-            {
-                "positionId": position_id(row["gameId"], row["positionIndex"]),
-                "canonicalStateSha256": identity,
-                "sfen": canonical_position_sfen(row["sfen"]),
-                "gameId": row["gameId"],
-                "positionIndex": row["positionIndex"],
-                "historyGroupId": history_by_game[row["gameId"]],
-                "styleGroup": group,
-            }
-        )
-    for group in START_GROUPS:
-        starts_by_group[group].sort(key=lambda item: item["positionId"])
-        if len(starts_by_group[group]) < 50:
-            raise Phase10ExecutionError(
-                f"style start pool {group} has only {len(starts_by_group[group])} unique positions"
-            )
+    start_pool, start_overlap = _construct_start_pool(
+        positions, history_by_game, source_id=source_id
+    )
+    starts_by_group = {
+        group: [row for row in start_pool["positions"] if row["assignedGroup"] == group]
+        for group in START_GROUPS
+    }
 
     game_counts = Counter(row["gameId"] for row in positions)
     manifest = {
@@ -579,7 +1004,7 @@ def build_phase10_manifest(
             "selectedFinalHoldout": split_counts.get("test", 0),
             "protectedHistoryDropped": history_dropped,
             "canonicalDuplicateDropped": canonical_dropped,
-            "nonTestStartRows": len(eligible_start_rows),
+            "nonTestStartRows": start_pool["counts"]["eligibleNonTestRows"],
         },
         "splits": {
             "priority": ["public_test", "final_holdout", "source_held_out", "validation", "train"],
@@ -595,14 +1020,11 @@ def build_phase10_manifest(
             "legacyFinalHoldoutInspections": 0,
         },
         "styleCounts": {
-            group: sum(
-                1
-                for row in eligible_start_rows
-                if style_by_pid[position_id(row["gameId"], row["positionIndex"])] == group
-            )
-            for group in START_GROUPS
+            group: start_pool["groups"][group]["uniqueEligible"] for group in START_GROUPS
         },
-        "startPools": {group: starts_by_group[group] for group in START_GROUPS},
+        "startPoolSelection": start_pool["selection"],
+        "startPoolOverlap": start_overlap["exactCanonicalOverlapBetweenGroups"],
+        "startPools": starts_by_group,
         "targetSemantics": {
             "valuePerspective": "side_to_move",
             "wdl": "factual_wdl_probability_signed_target_with_mask",
@@ -626,6 +1048,77 @@ def load_phase10_manifest(path: Path) -> dict[str, Any]:
         starts = value.get("startPools", {}).get(group)
         if not isinstance(starts, list) or len(starts) < 50:
             raise Phase10ExecutionError(f"manifest start pool is short: {group}")
+    return value
+
+
+def load_phase10_start_pool_manifest(path: Path) -> dict[str, Any]:
+    """Validate the frozen standalone start-pool manifest without executing Arena."""
+
+    value = _read_json(path)
+    if value.get("schema") != START_POOL_SCHEMA:
+        raise Phase10ExecutionError("unsupported Phase 10 start-pool schema")
+    selection = value.get("selection")
+    groups = value.get("groups")
+    positions = value.get("positions")
+    holdout = value.get("holdoutPolicy")
+    if not all(isinstance(item, dict) for item in (selection, groups, holdout)):
+        raise Phase10ExecutionError("start-pool control objects are invalid")
+    if not isinstance(positions, list):
+        raise Phase10ExecutionError("start-pool positions must be a list")
+    if selection.get("membershipSemantics") != "overlapping_control_and_descriptive_tags":
+        raise Phase10ExecutionError("start-pool membership semantics changed")
+    if selection.get("seed") != ARENA_SEED:
+        raise Phase10ExecutionError("start-pool selection seed changed")
+    if (
+        holdout.get("publicTestInspections") != 0
+        or holdout.get("legacyFinalHoldoutCandidateEvaluations") != 0
+    ):
+        raise Phase10ExecutionError("start-pool manifest violates holdout controls")
+
+    position_ids: set[str] = set()
+    canonical_ids: set[str] = set()
+    assigned_counts: Counter[str] = Counter()
+    for row in positions:
+        if not isinstance(row, dict):
+            raise Phase10ExecutionError("start-pool position is invalid")
+        pid = row.get("positionId")
+        identity = row.get("canonicalStateSha256")
+        assigned = row.get("assignedGroup")
+        memberships = row.get("eligibleGroups")
+        if not isinstance(pid, str) or not isinstance(identity, str):
+            raise Phase10ExecutionError("start-pool position identity is invalid")
+        if pid in position_ids or identity in canonical_ids:
+            raise Phase10ExecutionError("start-pool contains an exact or canonical duplicate")
+        if assigned not in START_GROUPS or not isinstance(memberships, list):
+            raise Phase10ExecutionError("start-pool position group is invalid")
+        if assigned not in memberships or any(group not in START_GROUPS for group in memberships):
+            raise Phase10ExecutionError("assigned start group is absent from memberships")
+        moves_to_position = row.get("movesToPosition")
+        source_index = row.get("sourcePositionIndex")
+        if not isinstance(moves_to_position, list) or len(moves_to_position) != source_index:
+            raise Phase10ExecutionError("start-pool position lacks complete move history")
+        sfen = row.get("sfen")
+        if not isinstance(sfen, str):
+            raise Phase10ExecutionError("start-pool position SFEN is invalid")
+        canonical_state(sfen + " 1")
+        if canonical_state_sha256(sfen + " 1") != identity:
+            raise Phase10ExecutionError("start-pool canonical identity does not match SFEN")
+        if row.get("sideToMove") != _side_to_move(sfen):
+            raise Phase10ExecutionError("start-pool side-to-move does not match SFEN")
+        position_ids.add(pid)
+        canonical_ids.add(identity)
+        assigned_counts[assigned] += 1
+
+    for group in START_GROUPS:
+        detail = groups.get(group)
+        if not isinstance(detail, dict):
+            raise Phase10ExecutionError(f"start-pool group is missing: {group}")
+        if detail.get("uniqueEligible", 0) < START_POOL_MINIMUM_UNIQUE:
+            raise Phase10ExecutionError(f"start-pool group is short: {group}")
+        if detail.get("reservedDistinct") != START_POOL_RESERVE_PER_GROUP:
+            raise Phase10ExecutionError(f"start-pool reserve changed: {group}")
+        if assigned_counts[group] != START_POOL_RESERVE_PER_GROUP:
+            raise Phase10ExecutionError(f"start-pool assigned count changed: {group}")
     return value
 
 
@@ -734,22 +1227,73 @@ def validate_frozen_variant(variant: str) -> dict[str, Any]:
     }
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    """Build or structurally verify the frozen start pool without executing Phase 10."""
+
+    parser = argparse.ArgumentParser(prog="python -m open_shogi_training.phase10_execution")
+    commands = parser.add_subparsers(dest="command", required=True)
+    build = commands.add_parser("build-start-pool")
+    build.add_argument("--positions", required=True, type=Path)
+    build.add_argument("--dataset-manifest", required=True, type=Path)
+    build.add_argument("--audit-manifest", required=True, type=Path)
+    build.add_argument("--output", required=True, type=Path)
+    build.add_argument("--overlap-output", required=True, type=Path)
+    verify = commands.add_parser("verify-start-pool")
+    verify.add_argument("--manifest", required=True, type=Path)
+    arguments = parser.parse_args(argv)
+    if arguments.command == "build-start-pool":
+        manifest, overlap = build_phase10_start_pool_manifest(
+            positions_path=arguments.positions,
+            dataset_manifest_path=arguments.dataset_manifest,
+            audit_manifest_path=arguments.audit_manifest,
+            output_path=arguments.output,
+            overlap_output_path=arguments.overlap_output,
+        )
+        result = {
+            "schema": START_POOL_SCHEMA,
+            "positions": len(manifest["positions"]),
+            "groups": {
+                group: manifest["groups"][group]["uniqueEligible"] for group in START_GROUPS
+            },
+            "overlapSchema": overlap["schema"],
+        }
+    else:
+        manifest = load_phase10_start_pool_manifest(arguments.manifest)
+        result = {
+            "schema": manifest["schema"],
+            "positions": len(manifest["positions"]),
+            "status": "valid",
+        }
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 __all__ = [
     "ARENA_SEED",
     "MANIFEST_SCHEMA",
     "START_GROUPS",
+    "START_POOL_OVERLAP_SCHEMA",
+    "START_POOL_SCHEMA",
     "Phase10Example",
     "Phase10ExecutionError",
     "Phase10LossWeights",
     "adapt_phase10_label",
     "build_phase10_manifest",
+    "build_phase10_start_pool_manifest",
     "canonical_position_sfen",
     "history_group_id",
     "load_phase10_manifest",
+    "load_phase10_start_pool_manifest",
+    "main",
     "outcome_target",
     "phase10_feature_config",
     "phase10_losses",
     "phase10_model_config",
     "phase10_training_config",
+    "start_group_memberships",
     "validate_frozen_variant",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import sys
 from collections import Counter
@@ -29,16 +30,22 @@ CONFIG_PATHS: Final = (
 FROZEN_HASH_PATHS: Final = frozenset(
     {
         "PHASE_10_FROZEN_PLAN.md",
+        "PHASE_10_START_POOL_REPAIR_REPORT.md",
         *CONFIG_PATHS,
         "prompts/LUNA_PHASE10_EXECUTION.md",
         "training/open_shogi_training/phase10.py",
+        "training/open_shogi_training/phase10_execution.py",
         "configs/data_sources.yaml",
         "configs/data_sources_external.yaml",
         "configs/data_source_objects/aobazero_no_noise.yaml",
         "artifacts/phase10a/audit-manifest.json",
+        "artifacts/phase10/start-pool-legality-report.json",
+        "artifacts/phase10/start-pool-manifest.json",
+        "artifacts/phase10/start-pool-overlap-report.json",
         "artifacts/phase4/teacher/labels-v2/manifest.json",
         "docs/data/DATASET_OVERLAP_REPORT.md",
         "docs/data/FORMAT_COMPATIBILITY_REPORT.md",
+        "docs/data/PHASE_10_START_POOL.md",
         "configs/evaluation/overall_champion_tactical_suite.json",
         "PHASE_9_REPORT.md",
         "PHASE_10A_REPORT.md",
@@ -108,6 +115,7 @@ def validate_phase10(root: Path, *, verify_hashes: bool = True) -> dict[str, Any
     _validate_experiment_matrix(controls[CONFIG_PATHS[3]])
     _validate_resource_budget(controls[CONFIG_PATHS[4]])
     _validate_statistical_gates(controls[CONFIG_PATHS[5]])
+    _validate_start_pool_artifacts(root)
     if verify_hashes:
         _verify_hash_manifest(root)
 
@@ -118,6 +126,55 @@ def validate_phase10(root: Path, *, verify_hashes: bool = True) -> dict[str, Any
         "audited_artifacts": len(EXPECTED_DECISIONS),
         "frozen_hashes": len(FROZEN_HASH_PATHS) if verify_hashes else None,
     }
+
+
+def _validate_start_pool_artifacts(root: Path) -> None:
+    from open_shogi_training.phase10_execution import (
+        Phase10ExecutionError,
+        load_phase10_start_pool_manifest,
+    )
+
+    manifest_path = root / "artifacts/phase10/start-pool-manifest.json"
+    try:
+        manifest = load_phase10_start_pool_manifest(manifest_path)
+    except Phase10ExecutionError as error:
+        raise Phase10ValidationError(f"invalid frozen start pool: {error}") from error
+    overlap = _load_json_bounded(
+        root / "artifacts/phase10/start-pool-overlap-report.json", 256 * 1024
+    )
+    legality = _load_json_bounded(
+        root / "artifacts/phase10/start-pool-legality-report.json", 256 * 1024
+    )
+    if overlap.get("schema") != "open_shogiai_phase10_start_pool_overlap/v1":
+        raise Phase10ValidationError("start-pool overlap report schema changed")
+    leakage = _mapping(overlap.get("splitLeakage"), "start-pool split leakage")
+    for key in (
+        "legacyFinalHoldoutCanonicalOverlap",
+        "legacyFinalHoldoutHistoryGroupOverlap",
+        "publicTestInspections",
+        "legacyFinalHoldoutCandidateEvaluations",
+    ):
+        _expect(leakage, key, 0)
+    if legality.get("schema") != "open_shogiai_phase10_start_pool_legality/v1":
+        raise Phase10ValidationError("start-pool legality report schema changed")
+    _expect(legality, "positionsChecked", 800)
+    _expect(legality, "positionsPassed", 800)
+    _expect(legality, "positionsFailed", 0)
+    _expect(legality, "completeHistoryRows", 800)
+    manifest_binding = _mapping(legality.get("startPoolManifest"), "legality manifest binding")
+    expected_hash = hashlib.sha256(_read_bounded(manifest_path, 4 * 1024 * 1024)).hexdigest()
+    _expect(manifest_binding, "sha256", expected_hash)
+    if len(manifest.get("positions", [])) != 800:
+        raise Phase10ValidationError("frozen start-pool reserve must contain 800 positions")
+
+
+def _load_json_bounded(path: Path, maximum: int) -> dict[str, Any]:
+    raw = _read_bounded(path, maximum)
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise Phase10ValidationError(f"invalid JSON artifact {path}: {error}") from error
+    return _mapping(value, f"JSON artifact {path}")
 
 
 def _validate_audit_catalog(raw: object) -> dict[str, str]:
@@ -295,6 +352,27 @@ def _validate_split_policy(raw: object) -> None:
     arena_pool = _mapping(style.get("arena_start_pool"), "arena start pool")
     _expect(arena_pool, "minimum_unique_per_group", 50)
     _expect(arena_pool, "maximum_pair_reuse", 1)
+    _expect(
+        arena_pool,
+        "membership_semantics",
+        "overlapping control and descriptive tags; groups are not mutually exclusive",
+    )
+    predicates = _mapping(arena_pool.get("group_predicates"), "arena group predicates")
+    if set(predicates) != {
+        "general_opening",
+        "ibisha",
+        "opponent_furibisha",
+        "hard_middlegame_endgame",
+    }:
+        raise Phase10ValidationError("arena group predicates differ from the repaired freeze")
+    _expect(arena_pool, "selection_seed", 20260821)
+    _expect(arena_pool, "reserve_paired_starts_per_group", 200)
+    _expect(arena_pool, "maximum_reserved_positions_per_source_game_per_group", 5)
+    _expect(
+        arena_pool,
+        "canonical_deduplication",
+        "one central position row; overlapping membership never duplicates the row",
+    )
     holdouts = _sequence(root.get("immutable_holdouts"), "immutable holdouts")
     if [
         item.get("holdout_id") for item in map(lambda value: _mapping(value, "holdout"), holdouts)

@@ -24,7 +24,7 @@ def test_frozen_phase10_controls_and_hashes_validate() -> None:
         "status": "valid",
         "source_decisions": {"accepted": 2, "deferred": 18, "rejected": 2},
         "audited_artifacts": 22,
-        "frozen_hashes": 19,
+        "frozen_hashes": 25,
     }
 
 

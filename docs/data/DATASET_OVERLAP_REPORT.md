@@ -75,3 +75,35 @@ GCTの公式記事には次のsource-specific artifactが列挙されている�
 - exact public test artifactのbytes、hash、format
 
 これらは、license decisionとstorage budgetが確定する前に取得・変換しない。今回のpending判定を「重複なし」と解釈してはならない。
+
+## Phase 10 Arena start-pool repair
+
+The 2026-08-21 narrow repair measured the approved exact-100 Phase 3 position artifact without
+acquiring or inspecting any external public-test artifact. The repaired eligibility groups overlap
+by design; the manifest stores each canonical position once and assigns every reserved position to
+one Arena reporting group.
+
+| Group | protected canonical candidates | globally distinct reserve |
+|---|---:|---:|
+| general opening (`positionIndex < 24`) | 375 | 200 |
+| Ibisya classifier tag | 3,852 | 200 |
+| opponent-Furibisha classifier tag | 2,097 | 200 |
+| hard middle/endgame (later unclassified/Furibisha residual) | 3,886 | 200 |
+
+Exact canonical eligibility overlap is 355 general-opening/Ibisya, 10 general-opening/opponent-
+Furibisha. The other four pairwise overlaps are zero because the hard group preserves the exclusive
+later residual. These are tag intersections, not duplicate rows. The 800-position reserve has 800 unique
+position IDs and 800 unique canonical identities.
+
+After protected-history priority, every canonical identity observed in the legacy Phase 3 final
+test was excluded. Exact overlap of the reserve with that final test is therefore 0 positions and
+0 protected history groups. The reserve has exact canonical overlap with 674 Phase 3 train
+identities and 185 validation identities; the sum exceeds 800 because 59 reserved identities exist
+in both non-holdout source splits and inherit validation priority for their representative row.
+This is disclosed source reuse, not test/holdout leakage. The Taya and dlshogi public-test bytes
+remain unauthorized and unacquired, so their exact overlap remains **unmeasured**, never zero.
+
+The machine-readable evidence is in
+[`start-pool-overlap-report.json`](../../artifacts/phase10/start-pool-overlap-report.json). All 800
+reserved SFENs passed Rust `perft --depth 0`; the bound result is in
+[`start-pool-legality-report.json`](../../artifacts/phase10/start-pool-legality-report.json).

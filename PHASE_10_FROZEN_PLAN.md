@@ -7,6 +7,13 @@ Branch: `codex/phase10b-dataset-curriculum`
 Objective: a pure learned evaluator that scores at least 55% against the fixed
 `handcrafted-experimental` evaluator under the frozen equal-wall-clock Arena contract.
 
+Narrow revision: 2026-08-21 (Arena start-pool repair only). `general_opening` is the broad
+position-index-below-24 control population. Ibisya and opponent-Furibisha are descriptive tags
+that may overlap that control population; the four eligibility groups are not mutually exclusive.
+The immutable manifest stores one canonical row per position and assigns 200 globally distinct
+reserved paired starts to each group under seed `20260821`. No model, target, source-license,
+training, statistical-threshold, budget, promotion, or holdout-access control changed.
+
 ## Decision summary
 
 This plan is deliberately fail-closed. Phase 10A audited 22 artifact records. Only the already
@@ -148,6 +155,11 @@ artifact/record identity wins the row identity. Each game is capped at 2% of an 
 histories and all descendants of protected public-test starts remain together. Non-identical boards
 are reported as similar but are not merged by a heuristic distance threshold.
 
+Arena starts apply the same priority before pool construction. Any history whose effective split is
+the legacy final holdout is excluded, and any canonical identity observed anywhere in that holdout
+is excluded even when a train/validation copy exists. Train/validation duplicates retain validation
+priority. The final start manifest contains no exact or canonical duplicate row.
+
 ## Frozen curriculum
 
 ```text
@@ -187,11 +199,21 @@ validation-only offline gate --> 40-game pilot --> 160-game 48% gate
 
 The existing sequence/position-structure classifier is authoritative; a single rook-file check is
 not sufficient. Training reports both styles, caps Ibisya and unknown/other at 60% each, and targets
-at least 10% opponent-Furibisha when available. Arena construction requires 50 unique legal
-positions in each of general-opening, Ibisya, opponent-Furibisha, and hard middle/endgame groups.
-The pilot/entry/final gates consume 5/20/50 distinct paired starts from each group. If the approved
-population cannot supply them, planning fails; it may not duplicate starts, synthesize positions,
-or borrow a pending dataset.
+at least 10% opponent-Furibisha when available. For Arena eligibility, `general_opening` is the
+umbrella control predicate `position_index < 24`; Ibisya and opponent-Furibisha remain classifier
+tags and can overlap the umbrella. `hard_middlegame_endgame` is the later-position control predicate
+`position_index >= 24` restricted to unclassified/Furibisha continuations, preserving the legacy
+exclusive later-position residual. General-opening/style overlap is membership metadata, never a
+duplicated manifest row. Arena allocation assigns every canonical start to exactly one reporting
+group and prohibits reuse across groups within a campaign.
+
+Arena construction requires 50 unique legal positions in each eligibility group. The immutable
+reserve contains 200 distinct starts per group (800 globally canonical-distinct rows), which covers
+the pilot/entry/final requirements of 5/20/50 and also preserves 200/group capacity for a 1,600-game
+paired-color campaign without reuse. Selection uses seed `20260821`, allocates the scarce general
+opening control first, and caps each source game at five reserved positions per assigned group. If
+the approved population cannot supply the reserve under those controls, planning fails; it may not
+duplicate starts, synthesize positions, or borrow a pending dataset.
 
 ## Frozen splits and holdout access
 
@@ -281,7 +303,8 @@ Build order for the execution phase:
 
 1. verify hashes, rights decisions, disk/memory preflight, and immutable split manifests;
 2. implement only missing target masks/mate-margin and Phase 10 config adapters with focused tests;
-3. produce the four unique start groups and contamination report;
+3. verify `artifacts/phase10/start-pool-manifest.json`, its overlap/leakage report, and its
+   all-position Rust legality report before any training or Arena work;
 4. run bounded dataset/overfit smokes, then the two pilot supervised variants;
 5. apply offline and 40-game gates; expand only the one winner if allowed;
 6. run the 160-game gate; run one bounded self-play generation only on pass;

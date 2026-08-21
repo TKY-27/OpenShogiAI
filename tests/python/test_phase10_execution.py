@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -10,11 +12,14 @@ from open_shogi_training.phase10_execution import (
     adapt_phase10_label,
     canonical_position_sfen,
     history_group_id,
+    load_phase10_start_pool_manifest,
     outcome_target,
     phase10_losses,
+    start_group_memberships,
     validate_frozen_variant,
 )
 
+ROOT = Path(__file__).resolve().parents[2]
 START = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
 
 
@@ -52,6 +57,12 @@ def test_canonical_identity_omits_only_move_number() -> None:
     assert first == second
     assert first.endswith(" b -")
     assert history_group_id(START, ["2g2f", "8c8d"]) != history_group_id(START, ["2g2f", "8d8e"])
+
+
+def test_general_opening_is_an_overlapping_umbrella_control() -> None:
+    assert start_group_memberships(START, "2g2f", 0) == ("general_opening", "ibisha")
+    assert start_group_memberships(START, "2g2f", 24) == ("ibisha",)
+    assert start_group_memberships(START, "", 24) == ("hard_middlegame_endgame",)
 
 
 def test_outcome_is_converted_to_current_side_perspective() -> None:
@@ -118,3 +129,33 @@ def test_frozen_variant_parameter_identity(
 def test_unknown_variant_is_rejected() -> None:
     with pytest.raises(Phase10ExecutionError):
         validate_frozen_variant("residual-v0")
+
+
+def test_frozen_start_pool_has_distinct_reserves_and_zero_holdout_overlap() -> None:
+    manifest = load_phase10_start_pool_manifest(ROOT / "artifacts/phase10/start-pool-manifest.json")
+    positions = manifest["positions"]
+    assert len(positions) == 800
+    assert len({row["positionId"] for row in positions}) == 800
+    assert len({row["canonicalStateSha256"] for row in positions}) == 800
+    assert {group: detail["uniqueEligible"] for group, detail in manifest["groups"].items()} == {
+        "general_opening": 375,
+        "ibisha": 3852,
+        "opponent_furibisha": 2097,
+        "hard_middlegame_endgame": 3886,
+    }
+    overlap = json.loads(
+        (ROOT / "artifacts/phase10/start-pool-overlap-report.json").read_text(encoding="utf-8")
+    )
+    assert overlap["splitLeakage"]["legacyFinalHoldoutCanonicalOverlap"] == 0
+    assert overlap["splitLeakage"]["legacyFinalHoldoutHistoryGroupOverlap"] == 0
+
+
+def test_start_pool_loader_keeps_the_fifty_unique_integrity_gate(tmp_path: Path) -> None:
+    source = ROOT / "artifacts/phase10/start-pool-manifest.json"
+    manifest = json.loads(source.read_text(encoding="utf-8"))
+    manifest["groups"]["general_opening"]["uniqueEligible"] = 49
+    mutated = tmp_path / "short-start-pool.json"
+    mutated.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(Phase10ExecutionError, match="start-pool group is short"):
+        load_phase10_start_pool_manifest(mutated)
