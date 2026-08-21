@@ -21,6 +21,9 @@ ignored_parts = {
     ".venv",
     "target",
 }
+ignored_local_artifact_roots = {
+    ("local", "phase10r-runs"),
+}
 forbidden_roots = {"node_modules", "package-lock.json", "package.json", "web"}
 ui_suffixes = {".css", ".html", ".tsx"}
 artifact_suffixes = {".ckpt", ".nnue", ".onnx", ".pt", ".pth", ".safetensors"}
@@ -43,6 +46,8 @@ for relative in sorted(required_bindings):
 for path in root.rglob("*"):
     relative = path.relative_to(root)
     if any(part in ignored_parts for part in relative.parts):
+        continue
+    if relative.parts[:2] in ignored_local_artifact_roots:
         continue
     if path.is_dir():
         if relative.parts[:2] in {("data", "raw"), ("data", "processed"), ("local", "teacher")}:

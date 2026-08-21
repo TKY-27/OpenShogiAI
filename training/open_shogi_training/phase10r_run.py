@@ -134,7 +134,7 @@ def _base_receipt(root: Path, command: str, argv: Sequence[str]) -> dict[str, An
         "command": command,
         "argv": list(argv),
         "started_at_utc": _utc_now(),
-        "repository": str(root),
+        "repository": root.name,
         "git": {"branch": branch, "commit": commit, "dirty": dirty, "error": git_error},
         "runtime": {
             "python": sys.version,
@@ -177,8 +177,12 @@ def _disk_receipt(root: Path) -> dict[str, Any]:
         data_root = root / data_root
     usage = shutil.disk_usage(data_root if data_root.exists() else root)
     minimum = 150 * 1024**3
+    try:
+        display_path = str(data_root.relative_to(root))
+    except ValueError:
+        display_path = "<external-data-root>"
     return {
-        "path": str(data_root),
+        "path": display_path,
         "free_bytes": usage.free,
         "minimum_free_bytes": minimum,
         "passed": usage.free >= minimum,
