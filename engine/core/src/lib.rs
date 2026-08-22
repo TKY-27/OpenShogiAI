@@ -14,6 +14,7 @@ mod neural;
 mod notation;
 mod opening;
 mod perft;
+mod phase10r;
 mod position;
 mod resource;
 mod search;
@@ -68,6 +69,10 @@ pub use opening::{
     OPENING_BOOK_SCHEMA, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile,
 };
 pub use perft::{PerftError, PerftResult, perft, perft_divide};
+pub use phase10r::{
+    MAX_OSAVAL02_MODEL_BYTES, Osaval02Error, Osaval02Evaluator, Osaval02History, Osaval02Identity,
+    Osaval02Inference, Osaval02Quantization, Osaval02Variant, encode_osaval02_move,
+};
 pub use position::{IllegalMove, Position, PositionError, Undo};
 pub use resource::{RESOURCE_BUDGET_SCHEMA, ResourceBudget, ResourceCoordinator};
 pub use search::{

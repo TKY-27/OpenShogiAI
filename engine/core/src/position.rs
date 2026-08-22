@@ -748,7 +748,7 @@ impl Position {
         })
     }
 
-    fn piece_attacks(&self, from: Square, piece: Piece, target: Square) -> bool {
+    pub(crate) fn piece_attacks(&self, from: Square, piece: Piece, target: Square) -> bool {
         if from == target {
             return false;
         }

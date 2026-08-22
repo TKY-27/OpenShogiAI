@@ -23,11 +23,21 @@ export class WasmBrowserEngine {
     unloadOpeningBook(): string;
 }
 
+export class WasmOsaval02Model {
+    free(): void;
+    [Symbol.dispose](): void;
+    deterministicTest(sfen: string, history_json?: string | null): string;
+    identity(): string;
+    infer(sfen: string, history_json?: string | null): string;
+    constructor(bytes: Uint8Array);
+}
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmbrowserengine_free: (a: number, b: number) => void;
+    readonly __wbg_wasmosaval02model_free: (a: number, b: number) => void;
     readonly wasmbrowserengine_analysisRestart: (a: number) => [number, number, number, number];
     readonly wasmbrowserengine_analysisStart: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly wasmbrowserengine_analysisStep: (a: number, b: number, c: number) => [number, number, number, number];
@@ -45,6 +55,10 @@ export interface InitOutput {
     readonly wasmbrowserengine_snapshot: (a: number) => [number, number, number, number];
     readonly wasmbrowserengine_unloadModel: (a: number) => [number, number, number, number];
     readonly wasmbrowserengine_unloadOpeningBook: (a: number) => [number, number, number, number];
+    readonly wasmosaval02model_deterministicTest: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly wasmosaval02model_identity: (a: number) => [number, number, number, number];
+    readonly wasmosaval02model_infer: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly wasmosaval02model_new: (a: number, b: number) => [number, number, number];
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;

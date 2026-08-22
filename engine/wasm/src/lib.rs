@@ -12,10 +12,10 @@ use open_shogi_core::{
     ANALYSIS_SCHEMA, AnalysisCacheKey, AnalysisService, AnalysisUpdate, AnalysisUpdateSource,
     CancellationToken, EngineIdentity, EnteringKingDeclaration, Game, GameEnd, HandPiece,
     ImpasseOutcome, Move, NeuralActivation, NeuralEvaluationMode, NeuralEvaluator,
-    NeuralQuantization, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile, PieceKind,
-    Position, RepetitionOutcome, SearchConfig, SearchEngine, SearchLimits, SearchResult,
-    SearchStats, SearchTermination, Side, Square, TimeControl, TimeControlMode, TimeManager,
-    parse_sfen, parse_usi_move, to_sfen, to_usi_move,
+    NeuralQuantization, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile,
+    Osaval02Evaluator, Osaval02History, PieceKind, Position, RepetitionOutcome, SearchConfig,
+    SearchEngine, SearchLimits, SearchResult, SearchStats, SearchTermination, Side, Square,
+    TimeControl, TimeControlMode, TimeManager, parse_sfen, parse_usi_move, to_sfen, to_usi_move,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1519,6 +1519,113 @@ const fn time_control_mode_name(mode: TimeControlMode) -> &'static str {
 
 fn duration_ns(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// Browser-safe adapter around the shared native OSAVAL02 evaluator.
+pub struct BrowserOsaval02Model {
+    evaluator: Osaval02Evaluator,
+}
+
+impl BrowserOsaval02Model {
+    /// Validate and retain one complete model byte string.
+    ///
+    /// # Errors
+    ///
+    /// Returns the shared strict parser's error for an invalid or incompatible artifact.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        Osaval02Evaluator::from_bytes(bytes)
+            .map(|evaluator| Self { evaluator })
+            .map_err(|error| error.to_string())
+    }
+
+    /// Serialize the complete validated model identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the already bounded identity cannot be serialized.
+    pub fn identity_json(&self) -> Result<String, String> {
+        serde_json::to_string(self.evaluator.identity()).map_err(|error| error.to_string())
+    }
+
+    /// Evaluate an SFEN using only the closed, bounded history input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed SFEN/history, invalid history facts, or non-finite output.
+    pub fn infer_json(&self, sfen: &str, history_json: Option<&str>) -> Result<String, String> {
+        let history = match history_json {
+            None | Some("") => Osaval02History::default(),
+            Some(encoded) if encoded.len() <= MAX_RESTORE_JSON_BYTES => {
+                serde_json::from_str(encoded)
+                    .map_err(|error| format!("invalid history JSON: {error}"))?
+            }
+            Some(_) => return Err("history JSON exceeds the 16 KiB boundary".to_owned()),
+        };
+        let position = parse_sfen(sfen).map_err(|error| error.to_string())?;
+        let inference = self
+            .evaluator
+            .infer(&position, history)
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string(&inference).map_err(|error| error.to_string())
+    }
+
+    /// Run the same inference twice and return it only if serialization is identical.
+    ///
+    /// # Errors
+    ///
+    /// Returns an inference error or an explicit deterministic-repeat failure.
+    pub fn deterministic_test_json(
+        &self,
+        sfen: &str,
+        history_json: Option<&str>,
+    ) -> Result<String, String> {
+        let first = self.infer_json(sfen, history_json)?;
+        let second = self.infer_json(sfen, history_json)?;
+        if first != second {
+            return Err("OSAVAL02 repeated inference is not deterministic".to_owned());
+        }
+        Ok(first)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct WasmOsaval02Model {
+    inner: BrowserOsaval02Model,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WasmOsaval02Model {
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8]) -> Result<Self, JsError> {
+        BrowserOsaval02Model::from_bytes(bytes)
+            .map(|inner| Self { inner })
+            .map_err(|error| JsError::new(&error))
+    }
+
+    pub fn identity(&self) -> Result<String, JsError> {
+        self.inner
+            .identity_json()
+            .map_err(|error| JsError::new(&error))
+    }
+
+    pub fn infer(&self, sfen: &str, history_json: Option<String>) -> Result<String, JsError> {
+        self.inner
+            .infer_json(sfen, history_json.as_deref())
+            .map_err(|error| JsError::new(&error))
+    }
+
+    #[wasm_bindgen(js_name = deterministicTest)]
+    pub fn deterministic_test(
+        &self,
+        sfen: &str,
+        history_json: Option<String>,
+    ) -> Result<String, JsError> {
+        self.inner
+            .deterministic_test_json(sfen, history_json.as_deref())
+            .map_err(|error| JsError::new(&error))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

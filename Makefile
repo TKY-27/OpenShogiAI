@@ -22,7 +22,8 @@ export UV_CACHE_DIR
 	phase5-arena-verify phase6-validate-config \
 	phase7-validate-config phase7-plan phase7-commands phase7-prepare-games \
 	phase7-analyze phase7-curate phase7-verify phase10-verify-frozen \
-	phase10r-validate phase10r-sanity phase10r-micro-overfit phase10r-memory
+	phase10r-validate phase10r-sanity phase10r-micro-overfit phase10r-memory \
+	phase10r-osaval02-parity
 
 PHASE2_ARENA_DIR ?= artifacts/phase2-arena
 PHASE2_GIT_COMMIT ?= $(shell git rev-parse --verify HEAD)
@@ -103,6 +104,7 @@ help:
 	@echo "  make phase10r-sanity Run bounded Phase 10R pipeline semantic gates"
 	@echo "  make phase10r-micro-overfit Prove the tiny multi-head pipeline can memorize"
 	@echo "  make phase10r-memory Validate M5/browser model memory estimates"
+	@echo "  make phase10r-osaval02-parity Validate all Python/native/actual-Wasm OSAVAL02 paths"
 	@echo "  make wasm-build      Build the Wasm engine and regenerate interface bindings"
 	@echo "  make wasm-web-check  Verify committed Wasm bindings are reproducible"
 
@@ -207,6 +209,10 @@ phase10r-micro-overfit:
 
 phase10r-memory:
 	PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r memory --root .
+
+phase10r-osaval02-parity: wasm-build
+	cargo test --locked -p open-shogi-core -p open-shogi-wasm
+	uv run pytest -q tests/python/models/test_osaval02.py tests/python/models/test_osaval02_parity.py
 
 phase3-dry-run:
 	PYTHONPATH=training uv run python -m open_shogi_training.data dry-run \

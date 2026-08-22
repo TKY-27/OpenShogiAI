@@ -1,0 +1,91 @@
+{
+  "schema": "open_shogiai_osaval02_parity_corpus/v1",
+  "provenancePolicy": "synthetic positions only; no game records, evaluations, labels, or training examples",
+  "fixtures": [
+    {
+      "fixtureId": "initial-black",
+      "sfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
+      "categories": ["initial-position", "black-to-move"],
+      "positionSha256": "eb5bc2ef917ec96fe2172f96d7060ec4f39322caf929fc1177d2c9fc8b937ebc",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "opening-white",
+      "sfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
+      "categories": ["white-to-move", "quiet-opening"],
+      "positionSha256": "d3b3b179806e81a9166b3d8fae039577a7cbbdb6de0e7f5301e16c2b8b4d8d1d",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "capture-available",
+      "sfen": "4k4/9/9/9/4p4/4P4/9/9/4K4 b - 17",
+      "categories": ["capture", "sparse-endgame"],
+      "positionSha256": "bc98cf362da2fa9ac5455be5559a4190ce5479b137282c9a6d775e25084b36df",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "promoted-piece",
+      "sfen": "4k4/9/9/9/4+P4/9/9/9/4K4 b P 1",
+      "categories": ["promotion", "hand-piece"],
+      "positionSha256": "5f0d31780f1e642ecc5a4a642f667fcc5e48daa8d62b6e67f964a37a151d05c9",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "all-drop-types",
+      "sfen": "4k4/9/9/9/9/9/9/9/4K4 b RBGSNLP 1",
+      "categories": ["drops", "all-hand-piece-types"],
+      "positionSha256": "32a07e21ac3ebbf530badc9420e368ef5aaa583010262d497a0eb7313134e960",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "checking-rook",
+      "sfen": "4k4/4R4/9/9/9/9/9/9/4K4 b - 1",
+      "categories": ["check", "near-mate"],
+      "positionSha256": "5a58a7e0bd820c36ec49952987614b45d2d6435bd73e7d1d0993ad9665fabef0",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "pinned-gold",
+      "sfen": "4r3k/9/9/9/9/9/9/4G4/4K4 b - 1",
+      "categories": ["pin", "in-check"],
+      "positionSha256": "85adf43caca765bf55f67b814808bd66cacb66c5a4d1dd43a1f0c371d78bdb71",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "quiet-middlegame",
+      "sfen": "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL b - 3",
+      "categories": ["quiet-middlegame", "both-sides-developed"],
+      "positionSha256": "f36035718406cabbf0c58fe2e214ad4d9a4dd4205d7b1073692ba3c37c4ae495",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "rook-endgame",
+      "sfen": "4k4/9/9/9/9/9/9/4R4/4K4 b - 1",
+      "categories": ["endgame", "sliding-attacks"],
+      "positionSha256": "85376c27ea188ed9b4966029bf6ad0a809642142e59fb87df7a8e45f46764bd8",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "terminal-checkmate",
+      "sfen": "3lkl3/3pRp3/4G4/9/9/9/9/9/K8 w - 1",
+      "categories": ["mate", "no-legal-moves", "terminal"],
+      "positionSha256": "1f4b519c08e20e10623b5f8ff7e48f9dbec32b5f0f01df7bd8bd7b2921b71a03",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "substantial-hands",
+      "sfen": "4K4/9/9/9/9/9/9/9/4k4 b RB2G2S2N2L9Prb2g2s2n2l9p 1",
+      "categories": ["substantial-hands", "drops", "both-sides"],
+      "positionSha256": "2484da3f3718c8730747d257dcc86ff67e98365be46087623a2ad873c429c3ae",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false}
+    },
+    {
+      "fixtureId": "repetition-history",
+      "sfen": "4k4/5R3/9/9/9/9/9/9/K8 b - 1",
+      "categories": ["history", "repetition", "continuous-check"],
+      "positionSha256": "3c08b336821f2432ff579bf46d0310e36b7ddec93cea85d23248f540917a4241",
+      "provenance": {"kind": "synthetic-rule-state", "source": "hand-authored-from-public-shogi-rules", "containsLabels": false},
+      "history": {"available": true, "repetitionCount": 3, "continuousCheckByUs": true, "continuousCheckByThem": false}
+    }
+  ]
+}

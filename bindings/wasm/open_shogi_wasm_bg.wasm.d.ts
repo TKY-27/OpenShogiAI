@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_wasmbrowserengine_free: (a: number, b: number) => void;
+export const __wbg_wasmosaval02model_free: (a: number, b: number) => void;
 export const wasmbrowserengine_analysisRestart: (a: number) => [number, number, number, number];
 export const wasmbrowserengine_analysisStart: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const wasmbrowserengine_analysisStep: (a: number, b: number, c: number) => [number, number, number, number];
@@ -19,6 +20,10 @@ export const wasmbrowserengine_searchWithTimeControl: (a: number, b: number, c: 
 export const wasmbrowserengine_snapshot: (a: number) => [number, number, number, number];
 export const wasmbrowserengine_unloadModel: (a: number) => [number, number, number, number];
 export const wasmbrowserengine_unloadOpeningBook: (a: number) => [number, number, number, number];
+export const wasmosaval02model_deterministicTest: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const wasmosaval02model_identity: (a: number) => [number, number, number, number];
+export const wasmosaval02model_infer: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const wasmosaval02model_new: (a: number, b: number) => [number, number, number];
 export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __externref_table_dealloc: (a: number) => void;
