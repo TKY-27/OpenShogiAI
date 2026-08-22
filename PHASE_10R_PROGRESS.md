@@ -30,9 +30,9 @@ rule.
 
 ## Stop reasons
 
-1. The repository has only the historical `OSAVAL01` evaluator. The frozen Phase 10R
-   `OSAVAL02` sparse pair/triple model, training backend, and Rust/Wasm incremental feature
-   parity are not implemented. Substituting the old MLP would violate the frozen architecture.
+1. The historical `OSAVAL01` evaluator remains supported. The frozen Phase 10R `OSAVAL02`
+   export/inspection path and shared Rust/Wasm sparse feature/inference runtime are now
+   parity-gated; the separate training backend remains intentionally unimplemented.
 2. The full approved-source canonical/history split-leakage scan has not been run. The data
    foundation report explicitly records canonical/transposition overlap as unavailable until the
    canonical join is performed. The frozen preflight therefore cannot authorize training.
@@ -48,8 +48,8 @@ rule.
 
 ## Exact next command
 
-Implement and hash-bind OSAVAL02, the sparse pair/triple training path, Rust/Wasm feature-key and
-incremental/unmake parity, and the approved-source canonical/history leakage scan. Then rerun:
+Implement the separate sparse pair/triple training path and the approved-source canonical/history
+leakage scan. OSAVAL02 export/native/Wasm inference parity is already hash-bound. Then rerun:
 
 ```sh
 PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run preflight --root .

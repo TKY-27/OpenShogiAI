@@ -130,6 +130,11 @@ size, magic, format/feature/architecture versions, feature flags, tensor dimensi
 SHA-256, finite values, and quantization metadata before inference. Explicit neural selection
 fails closed on missing or corrupt models.
 
+Phase 10R also has a parity-qualified `OSAVAL02` contract for its two frozen sparse candidate
+architectures. It is not a promoted/default model and does not change the historical OSAVAL01
+claims in this card. See [`docs/model/OSAVAL02_FORMAT.md`](docs/model/OSAVAL02_FORMAT.md) and
+`PHASE_10R_OSAVAL02_PARITY_REPORT.md` for its exact scope and limitations.
+
 Initial exports:
 
 | Artifact | Bytes | File SHA-256 | Payload SHA-256 |

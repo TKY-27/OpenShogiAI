@@ -7,7 +7,7 @@ Cargo, Python, or npm dependency of this project.
 external USI teacher process
            |
            v
-data tooling -> teacher adapter -> training/export -> OSAVAL01
+data tooling -> teacher adapter -> training/export -> OSAVAL01 / OSAVAL02
       |                                  |
       +-> opening tooling                v
                                    model runtime
@@ -20,7 +20,8 @@ engine/cli -> engine/usi -> engine/core <-+-> engine/wasm -> bindings/wasm
 ## Rust
 
 - `engine/core`: rules, legal moves, notation, game state, handcrafted evaluation,
-  `OSAVAL01` inference, secure artifact I/O, time allocation, play/analysis resource
+  `OSAVAL01` inference, shared native/Wasm `OSAVAL02` sparse inference, secure artifact I/O,
+  time allocation, play/analysis resource
   coordination, persistent completed-depth analysis cache, opening-book validation, and search.
 - `engine/usi`: the interruptible USI protocol boundary over `engine/core`, including complete
   clock mapping and immediate validated book moves.
@@ -42,7 +43,7 @@ labels, checkpoints, models, games, and reports stay in ignored local storage.
 
 ## Interchange boundaries
 
-SFEN, USI, CSA, `OSAVAL01`, arena reports, model registries, and browser-engine JSON use closed,
+SFEN, USI, CSA, `OSAVAL01`, `OSAVAL02`, arena reports, model registries, and browser-engine JSON use closed,
 versioned, bounded formats documented in `docs/interfaces.md`. Untrusted files and process
 output are validated for size, schema, identity, hashes, legality, and path containment as
 applicable.

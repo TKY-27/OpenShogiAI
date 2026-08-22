@@ -176,6 +176,12 @@ cargo run --locked -p open-shogi-cli -- model inspect \
   --model artifacts/phase4/models/value-v0-initial-205dc84/export/value_v0.f32.osaval
 ```
 
+Phase 10R additionally defines the separate `OSAVAL02` artifact. Its exact container, frozen
+hashes, feature keys, output semantics, and parity tolerances are normative in
+[`model/OSAVAL02_FORMAT.md`](model/OSAVAL02_FORMAT.md). Run `make phase10r-osaval02-parity` to
+regenerate bindings and execute the Python, native Rust, and actual generated-Wasm corpus gate for
+both eligible architectures and both weight representations.
+
 Arena comparison uses fixed nodes, paired color assignment, deterministic start identity, and
 immutable model/opening bytes. Public reports use `phase2_arena_report/v2`; private resume state
 uses `phase2_arena_state/v4` and is rejected unless the complete run signature and all existing

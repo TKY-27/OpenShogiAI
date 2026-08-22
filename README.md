@@ -7,7 +7,8 @@ the browser application lives in the separate OpenShogiUI repository.
 ## Included
 
 - complete shogi rules, legal move generation, SFEN/USI/CSA handling, and perft tooling;
-- handcrafted and checksummed `OSAVAL01` neural evaluation;
+- handcrafted `OSAVAL01` evaluation and hash-bound Phase 10R `OSAVAL02` sparse inference with
+  Python/native/actual-Wasm parity;
 - deterministic bounded search, USI, terminal play, Arena, and opening-book tooling;
 - audited data acquisition/normalization, external-USI teacher adapters, training/export,
   self-play, replay, promotion, and evaluation workflows;
@@ -49,6 +50,7 @@ cargo run --locked -p open-shogi-cli -- perft --depth 3
 make model-validate
 make phase3-validate-registry
 make phase6-validate-config
+make phase10r-osaval02-parity
 make wasm-web-check
 ```
 

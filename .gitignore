@@ -21,6 +21,7 @@ htmlcov/
 !/artifacts/phase10r/
 /artifacts/phase10r/*
 !/artifacts/phase10r/data-foundation-manifest.json
+!/artifacts/phase10r/osaval02-parity-report.json
 /local/*
 !/local/README.md
 

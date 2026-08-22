@@ -40,8 +40,8 @@ TRAIN_VARIANTS: Final = (
     "factorized-pair-triple-policy-score",
 )
 BACKEND_GAP: Final = (
-    "OSAVAL02 sparse pair/triple training and Rust/Wasm incremental runtime are not "
-    "implemented; the available backend is OSAVAL01 only."
+    "Phase 10R training execution is not implemented; OSAVAL02 export and Rust/Wasm parity "
+    "are present, but this runner cannot start a training checkpoint."
 )
 LEAKAGE_GAP: Final = (
     "full approved-source canonical/history split-leakage scan has not been run; the "
@@ -212,17 +212,24 @@ def _thermal_receipt() -> dict[str, Any]:
 
 
 def _backend_receipt(root: Path) -> dict[str, Any]:
-    neural = root / "engine/core/src/neural.rs"
+    runtime = root / "engine/core/src/phase10r.rs"
+    wasm = root / "engine/wasm/src/lib.rs"
     model_module = root / "training/open_shogi_training/phase10r_model.py"
-    osaval02 = neural.is_file() and b"OSAVAL02" in neural.read_bytes()
+    runtime_present = runtime.is_file() and b"Osaval02Evaluator" in runtime.read_bytes()
+    wasm_present = wasm.is_file() and b"WasmOsaval02Model" in wasm.read_bytes()
+    exporter_present = model_module.is_file() and b"serialize_osaval02" in model_module.read_bytes()
+    passed = runtime_present and wasm_present and exporter_present
     return {
         "required_format": "OSAVAL02",
-        "osaval02_parser_present": osaval02,
-        "phase10r_model_module_present": model_module.is_file(),
+        "osaval02_parser_present": runtime_present,
+        "osaval02_wasm_present": wasm_present,
+        "phase10r_model_module_present": exporter_present,
         "available_legacy_format": "OSAVAL01",
         "pure_runtime_configured": True,
-        "passed": osaval02 and model_module.is_file(),
-        "stop_reason": None if osaval02 and model_module.is_file() else BACKEND_GAP,
+        "passed": passed,
+        "stop_reason": (
+            None if passed else "OSAVAL02 export/native/Wasm parity backend is incomplete."
+        ),
     }
 
 

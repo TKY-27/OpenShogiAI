@@ -208,6 +208,15 @@ index and canonical SFEN, score, and elapsed nanoseconds. Handcrafted rows use t
 profiles `handcrafted-baseline` and `handcrafted-experimental`. Timing is observational; score
 and identity fields are the deterministic comparison surface.
 
+## OSAVAL02 Phase 10R boundary
+
+`OSAVAL02` is a distinct closed container for the two frozen Phase 10R sparse candidates. Python
+exports and independently evaluates it; native Rust and generated browser Wasm share one strict
+loader, feature encoder, and inference implementation. Exact layout, compatibility hashes,
+policy/history inputs, output semantics, rejection rules, and cross-runtime tolerances are
+defined by [`model/OSAVAL02_FORMAT.md`](model/OSAVAL02_FORMAT.md). Neither runtime treats
+`OSAVAL01` as an `OSAVAL02` fallback.
+
 ## Arena report v2 and state v4
 
 New arena runs emit `phase2_arena_report/v2`; the web importer still accepts v1 explicitly.
