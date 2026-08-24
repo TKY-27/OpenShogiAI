@@ -1,58 +1,67 @@
-# Phase 10R-C Progress
+# Phase 10R-C2A Progress
 
-Updated: 2026-08-21 (Asia/Tokyo)
+Updated: 2026-08-24 (Asia/Tokyo)
 
 ## Current state
 
-The campaign is **blocked before the 1m rung**. No bulk acquisition, normalization beyond the
-existing Phase 10R-A samples, training, teacher relabeling, Arena, cross-play, self-play, model
-promotion, holdout inspection, push, release, or deployment was performed.
+The campaign is **blocked before the 1M rung**. The separate frozen OSAVAL02 backend and the
+disk-backed approved-population scanner are implemented and bounded-validated, but preflight
+does not authorize a training rung because the full split-leakage proof is incomplete.
 
-The clean execution branch is `codex/phase10r-curriculum`, with the latest execution-infrastructure
-commit `414fa0b`. The objective requested
-`codex/phase10r-execution`, but the immutable execution prompt requires
-`codex/phase10r-curriculum`; the prompt's exact branch lock was treated as the more restrictive
-rule.
+The actual starting state was branch `codex/phase10r-osaval02-parity` at closure HEAD
+`5b8f85f6862eff8ee1216c37b90bf0b0361570bf`. Work continued on
+`codex/phase10r-preflight-closure`. The final three local commits are intended to leave that
+branch clean.
+
+No 1M-or-larger rung, full teacher labeling, production training, Arena, cross-play, self-play,
+final holdout inspection, promotion, push, release, or deployment was performed.
 
 ## Checks completed
 
-- Frozen hash manifest: passed, all 26 entries.
-- `make phase10r-validate`: passed.
-- `make phase10r-sanity`: passed.
-- `make phase10r-micro-overfit`: passed (`12` rows, final loss `8.46417333377758e-06`).
-- `make phase10r-memory`: passed.
-- `make check`: passed (`157` CLI, `102` core, `9` integration, and `488` Python tests, plus
-  build/Wasm checks).
-- Phase 10R registry validation: passed; `33` approved training artifacts, `68` total artifacts.
-- Phase 10R dry-run: passed; free space observed above the frozen `150 GiB` floor.
-- Runner preflight: semantic, hash, source, disk, thermal, and proof gates passed; execution
-  remained blocked by the two conditions below.
-
-## Stop reasons
-
-1. The historical `OSAVAL01` evaluator remains supported. The frozen Phase 10R `OSAVAL02`
-   export/inspection path and shared Rust/Wasm sparse feature/inference runtime are now
-   parity-gated; the separate training backend remains intentionally unimplemented.
-2. The full approved-source canonical/history split-leakage scan has not been run. The data
-   foundation report explicitly records canonical/transposition overlap as unavailable until the
-   canonical join is performed. The frozen preflight therefore cannot authorize training.
+- Baseline `make check`: passed before Phase 10R-C2A source changes.
+- Baseline `make phase10r-osaval02-parity`: passed (`28` tests).
+- Baseline `make phase10r-validate`: passed (`33` approved artifacts, `9` configs, `46` frozen
+  hashes).
+- Backend tests: passed (`7` tests); scanner tests: passed (`2` tests); runner tests: passed
+  (`3` tests).
+- Ruff checks and Python compilation for changed Python modules: passed.
+- Final `make check`: passed (`525` Python tests, Rust workspace tests, and build/Wasm checks).
+- Latest exact preflight: `blocked`; frozen hash validation, pipeline sanity, micro-overfit,
+  memory, disk, thermal, runtime, and bounded backend checks passed.
+- Latest preflight peak RSS: `381,583,360` bytes; observed free disk:
+  `331,112,599,552` bytes against the frozen `161,061,273,600`-byte floor.
 
 ## Durable artifacts
 
-- Runner: `training/open_shogi_training/phase10r_run.py`
-- Runner tests: `tests/python/test_phase10r_run.py`
-- Receipts and append-only events: `local/phase10r-runs/`
-- Machine report: `local/phase10r-runs/PHASE10R_EXECUTION_REPORT.json`
-- Human report: `local/phase10r-runs/PHASE10R_EXECUTION_REPORT.md`
-- Latest preflight receipt: `local/phase10r-runs/20260821T141935.148033Z-preflight.json`
+- Backend implementation: `training/open_shogi_training/phase10r_training.py`
+- Scanner implementation: `training/open_shogi_training/data/phase10r_scan.py`
+- Backend/scanner/runner tests under `tests/python/`
+- Human reports: `PHASE_10R_TRAINING_BACKEND_REPORT.md` and
+  `PHASE_10R_SPLIT_LEAKAGE_REPORT.md`
+- Machine reports and scan identities under `artifacts/phase10r/`
+- Immutable preflight receipts and append-only events under `local/phase10r-runs/`
+
+## Stop reasons
+
+1. Only `15/33` approved artifact streams completed replay; `18` streams remain rejected by
+   fail-closed CSA validation.
+2. The completed population contains `3,327` canonical cross-split collisions, `310` final
+   holdout forbidden-path collisions, and `214` parser/normalization collisions.
+3. Exact transposition proof is unavailable because no replay stream supplied the required
+   transposition namespace.
+
+These findings are recorded without deduplication, relabeling, or split mutation. They block
+training authorization.
 
 ## Exact next command
 
-Implement the separate sparse pair/triple training path and the approved-source canonical/history
-leakage scan. OSAVAL02 export/native/Wasm inference parity is already hash-bound. Then rerun:
+After the rejected streams are resolved with approved, checksum-bound replay inputs and the
+canonical/final-holdout/parser/transposition findings are resolved or reviewed under the frozen
+policy, rerun exactly:
 
-```sh
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run preflight --root .
+```bash
+PYTHONPATH=training uv run --frozen python \
+  -m open_shogi_training.phase10r_run preflight --root .
 ```
 
-Do not run `prepare`, `train`, `arena`, `crossplay`, or `selfplay` until that command passes.
+Do not run `prepare`, `train`, `arena`, `crossplay`, or `selfplay` while this command is blocked.

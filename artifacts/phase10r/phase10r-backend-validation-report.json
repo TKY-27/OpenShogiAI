@@ -1,0 +1,57 @@
+{
+  "bounded_checks": {
+    "checkpoint": "passed",
+    "expected_parameter_counts": {
+      "factorized-pair-triple-policy-score": 2676618,
+      "sparse-pair-policy-wdl": 2413321
+    },
+    "export": "passed",
+    "parameter_counts": {
+      "factorized-pair-triple-policy-score": 2676618,
+      "sparse-pair-policy-wdl": 2413321
+    },
+    "parsed_quantization": "float32",
+    "parsed_variant": "factorized-pair-triple-policy-score",
+    "status": "passed"
+  },
+  "campaign_preflight_status": "blocked",
+  "expected_parameter_counts": {
+    "factorized-pair-triple-policy-score": 2676618,
+    "sparse-pair-policy-wdl": 2413321
+  },
+  "observed_at_utc": "2026-08-24T04:03:06.201Z",
+  "prohibited_execution": {
+    "arena_started": false,
+    "crossplay_started": false,
+    "full_teacher_labeling_started": false,
+    "holdout_inspected": false,
+    "one_million_or_larger_rung_started": false,
+    "promotion_performed": false,
+    "selfplay_started": false
+  },
+  "receipt": "local/phase10r-runs/20260824T040306.201722Z-preflight.json",
+  "receipt_sha256": "86b3394c342f963688c4887e4bfc835e94651ad201b7e186443695022a0b74fc",
+  "required_format": "OSAVAL02",
+  "runtime_presence": {
+    "osaval02_parser": true,
+    "osaval02_wasm": true,
+    "phase10r_model": true,
+    "phase10r_scanner": true,
+    "phase10r_training": true,
+    "pure_runtime": true
+  },
+  "schema": "open_shogiai_phase10r_backend_validation/v1",
+  "status": "passed",
+  "targeted_validation": {
+    "backend_tests": "7 passed",
+    "cpu_mps_fallback_receipt": "passed",
+    "deterministic_checkpoint_resume": "passed",
+    "float32_int8_export_parse": "passed",
+    "runner_tests": "3 passed",
+    "scanner_tests": "2 passed"
+  },
+  "variants": {
+    "factorized-pair-triple-policy-score": 2676618,
+    "sparse-pair-policy-wdl": 2413321
+  }
+}

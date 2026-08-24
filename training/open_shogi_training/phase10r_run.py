@@ -17,12 +17,17 @@ import resource
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from open_shogi_training.data.phase10r_registry import load_phase10r_registry
+from open_shogi_training.data.phase10r_scan import (
+    Phase10RScanError,
+    scan_phase10r_population,
+)
 from open_shogi_training.phase10r import (
     EXPECTED_ARENA_GAMES,
     Phase10RValidationError,
@@ -30,6 +35,20 @@ from open_shogi_training.phase10r import (
     run_micro_overfit,
     run_pipeline_sanity,
     validate_phase10r,
+)
+from open_shogi_training.phase10r_model import (
+    VARIANT_PAIR,
+    VARIANT_PRIMARY,
+    expected_parameter_count,
+    parse_osaval02,
+)
+from open_shogi_training.phase10r_training import (
+    Phase10RExample,
+    Phase10RModel,
+    Phase10RTrainingError,
+    TrainingConfig,
+    export_osaval02_artifact,
+    run_bounded_training,
 )
 
 RUNS_DIRECTORY: Final = Path("local/phase10r-runs")
@@ -40,12 +59,11 @@ TRAIN_VARIANTS: Final = (
     "factorized-pair-triple-policy-score",
 )
 BACKEND_GAP: Final = (
-    "Phase 10R training execution is not implemented; OSAVAL02 export and Rust/Wasm parity "
-    "are present, but this runner cannot start a training checkpoint."
+    "bounded Phase 10R training backend validation did not pass; no 1M or larger rung may start."
 )
 LEAKAGE_GAP: Final = (
-    "full approved-source canonical/history split-leakage scan has not been run; the "
-    "data-foundation report records overlap as unavailable until canonical join."
+    "approved-source canonical/history split-leakage proof is incomplete; "
+    "no training rung may start."
 )
 
 
@@ -215,15 +233,86 @@ def _backend_receipt(root: Path) -> dict[str, Any]:
     runtime = root / "engine/core/src/phase10r.rs"
     wasm = root / "engine/wasm/src/lib.rs"
     model_module = root / "training/open_shogi_training/phase10r_model.py"
+    training_module = root / "training/open_shogi_training/phase10r_training.py"
+    scanner_module = root / "training/open_shogi_training/data/phase10r_scan.py"
     runtime_present = runtime.is_file() and b"Osaval02Evaluator" in runtime.read_bytes()
     wasm_present = wasm.is_file() and b"WasmOsaval02Model" in wasm.read_bytes()
     exporter_present = model_module.is_file() and b"serialize_osaval02" in model_module.read_bytes()
-    passed = runtime_present and wasm_present and exporter_present
+    training_result: dict[str, Any]
+    try:
+        counts = {
+            variant: sum(parameter.numel() for parameter in Phase10RModel(variant).parameters())
+            for variant in (VARIANT_PAIR, VARIANT_PRIMARY)
+        }
+        expected_counts = {
+            variant: expected_parameter_count(variant)
+            for variant in (VARIANT_PAIR, VARIANT_PRIMARY)
+        }
+        example = Phase10RExample(
+            sfen="lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
+            source="aobazero",
+            artifact_id="bounded-backend-fixture",
+            record_id="bounded-backend-record",
+            split="train",
+            legal_moves=("7g7f", "2g2f"),
+            played_move="7g7f",
+            wdl=2,
+            wdl_mask=True,
+        )
+        with tempfile.TemporaryDirectory(prefix="phase10r-backend-") as temporary:
+            output_dir = Path(temporary) / "run"
+            bounded = run_bounded_training(
+                [example],
+                output_dir=output_dir,
+                manifest_sha256="1" * 64,
+                config=TrainingConfig(
+                    variant_id=VARIANT_PAIR,
+                    requested_device="cpu",
+                    max_steps=1,
+                    batch_size=1,
+                    checkpoint_interval_steps=1,
+                    minimum_free_bytes=0,
+                    enforce_disk=False,
+                ),
+            )
+            model = Phase10RModel(VARIANT_PRIMARY, seed=7)
+            artifact_path = Path(temporary) / "primary.osaval02"
+            exported = export_osaval02_artifact(
+                model,
+                artifact_path,
+                quantization="float32",
+                dataset_manifest_sha256="1" * 64,
+                training_run_reference="bounded-backend",
+                git_commit="a" * 40,
+            )
+            parsed = parse_osaval02(artifact_path.read_bytes())
+        training_result = {
+            "status": "passed",
+            "parameter_counts": counts,
+            "expected_parameter_counts": expected_counts,
+            "checkpoint": bounded["status"],
+            "export": exported["status"],
+            "parsed_variant": parsed.variant_id,
+            "parsed_quantization": parsed.quantization,
+        }
+    except (OSError, RuntimeError, ValueError, Phase10RTrainingError) as error:
+        training_result = {"status": "failed", "error": str(error)}
+    passed = (
+        runtime_present
+        and wasm_present
+        and exporter_present
+        and training_module.is_file()
+        and scanner_module.is_file()
+        and training_result.get("status") == "passed"
+    )
     return {
         "required_format": "OSAVAL02",
         "osaval02_parser_present": runtime_present,
         "osaval02_wasm_present": wasm_present,
         "phase10r_model_module_present": exporter_present,
+        "phase10r_training_module_present": training_module.is_file(),
+        "phase10r_scanner_module_present": scanner_module.is_file(),
+        "bounded_training_validation": training_result,
         "available_legacy_format": "OSAVAL01",
         "pure_runtime_configured": True,
         "passed": passed,
@@ -272,12 +361,20 @@ def _run_preflight(root: Path, argv: Sequence[str]) -> tuple[dict[str, Any], boo
     receipt["backend"] = _backend_receipt(root)
     if not receipt["backend"]["passed"]:
         failures.append(BACKEND_GAP)
-    receipt["split_leakage"] = {
-        "status": "not_run",
-        "passed": False,
-        "reason": LEAKAGE_GAP,
-    }
-    failures.append(LEAKAGE_GAP)
+    try:
+        leakage = scan_phase10r_population(root)
+        receipt["split_leakage"] = leakage
+        if leakage.get("status") != "passed":
+            failures.append(LEAKAGE_GAP)
+            failures.extend(
+                "split leakage: "
+                f"{failure.get('artifact_id', failure.get('source_id', 'unknown'))}: "
+                f"{failure.get('reason', 'incomplete')}"
+                for failure in leakage.get("failures", [])
+            )
+    except (OSError, ValueError, RuntimeError, Phase10RScanError) as error:
+        receipt["split_leakage"] = {"status": "failed", "passed": False, "error": str(error)}
+        failures.append(f"split leakage: {error}")
     receipt["frozen_runtime"] = {
         "mode": "PureValue",
         "handcrafted_leaf_contribution": False,
