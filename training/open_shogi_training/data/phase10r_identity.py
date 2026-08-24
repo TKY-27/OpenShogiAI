@@ -125,8 +125,7 @@ def resolve_canonical_collision(occurrences: Sequence[Mapping[str, Any]]) -> dic
     if len(occurrences) < 2:
         raise Phase10RIdentityError("collision resolution requires at least two occurrences")
     identities = {
-        _sha256(row.get("canonical_position_id"), "canonical_position_id")
-        for row in occurrences
+        _sha256(row.get("canonical_position_id"), "canonical_position_id") for row in occurrences
     }
     if len(identities) != 1:
         raise Phase10RIdentityError("collision group mixes canonical position identities")

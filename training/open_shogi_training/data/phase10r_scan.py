@@ -1187,6 +1187,17 @@ def scan_phase10r_population(
 
     resolved_data_root = data_root or root / "local/phase10r-data"
     resolved_output = output_dir or resolved_data_root / "leakage-scan"
+    if (resolved_data_root / "replay-v2/replay-completion.json").is_file():
+        from open_shogi_training.data.phase10r_scan_v2 import scan_phase10r_v2
+
+        if output_dir is None:
+            resolved_output = resolved_data_root / "leakage-scan-v2"
+        return scan_phase10r_v2(
+            root,
+            data_root=resolved_data_root,
+            output_dir=resolved_output,
+            minimum_free_bytes=minimum_free_bytes,
+        )
     registry = load_phase10r_registry(root / "configs/phase10r/source-registry.yaml")
     streams, metadata, identities = build_registry_scan_inputs(root, resolved_data_root)
     return scan_records(

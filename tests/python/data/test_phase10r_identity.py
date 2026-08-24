@@ -66,9 +66,7 @@ def test_collision_precedence_preserves_final_holdout_and_is_deterministic() -> 
 
 def test_frozen_identity_config_and_wcsc_replay_manifest_are_closed() -> None:
     config = yaml.safe_load((ROOT / "configs/phase10r/identity.yaml").read_text())
-    proof_schema = json.loads(
-        (ROOT / "docs/data/phase10r-replay-proof.schema.json").read_text()
-    )
+    proof_schema = json.loads((ROOT / "docs/data/phase10r-replay-proof.schema.json").read_text())
     manifest = json.loads(
         (ROOT / "artifacts/phase10r/phase10r-wcsc-replay-manifest.json").read_text()
     )

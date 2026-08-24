@@ -1,211 +1,187 @@
 {
   "allowed_same_split_duplicate_groups": {
-    "canonical_position_id": 4158,
-    "game_id": 2899,
-    "history_id": 2899,
-    "record_id": 2899
+    "canonical_position": 62746,
+    "history": 60155,
+    "transposition": 62746
   },
   "approved_artifact_count": 33,
   "classes": {
     "aobazero_via_gct": {
-      "count": 0,
-      "reason": "no admitted artifact lineage for this class",
-      "status": "not_applicable"
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
+      "status": "passed"
     },
     "arena_start_overlap": {
-      "count": 0,
-      "reason": "no admitted artifact lineage for this class",
-      "status": "not_applicable"
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
+      "status": "passed"
     },
     "canonical_position_cross_split": {
-      "count": 3327,
+      "action": "frozen_precedence_owner_then_exclude_losing_occurrences",
+      "effective_cross_split_groups": 0,
       "identity": "canonical_position_id",
-      "status": "failed"
+      "observed_duplicate_groups": 62746,
+      "observed_raw_cross_split_groups": 5401,
+      "status": "passed"
     },
     "different_plies_one_game_train_eval": {
-      "count": 0,
+      "effective_cross_split_groups": 0,
       "identity": "game_id",
+      "observed_raw_cross_split_groups": 0,
       "status": "passed"
     },
     "distilled_vs_nodchip": {
-      "count": 0,
-      "reason": "no admitted artifact lineage for this class",
-      "status": "not_applicable"
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
+      "status": "passed"
     },
     "final_holdout_entering_forbidden_path": {
-      "count": 310,
-      "identity": "canonical_position_id",
-      "status": "failed"
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
+      "status": "passed"
     },
     "floodgate_via_gct_or_direct": {
-      "count": 0,
-      "reason": "no admitted artifact lineage for this class",
-      "status": "not_applicable"
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
+      "status": "passed"
     },
     "parser_normalization_version_collision": {
-      "count": 214,
-      "identity": "canonical_position_id",
-      "status": "failed"
+      "action": "frozen_precedence_owner_then_exclude_losing_versions",
+      "effective_collision_groups": 0,
+      "identity": "canonical_position_id + parser_version + normalization_version",
+      "observed_raw_collision_groups": 10783,
+      "status": "passed"
     },
     "prohibited_transposition_overlap": {
-      "count": 0,
+      "action": "frozen_precedence_owner_then_exclude_losing_occurrences",
+      "effective_cross_split_groups": 0,
       "identity": "transposition_key",
-      "reason": "no exact transposition namespace was supplied by the replay stream",
-      "status": "unavailable"
+      "observed_duplicate_groups": 62746,
+      "observed_raw_cross_split_groups": 5401,
+      "status": "passed"
     },
     "protected_history_cross_split": {
-      "count": 0,
+      "action": "frozen_precedence_owner_then_exclude_losing_occurrences",
+      "effective_cross_split_groups": 0,
       "identity": "history_id",
+      "observed_duplicate_groups": 60155,
+      "observed_raw_cross_split_groups": 4155,
       "status": "passed"
     },
     "public_test_entering_training_or_selection": {
-      "count": 0,
-      "identity": "canonical_position_id",
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
       "status": "passed"
     },
     "same_game_cross_split": {
-      "count": 0,
+      "action": "frozen_precedence_owner_then_exclude_losing_occurrences",
+      "effective_cross_split_groups": 0,
       "identity": "game_id",
+      "observed_duplicate_groups": 0,
+      "observed_raw_cross_split_groups": 0,
       "status": "passed"
     },
     "same_record_cross_split": {
-      "count": 0,
+      "action": "frozen_precedence_owner_then_exclude_losing_occurrences",
+      "effective_cross_split_groups": 0,
       "identity": "record_id",
+      "observed_duplicate_groups": 0,
+      "observed_raw_cross_split_groups": 0,
       "status": "passed"
     },
     "source_held_out_entering_training": {
-      "count": 0,
-      "identity": "source_id+game_id",
+      "effective_cross_split_groups": 0,
+      "formal_exclusion": "source is not admitted by the frozen Phase 10R registry",
+      "identity": "not_applicable_under_frozen_source_registry",
+      "observed_raw_cross_split_groups": 0,
       "status": "passed"
     }
   },
-  "completed_artifact_count": 15,
-  "input_manifest_sha256": "94d3eec617f81ae68e6012f7f38819fe170423e3ea7587c2042bc30eef04eac8",
-  "manifest_sha256": null,
+  "collision_decisions_sha256": "3baaa4ed33bd6d89d88c3dbd208017d83742adb96c6873348ba89a41b47c5d3b",
+  "completed_artifact_count": 33,
+  "effective_published_records": 528570,
+  "failures": [],
+  "input_manifest_sha256": "21b36a06722aed5350add5ea9a1e373add3cca830255ea01b31dc7e87e6620d6",
+  "manifest_sha256": "42b47eb92951669fad88a3011a4e8671cbcf4793f5e72efede1960dd0212cb92",
   "no_training_authorization": true,
-  "observed_at_utc": "2026-08-24T04:03:06.201Z",
-  "partial_manifest_sha256": "5d1d4afc9b1f1b696564ca8c54db76c47897d42952b16aaaccca580f8d7302a7",
-  "passed": false,
-  "position_count": 351725,
-  "preflight_receipt": "local/phase10r-runs/20260824T040306.201722Z-preflight.json",
-  "preflight_receipt_sha256": "86b3394c342f963688c4887e4bfc835e94651ad201b7e186443695022a0b74fc",
-  "replay_failures": [
-    {
-      "artifact_id": "wcsc02-kifu",
-      "reason": "CSA replay rejected '6ddba4924524946c11f3-EISEI.csa': invalid_csa: invalid CSA at line 3: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc04-kifu",
-      "reason": "CSA replay rejected '8f911324433eff049154-KIWAMI.csa': invalid_csa: invalid CSA notation at line 5: invalid move: CSA move source belongs to the other side"
-    },
-    {
-      "artifact_id": "wcsc05-kifu",
-      "reason": "CSA replay rejected '3c469cc84804b5849457-YANO.csa': invalid_csa: invalid CSA at line 2: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc06-kifu",
-      "reason": "CSA replay rejected '018c41c6e848aca2dd71-YANO.csa': invalid_csa: invalid CSA at line 2: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc07-kifu",
-      "reason": "CSA replay rejected '0ef97c4d760847504be9-J3.csa': invalid_csa: invalid CSA at line 7: only the audited CSA V3.0 record format is supported"
-    },
-    {
-      "artifact_id": "wcsc08-kifu",
-      "reason": "CSA replay rejected '002f39aebb6778825a39-SAEKI_~1.csa': invalid_csa: invalid CSA at line 4: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc09-kifu",
-      "reason": "CSA replay rejected '193905c8ccf4531e78b4-KAWABATA.csa': invalid_csa: invalid CSA at line 2: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc10-kifu",
-      "reason": "CSA replay rejected '0099d90ad562772b2d03-sakasita.csa': invalid_csa: invalid CSA at line 2: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc11-kifu",
-      "reason": "CSA replay rejected '01b17a204b24f20d5533-sakasita.csa': invalid_csa: invalid CSA at line 17: blank lines are not allowed"
-    },
-    {
-      "artifact_id": "wcsc12-kifu",
-      "reason": "CSA replay rejected '013a570b07386ee4a29d-shouou.csa': invalid_csa: invalid CSA at line 3: the CSA version must be the first non-comment statement"
-    },
-    {
+  "passed": true,
+  "replay": {
+    "aobazero_games": 100,
+    "aobazero_positions": 15488,
+    "denryu_games": 132,
+    "denryu_positions": 25993,
+    "inventory_member_count": 8989,
+    "inventory_outside_frozen_c2b_scope": 3372,
+    "repairable_replacement": {
+      "archive_member_path": "WCSC2003/yosen1/daemon-shogi/copy/YAMADA.CSA",
       "artifact_id": "wcsc13-kifu",
-      "reason": "CSA replay rejected '00526d0afe37c81185b8-demon.csa': invalid_csa: invalid CSA at line 5: the CSA version must be the first non-comment statement"
+      "status": "accepted"
     },
-    {
-      "artifact_id": "wcsc14-kifu",
-      "reason": "CSA replay rejected '01a3b1107b8f9bcf2e06-SHUTOU.csa': invalid_csa: invalid CSA at line 147: CSA multi-statement line contains an empty statement"
-    },
-    {
-      "artifact_id": "wcsc15-kifu",
-      "reason": "CSA replay rejected '00a698e80cabd7bbf161-RYUNOTA.csa': invalid_csa: invalid CSA at line 2: the CSA version must be the first non-comment statement"
-    },
-    {
-      "artifact_id": "wcsc16-kifu",
-      "reason": "CSA replay rejected '064e3e4bbdef1447cc6a-WCSC16_F_3_KAK_OTK.csa': invalid_csa: invalid CSA at line 2: only the audited CSA V3.0 record format is supported"
-    },
-    {
-      "artifact_id": "wcsc17-kifu",
-      "reason": "CSA replay rejected '0128e863682c77eef19c-WCSC17_L5_TAN_SPE.csa': invalid_csa: invalid CSA at line 2: only the audited CSA V3.0 record format is supported"
-    },
-    {
-      "artifact_id": "wcsc22-kifu",
-      "reason": "CSA replay rejected '2bf8b9260271610213cb-WCSC22_L5_SRL_HAK.csa': invalid_csa: illegal CSA move at line 176: move Drop { piece: Pawn, to: Square(50) } is not legal in this position"
-    },
-    {
-      "artifact_id": "wcsc26-kifu",
-      "reason": "CSA replay rejected '2b211fad2c423bb28cc4-WCSC26_L7_CLR_HAK.csa': invalid_csa: illegal CSA move at line 304: move Drop { piece: Pawn, to: Square(43) } is not legal in this position"
-    },
-    {
-      "artifact_id": "wcsc32-kifu",
-      "reason": "CSA replay rejected '06036c693d9e60976198-WCSC32_L6_KMA_AUA.csa': invalid_csa: illegal CSA move at line 244: move Drop { piece: Pawn, to: Square(40) } is not legal in this position"
-    }
-  ],
-  "schema": "open_shogiai_phase10r_split_leakage_report/v1",
-  "source_group_counts": {
-    "aobazero": {
-      "game_groups": 100,
-      "source_held_out_fraction": 0.0,
-      "source_held_out_game_groups": 0,
-      "validation_game_groups": 18
-    },
-    "denryu": {
-      "game_groups": 121,
-      "source_held_out_fraction": 0.10743801652892562,
-      "source_held_out_game_groups": 13,
-      "validation_game_groups": 13
-    },
-    "wcsc": {
-      "game_groups": 2679,
-      "source_held_out_fraction": 0.1019036954087346,
-      "source_held_out_game_groups": 273,
-      "validation_game_groups": 273
-    }
+    "wcsc_accepted_games": 5226,
+    "wcsc_candidate_members": 5617,
+    "wcsc_excluded_members": 391
+  },
+  "replay_completion_sha256": "77296e5dbf140af7f8a85e151879a61c161fad82d899190486b6135902a86df4",
+  "scan_identity": "6ad465f9c36b96132bd54192470774416b47f14d739f9827a6f3b0145c45bc18",
+  "schema": "open_shogiai_phase10r_split_leakage_report/v2",
+  "source_position_counts": {
+    "aobazero": 15488,
+    "denryu": 25993,
+    "wcsc": 618038
   },
   "source_split_counts": {
     "aobazero": {
       "final_holdout": 1433,
+      "game_groups": 100,
+      "source_held_out_fraction": 0.0,
+      "source_held_out_game_groups": 0,
       "train": 11493,
       "validation": 2562
     },
     "denryu": {
-      "source_held_out": 2498,
-      "train": 17939,
-      "validation": 2179
+      "game_groups": 132,
+      "source_held_out": 2412,
+      "source_held_out_fraction": 0.10606060606060606,
+      "source_held_out_game_groups": 14,
+      "train": 20667,
+      "validation": 2914
     },
     "wcsc": {
-      "source_held_out": 31766,
-      "train": 249214,
-      "validation": 32641
+      "game_groups": 4711,
+      "source_held_out": 63940,
+      "source_held_out_fraction": 0.1001910422415623,
+      "source_held_out_game_groups": 472,
+      "train": 490968,
+      "validation": 63130
     }
   },
-  "status": "blocked",
+  "status": "passed",
+  "total_scanned_records": 659519,
   "transposition_proof": {
-    "count": 0,
+    "collision_decisions_sha256": "3baaa4ed33bd6d89d88c3dbd208017d83742adb96c6873348ba89a41b47c5d3b",
+    "database": "phase10r-scan-v2.sqlite3",
+    "effective_cross_split_groups": 0,
+    "effective_records": 528570,
     "identity": "transposition_key",
-    "reason": "no exact transposition namespace was supplied by the replay stream",
-    "status": "unavailable"
-  }
+    "query": "group raw and effective SQLite positions by domain-separated transposition_key",
+    "raw_cross_split_groups": 5401,
+    "raw_duplicate_groups": 62746,
+    "raw_records": 659519,
+    "schema": "open_shogiai_phase10r_transposition_proof/v2",
+    "status": "complete"
+  },
+  "unique_games": 4943,
+  "unique_positions": 528570
 }

@@ -104,6 +104,15 @@ def test_phase10r_kif_converter_preserves_promotion_drop_and_terminal() -> None:
     assert "+0045FU" in csa
 
 
+def test_phase10r_kif_converter_does_not_invent_terminal() -> None:
+    raw = ("手合割\uff1a平手\n手数----指手---------消費時間--\n 1 ７六歩(77)\n").encode("cp932")
+
+    csa, report = convert_kif_to_csa(raw)
+
+    assert report["terminal"] is None
+    assert "%CHUDAN" not in csa
+
+
 def test_phase10r_archive_inventory_and_traversal_rejection(tmp_path: Path) -> None:
     archive_path = tmp_path / "sample.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:

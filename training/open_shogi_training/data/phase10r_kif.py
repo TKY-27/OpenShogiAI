@@ -50,6 +50,7 @@ _TERMINALS: tuple[tuple[str, str], ...] = (
     ("時間切れ", "%TIME_UP"),
     ("反則勝ち", "%KACHI"),
     ("入玉宣言", "%JISHOGI"),
+    ("入玉勝ち", "%JISHOGI"),
 )
 
 
@@ -100,8 +101,6 @@ def convert_kif_to_csa(raw: bytes, *, max_moves: int = 10_000) -> tuple[str, dic
         move, destination = _convert_move(token, previous_destination)
         csa_moves.append(("+" if ply % 2 == 0 else "-") + move)
         previous_destination = destination
-    if terminal is None:
-        terminal = "%CHUDAN"
     black = _header_value(headers, "先手")
     white = _header_value(headers, "後手")
     lines = ["'CSA encoding=UTF-8", "V3.0"]
@@ -109,10 +108,12 @@ def convert_kif_to_csa(raw: bytes, *, max_moves: int = 10_000) -> tuple[str, dic
         lines.append(f"N+{black}")
     if white:
         lines.append(f"N-{white}")
-    lines.extend(["PI", "+", *csa_moves, terminal])
+    lines.extend(["PI", "+", *csa_moves])
+    if terminal is not None:
+        lines.append(terminal)
     csa = "\n".join(lines) + "\n"
     return csa, {
-        "schema": "phase10r_kif_conversion/v1",
+        "schema": "phase10r_kif_conversion/v2",
         "encoding": encoding,
         "move_count": len(moves),
         "terminal": terminal,
