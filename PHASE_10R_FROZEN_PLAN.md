@@ -197,3 +197,15 @@ self-play, model promotion, push, publication, or deployment. The complete futur
 is `prompts/LUNA_PHASE10R_EXECUTION.md`. Luna may implement and run the frozen pipeline but may not
 alter architecture, features, source approvals, split/holdout policy, thresholds, scale rungs,
 promotion policy, or hashes.
+
+## 2026-08-24 identity-repair addendum
+
+The Phase 10R-C2B identity contract is frozen in `configs/phase10r/identity.yaml` and
+`PHASE_10R_IDENTITY_REPAIR_PLAN.md`. It does not change the architecture, targets, source lanes,
+holdout precedence, statistical gates, 55% objective, or approved 33-artifact population. All 31
+active WCSC archive hashes are now pinned. Five exact official members with an illegal move and
+explicit `ILLEGAL_ACTION` terminal are excluded because complete legal replay is impossible; no
+WCSC stream is removed. Full-prefix history and domain-separated transposition identities are now
+mandatory, and canonical collisions are resolved only by the existing protected split precedence
+without moving records. The executable C2B objective is
+`prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md`.

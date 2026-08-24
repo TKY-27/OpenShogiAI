@@ -1,6 +1,6 @@
-schema_version: 1
-normalization_id: phase10r-source-preserving-v1
-record_schema: phase10r_normalized_record/v1
+schema_version: 2
+normalization_id: phase10r-source-preserving-v2
+record_schema: phase10r_normalized_record/v2
 source_identity:
   retain_source_id: true
   retain_artifact_id: true
@@ -8,12 +8,20 @@ source_identity:
   retain_source_revision: true
   retain_raw_record_sha256: true
   retain_parser_version: true
+  retain_official_artifact_sha256: true
+  retain_archive_member_path: true
+  retain_archive_member_sha256: true
+  retain_source_game_id: true
 position:
   canonical_position_required_before_training: true
   retain_history: true
   retain_side_to_move: true
   retain_legal_move_map: true
   retain_raw_position_encoding: true
+  retain_canonical_game_hash: true
+  retain_canonical_position_hash: true
+  retain_transposition_key: true
+  retain_full_prefix_history_id: true
   unknown_position_policy: quarantine
 score:
   retain_raw_value: true
@@ -24,8 +32,9 @@ score:
   unknown_semantics_policy: quarantine
 formats:
   csa:
-    adapter: csa_source_preserving
+    adapter: phase10r_wcsc_source_preserving_v2
     text_encodings: [utf-8, cp932]
+    record_versions: [missing_1997_08_25_profile, V1.0, V2.0, V2.1, V2.2, V3.0]
     legality: open-shogi-cli-rule-engine
   kif:
     adapter: kif_source_preserving
@@ -51,3 +60,7 @@ validation:
   reject_bad_move_index: true
   roundtrip_required: true
   source_bytes_are_immutable: true
+  complete_archive_member_inventory_required: true
+  complete_legal_replay_required: true
+  replay_proof_schema: open_shogiai_phase10r_replay_proof/v2
+  unresolved_identity_action: quarantine

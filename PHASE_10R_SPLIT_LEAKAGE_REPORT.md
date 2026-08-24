@@ -2,6 +2,11 @@
 
 Status: **BLOCKED; not a training authorization**.
 
+This is the preserved legacy partial-scan result. The 2026-08-24 repair contract and complete
+collision ledger are in `PHASE_10R_IDENTITY_REPAIR_PLAN.md`, `PHASE_10R_WCSC_REPLAY_REPORT.md`,
+`PHASE_10R_COLLISION_RESOLUTION.md`, and `artifacts/phase10r/phase10r-collision-resolution.json`.
+No v2 full scan has been run yet.
+
 The latest scan used the approved registry population and the exact command below:
 
 ```bash

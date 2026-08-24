@@ -29,6 +29,7 @@ CONFIG_SCHEMAS: Final = {
     "configs/phase10r/selfplay.yaml": "open_shogiai_phase10r_selfplay/v1",
     "configs/phase10r/resource-budget.yaml": "open_shogiai_phase10r_resource_budget/v1",
     "configs/phase10r/holdout-policy.yaml": "open_shogiai_phase10r_holdout_policy/v2",
+    "configs/phase10r/identity.yaml": "open_shogiai_phase10r_identity/v2",
 }
 FROZEN_PATHS: Final = frozenset(
     {
@@ -70,6 +71,16 @@ FROZEN_PATHS: Final = frozenset(
         "artifacts/phase10/start-pool-manifest.json",
         "artifacts/phase10r/data-foundation-manifest.json",
         "artifacts/phase10r/osaval02-parity-report.json",
+        "artifacts/phase10r/phase10r-wcsc-replay-manifest.json",
+        "artifacts/phase10r/phase10r-collision-resolution.json",
+        "docs/data/phase10r-replay-proof.schema.json",
+        "PHASE_10R_IDENTITY_REPAIR_PLAN.md",
+        "PHASE_10R_WCSC_REPLAY_REPORT.md",
+        "PHASE_10R_COLLISION_RESOLUTION.md",
+        "prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md",
+        "training/open_shogi_training/data/phase10r_identity.py",
+        "tests/python/data/test_phase10r_identity.py",
+        "scripts/build_phase10r_collision_resolution.py",
     }
 )
 EXPECTED_SCALES: Final = (

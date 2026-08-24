@@ -1,8 +1,8 @@
-schema_version: 1
-deduplication_id: phase10r-deterministic-v1
+schema_version: 2
+deduplication_id: phase10r-deterministic-v2
 identity_layers:
   - name: exact_game
-    key: history.identity
+    key: canonical_game_hash
     action: drop_later_source_priority
   - name: canonical_position
     key: position.canonical_sfen
@@ -11,7 +11,7 @@ identity_layers:
     key: position.transposition_key
     action: drop_later_source_priority
   - name: exact_position
-    key: position.identity
+    key: history_id
     action: drop_later_source_priority
   - name: raw_record
     key: provenance.raw_record_sha256
@@ -38,3 +38,10 @@ split_leakage:
   compare_canonical_position: true
   compare_transposition: true
   unresolved_identity_policy: quarantine
+split_resolution:
+  precedence: [public_test, reserved_holdout, final_holdout, source_held_out, validation, train]
+  lower_precedence_action: exclude_without_reassignment
+  owner_tiebreak: [artifact_id, source_game_id, record_id, position_index]
+  final_holdout_may_move_to_training: false
+  same_game_or_protected_history_cross_split: block
+  parser_normalization_collision: require_v2_replay_proofs_then_apply_precedence

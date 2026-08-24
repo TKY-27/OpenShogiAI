@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-shogi.ai/schemas/phase10r-replay-proof-v2.json",
+  "additionalProperties": false,
+  "properties": {
+    "archive_member_path": {"minLength": 1, "type": "string"},
+    "archive_member_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "canonical_game_hash": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "canonical_initial_sfen": {"minLength": 1, "type": "string"},
+    "canonical_position_hashes": {
+      "items": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+      "minItems": 1,
+      "type": "array"
+    },
+    "complete_legal_replay": {"const": true},
+    "history_ids": {
+      "items": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+      "minItems": 1,
+      "type": "array"
+    },
+    "normalization_version": {"const": "phase10r-source-preserving/v2"},
+    "official_artifact_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "parser_version": {"const": "phase10r-wcsc-parser/v2"},
+    "schema": {"const": "open_shogiai_phase10r_replay_proof/v2"},
+    "source_game_id": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "terminal": {"minLength": 1, "type": "string"},
+    "transposition_keys": {
+      "items": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+      "minItems": 1,
+      "type": "array"
+    },
+    "usi_moves": {
+      "items": {
+        "pattern": "^(?:[1-9][a-i][1-9][a-i]\\+?|[RBGSNLP]\\*[1-9][a-i])$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "official_artifact_sha256",
+    "archive_member_path",
+    "archive_member_sha256",
+    "source_game_id",
+    "parser_version",
+    "normalization_version",
+    "canonical_initial_sfen",
+    "usi_moves",
+    "complete_legal_replay",
+    "canonical_game_hash",
+    "canonical_position_hashes",
+    "transposition_keys",
+    "history_ids",
+    "terminal"
+  ],
+  "title": "OpenShogiAI Phase 10R replay proof",
+  "type": "object"
+}

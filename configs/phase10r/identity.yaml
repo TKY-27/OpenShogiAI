@@ -1,0 +1,83 @@
+schema: open_shogiai_phase10r_identity/v2
+frozen_as_of: "2026-08-24"
+hash_algorithm: sha256
+hash_framing: utf8_length_prefixed_fields
+domains:
+  source_game_id: open-shogiai/phase10r/source-game/v2
+  canonical_game_hash: open-shogiai/phase10r/canonical-game/v2
+  canonical_position_hash: open-shogiai/phase10r/canonical-position/v2
+  transposition_key: open-shogiai/phase10r/transposition/v2
+  history_id: open-shogiai/phase10r/history/v2
+source_game_id:
+  fields: [official_artifact_sha256, archive_member_path, archive_member_sha256]
+  archive_member_path_required: true
+  flattened_staging_name_is_not_authoritative: true
+canonical_game_hash:
+  fields: [canonical_initial_sfen, complete_legal_usi_move_sequence]
+  terminal_and_result_bound_in_replay_proof: true
+  terminal_changes_game_identity: false
+canonical_position_hash:
+  serialization: canonical SFEN board, hands, and side-to-move; move number omitted
+  fields: [canonical_sfen]
+  mirror_equivalence: false
+  color_rotation_equivalence: false
+transposition_key:
+  serialization: same canonical SFEN as canonical_position_hash in a separate hash domain
+  fields: [canonical_sfen]
+  required_for_every_position: true
+history_id:
+  fields: [canonical_initial_sfen, complete_legal_usi_move_prefix_through_current_position]
+  per_position: true
+  full_prefix_required: true
+  first_n_moves_is_not_sufficient: true
+  repetition_state_derivable_from_prefix: true
+replay_proof:
+  schema: open_shogiai_phase10r_replay_proof/v2
+  required_fields:
+    - official_artifact_sha256
+    - source_game_id
+    - archive_member_path
+    - archive_member_sha256
+    - parser_version
+    - normalization_version
+    - canonical_initial_sfen
+    - complete_legal_replay
+    - canonical_game_hash
+    - canonical_position_hashes
+    - transposition_keys
+    - history_ids
+    - terminal
+  complete_legal_replay_required: true
+  unknown_provenance_action: quarantine
+  illegal_or_ambiguous_replay_action: quarantine_exact_member
+legacy_wcsc_normalization:
+  parser_version: phase10r-wcsc-parser/v2
+  normalization_version: phase10r-source-preserving/v2
+  source_bytes_immutable: true
+  require_complete_archive_inventory: true
+  require_member_path_and_sha256: true
+  missing_csa_version: parse_as_official_1997_08_25_compatibility_profile
+  csa_v1_v2: parse_declared_version_then_emit_canonical_v3_view
+  blank_lines: discard_only_when_the_line_contains_no_statement
+  trailing_nul_padding: discard_only_after_the_terminal_statement
+  multi_statement_lines: preserve_nonempty_statements_in_order
+  kif_orientation:
+    direct_standard_start_replay_first: true
+    allow_single_global_rotate_180_and_color_swap: true
+    rotated_view_requires_unique_complete_legal_replay: true
+    ambiguous_or_partial_action: quarantine_exact_member
+  illegal_action_terminal:
+    trim_or_relabel_illegal_move: false
+    action: quarantine_exact_member
+collision_resolution:
+  split_precedence: [public_test, reserved_holdout, final_holdout, source_held_out, validation, train]
+  lower_precedence_action: exclude_occurrence_without_reassignment
+  owner_tiebreak: [artifact_id, source_game_id, record_id, position_index]
+  protected_holdout_may_move_to_training: false
+  protected_history_cross_split_action: block
+  same_canonical_game_cross_split_action: block
+  parser_or_normalization_version_difference:
+    canonical_identity_schema_must_match: true
+    every_replay_proof_must_pass: true
+    apply_split_precedence_then_owner_tiebreak: true
+  unresolved_action: block

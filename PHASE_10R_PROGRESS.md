@@ -4,9 +4,15 @@ Updated: 2026-08-24 (Asia/Tokyo)
 
 ## Current state
 
-The campaign is **blocked before the 1M rung**. The separate frozen OSAVAL02 backend and the
+The campaign remains **blocked before the 1M rung**. The separate frozen OSAVAL02 backend and the
 disk-backed approved-population scanner are implemented and bounded-validated, but preflight
 does not authorize a training rung because the full split-leakage proof is incomplete.
+
+The C2B repair contract is now frozen. All 31 live official WCSC archives match their local bytes,
+no stream is removed, five exact illegal-action members are excluded, the v2 replay/identity schema
+is defined, and every legacy collision group is enumerated with a holdout-preserving precedence
+decision. The v2 full replay and full scan have not been run. Luna's exact objective is
+`prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md`.
 
 The actual starting state was branch `codex/phase10r-osaval02-parity` at closure HEAD
 `5b8f85f6862eff8ee1216c37b90bf0b0361570bf`. Work continued on
@@ -55,9 +61,8 @@ training authorization.
 
 ## Exact next command
 
-After the rejected streams are resolved with approved, checksum-bound replay inputs and the
-canonical/final-holdout/parser/transposition findings are resolved or reviewed under the frozen
-policy, rerun exactly:
+Execute the frozen Luna C2B objective. After its checksum-bound v2 replay inputs and collision
+decisions pass focused tests, rerun exactly:
 
 ```bash
 PYTHONPATH=training uv run --frozen python \
