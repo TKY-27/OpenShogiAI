@@ -36,6 +36,17 @@ from open_shogi_training.phase10r import (
     run_pipeline_sanity,
     validate_phase10r,
 )
+from open_shogi_training.phase10r_campaign import (
+    Phase10RCampaignError,
+    evaluate_scale,
+    label_hard,
+    select_hard,
+    train_variant,
+)
+from open_shogi_training.phase10r_execution import (
+    Phase10RExecutionError,
+    prepare_scale,
+)
 from open_shogi_training.phase10r_model import (
     VARIANT_PAIR,
     VARIANT_PRIMARY,
@@ -401,6 +412,73 @@ def _blocked_operation(root: Path, command: str, argv: Sequence[str], reason: st
     return _write_receipt_and_return(root, command, argv, receipt)
 
 
+def _prepare(root: Path, argv: Sequence[str], scale: str) -> int:
+    receipt = _base_receipt(root, "prepare", argv)
+    try:
+        result = prepare_scale(root, scale)
+        manifest = result.get("manifest")
+        if not isinstance(manifest, Path):
+            raise Phase10RRunError("preparation did not return a manifest path")
+        receipt.update(
+            {
+                "status": "passed",
+                "exit_status": 0,
+                "scale": scale,
+                "preparation": {
+                    **result,
+                    "manifest": str(manifest.relative_to(root)),
+                },
+            }
+        )
+    except (Phase10RExecutionError, OSError, RuntimeError, ValueError) as error:
+        receipt.update(
+            {
+                "status": "blocked",
+                "exit_status": 2,
+                "scale": scale,
+                "stop_reason": str(error),
+            }
+        )
+    return _write_receipt_and_return(root, "prepare", argv, receipt)
+
+
+def _receipt_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _receipt_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_receipt_value(item) for item in value]
+    return value
+
+
+def _campaign_operation(
+    root: Path,
+    command: str,
+    argv: Sequence[str],
+    operation: Any,
+) -> int:
+    receipt = _base_receipt(root, command, argv)
+    try:
+        result = operation()
+        receipt.update(
+            {
+                "status": "passed",
+                "exit_status": 0,
+                "result": _receipt_value(result),
+            }
+        )
+    except (Phase10RCampaignError, OSError, RuntimeError, ValueError) as error:
+        receipt.update(
+            {
+                "status": "blocked",
+                "exit_status": 2,
+                "stop_reason": str(error),
+            }
+        )
+    return _write_receipt_and_return(root, command, argv, receipt)
+
+
 def _write_text_new(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -422,24 +500,109 @@ def _report(root: Path, argv: Sequence[str], scale: str) -> int:
                 prior_receipts.append(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, json.JSONDecodeError):
                 continue
-    stop_reasons = sorted(
-        {
-            reason
-            for item in prior_receipts
-            for reason in item.get("failures", [])
-            if isinstance(reason, str)
-        }
-    )
-    stop_reasons.extend(
-        item["stop_reason"]
+    current_commit = receipt["git"].get("commit")
+    campaign_receipts = [
+        item
         for item in prior_receipts
-        if isinstance(item.get("stop_reason"), str) and item["stop_reason"] not in stop_reasons
+        if item.get("command") != "report"
+        and (
+            current_commit is None
+            or not isinstance(item.get("git"), dict)
+            or item["git"].get("commit") == current_commit
+        )
+    ]
+    stop_reasons: list[str] = []
+    for item in campaign_receipts:
+        failures = item.get("failures", [])
+        if isinstance(failures, list):
+            for reason in failures:
+                if isinstance(reason, str) and reason not in stop_reasons:
+                    stop_reasons.append(reason)
+        reason = item.get("stop_reason")
+        if isinstance(reason, str) and reason not in stop_reasons:
+            stop_reasons.append(reason)
+
+    def passed(command: str) -> list[dict[str, Any]]:
+        return [
+            item
+            for item in campaign_receipts
+            if item.get("command") == command and item.get("status") == "passed"
+        ]
+
+    preflight_receipts = passed("preflight")
+    prepare_receipts = passed("prepare")
+    train_receipts = passed("train")
+    evaluate_receipts = passed("evaluate")
+    selection_receipts = [
+        item for item in campaign_receipts if item.get("command") == "select-hard"
+    ]
+    label_receipts = [item for item in campaign_receipts if item.get("command") == "label-hard"]
+    trained_variants = [
+        item.get("result") for item in train_receipts if isinstance(item.get("result"), dict)
+    ]
+    preparation = [
+        item.get("preparation")
+        for item in prepare_receipts
+        if isinstance(item.get("preparation"), dict)
+    ]
+    evaluation = [
+        item.get("result") for item in evaluate_receipts if isinstance(item.get("result"), dict)
+    ]
+    if not preflight_receipts:
+        next_command = (
+            "PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run "
+            "preflight --root ."
+        )
+    elif not prepare_receipts:
+        next_command = (
+            "PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run "
+            f"prepare --root . --scale {scale}"
+        )
+    else:
+        trained_ids = {
+            str(result.get("variant")) for result in trained_variants if isinstance(result, dict)
+        }
+        missing_variant = next(
+            (variant for variant in TRAIN_VARIANTS if variant not in trained_ids), None
+        )
+        if missing_variant is not None:
+            next_command = (
+                "PYTHONPATH=training uv run --frozen python -m "
+                f"open_shogi_training.phase10r_run train --root . --scale {scale} "
+                f"--variant {missing_variant} --resume"
+            )
+        elif not evaluate_receipts:
+            next_command = (
+                "PYTHONPATH=training uv run --frozen python -m "
+                "open_shogi_training.phase10r_run evaluate --root . "
+                f"--scale {scale} --all-source-held-out --cross-runtime --incremental-parity"
+            )
+        elif not selection_receipts:
+            next_command = (
+                "PYTHONPATH=training uv run --frozen python -m "
+                f"open_shogi_training.phase10r_run select-hard --root . --scale {scale}"
+            )
+        elif not label_receipts:
+            next_command = (
+                "PYTHONPATH=training uv run --frozen python -m "
+                f"open_shogi_training.phase10r_run label-hard --root . --scale {scale} --resume"
+            )
+        else:
+            next_command = (
+                "A frozen post-label gate remains; inspect the completed rung receipt and stop "
+                "for the mandatory review before any scale expansion."
+            )
+    blocked = any(item.get("status") == "blocked" for item in campaign_receipts)
+    status = (
+        "blocked"
+        if blocked or stop_reasons
+        else ("passed" if campaign_receipts else "no_execution_receipts")
     )
-    status = "blocked" if stop_reasons else "no_execution_receipts"
-    next_command = (
-        "Implement and hash-bind OSAVAL02 plus the approved-source canonical/history leakage "
-        "scan, then rerun preflight before prepare --scale 1m."
-    )
+    report_receipts = [
+        str(path.relative_to(root))
+        for path in sorted(runs.glob("*.json"))
+        if not path.name.startswith("PHASE10R_EXECUTION_REPORT")
+    ]
     report_data = {
         "schema": "open_shogi_ai_phase10r_execution_report/v1",
         "status": status,
@@ -447,12 +610,21 @@ def _report(root: Path, argv: Sequence[str], scale: str) -> int:
         "branch": receipt["git"]["branch"],
         "commit": receipt["git"]["commit"],
         "dirty": receipt["git"]["dirty"],
-        "elapsed": "preflight only; no training or game process launched",
-        "acquired_this_campaign": {},
-        "consumed_examples": {},
-        "deduplicated_examples": {},
+        "elapsed": "derived from immutable command receipts",
+        "preflight": preflight_receipts,
+        "preparation": preparation,
+        "acquired_this_campaign": {"status": "not_performed"},
+        "consumed_examples": {
+            "status": "prepared_stream_only",
+            "rungs": preparation,
+        },
+        "deduplicated_examples": {
+            "status": "recorded_by_preparation_manifest",
+            "rungs": preparation,
+        },
         "teacher_labels_this_campaign": 0,
-        "trained_variants": [],
+        "trained_variants": trained_variants,
+        "evaluation": evaluation,
         "arena_results": [],
         "bootstrapped_generations": [],
         "pure_selfplay_generations": [],
@@ -461,24 +633,29 @@ def _report(root: Path, argv: Sequence[str], scale: str) -> int:
         "final_objective_passed": False,
         "promotion": {"overall_champion_mutated": False, "promotion_performed": False},
         "stop_reasons": stop_reasons,
-        "receipts": [
-            str(path.relative_to(root))
-            for path in sorted(runs.glob("*.json"))
-            if path.name != "PHASE10R_EXECUTION_REPORT.json"
-        ],
+        "receipts": report_receipts,
         "next_exact_command": next_command,
     }
     json_report = runs / "PHASE10R_EXECUTION_REPORT.json"
     markdown_report = runs / "PHASE10R_EXECUTION_REPORT.md"
+    if (
+        json_report.exists()
+        or json_report.is_symlink()
+        or markdown_report.exists()
+        or markdown_report.is_symlink()
+    ):
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        json_report = runs / f"PHASE10R_EXECUTION_REPORT-{scale}-{stamp}.json"
+        markdown_report = runs / f"PHASE10R_EXECUTION_REPORT-{scale}-{stamp}.md"
     _write_new_json(json_report, report_data)
     _write_text_new(
         markdown_report,
         "# Phase 10R-C execution report\n\n"
         f"Status: **{status}**\n\n"
-        "No training, teacher labeling, Arena, cross-play, self-play, promotion, or holdout "
-        "inspection was launched.\n\n"
+        "This report is derived from immutable command receipts. Protected holdout content was "
+        "not inspected.\n\n"
         "## Stop reasons\n\n"
-        + "\n".join(f"- {reason}" for reason in stop_reasons)
+        + ("\n".join(f"- {reason}" for reason in stop_reasons) or "- None recorded")
         + "\n\n## Next exact command\n\n"
         f"`{next_command}`\n",
     )
@@ -558,6 +735,54 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "preflight":
         receipt, _ = _run_preflight(root, command_argv)
         return _write_receipt_and_return(root, command, command_argv, receipt)
+    if command == "prepare":
+        return _prepare(root, command_argv, args.scale)
+    if command == "train":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: train_variant(
+                root,
+                args.scale,
+                args.variant,
+                resume=args.resume,
+                git_commit=_git(root, "rev-parse", "HEAD"),
+            ),
+        )
+    if command == "evaluate":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: evaluate_scale(
+                root,
+                args.scale,
+                all_source_held_out=args.all_source_held_out,
+                cross_runtime=args.cross_runtime,
+                incremental_parity=args.incremental_parity,
+                git_commit=_git(root, "rev-parse", "HEAD"),
+            ),
+        )
+    if command == "select-hard":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: select_hard(root, args.scale, git_commit=_git(root, "rev-parse", "HEAD")),
+        )
+    if command == "label-hard":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: label_hard(
+                root,
+                args.scale,
+                resume=args.resume,
+                git_commit=_git(root, "rev-parse", "HEAD"),
+            ),
+        )
     if command == "report":
         return _report(root, command_argv, args.scale)
     return _blocked_operation(root, command, command_argv, BACKEND_GAP)
