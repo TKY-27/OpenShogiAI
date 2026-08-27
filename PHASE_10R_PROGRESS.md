@@ -1,72 +1,65 @@
-# Phase 10R-C2A Progress
+# Phase 10R progress
 
-Updated: 2026-08-24 (Asia/Tokyo)
+Updated: 2026-08-27 (Asia/Tokyo)
 
 ## Current state
 
-The campaign remains **blocked before the 1M rung**. The separate frozen OSAVAL02 backend and the
-disk-backed approved-population scanner are implemented and bounded-validated, but preflight
-does not authorize a training rung because the full split-leakage proof is incomplete.
+The replay/identity repair, complete approved-source leakage proof, OSAVAL02 backend, and exact
+preflight prerequisites are present. The original 1M preparation exposed one frozen-control defect:
+relative weights produced AobaZero/WCSC/Denryu `40%/40%/20%`, exceeding the explicit AobaZero 35%
+maximum.
 
-The C2B repair contract is now frozen. All 31 live official WCSC archives match their local bytes,
-no stream is removed, five exact illegal-action members are excluded, the v2 replay/identity schema
-is defined, and every legacy collision group is enumerated with a holdout-preserving precedence
-decision. The v2 full replay and full scan have not been run. Luna's exact objective is
-`prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md`.
+The user-authorized narrow reconciliation is implemented. The sole active pretraining mixture is
+now `35%/45%/20%`; the invalid legacy preparation is preserved and marked
+`REJECTED_MIXTURE_CONTROL_CONFLICT`; and a distinct `1m-mixture-v2` preparation contains exactly
+1,000,000 examples with validated counts, hashes, repetition pressure, leakage, determinism, disk,
+and RSS evidence.
 
-The actual starting state was branch `codex/phase10r-osaval02-parity` at closure HEAD
-`5b8f85f6862eff8ee1216c37b90bf0b0361570bf`. Work continued on
-`codex/phase10r-preflight-closure`. The final three local commits are intended to leave that
-branch clean.
+Production training has not started. No teacher labeling, Arena, cross-play, self-play, final
+holdout evaluation, promotion, push, release, or deployment was performed.
 
-No 1M-or-larger rung, full teacher labeling, production training, Arena, cross-play, self-play,
-final holdout inspection, promotion, push, release, or deployment was performed.
+## Preparation evidence
 
-## Checks completed
-
-- Baseline `make check`: passed before Phase 10R-C2A source changes.
-- Baseline `make phase10r-osaval02-parity`: passed (`28` tests).
-- Baseline `make phase10r-validate`: passed (`33` approved artifacts, `9` configs, `46` frozen
-  hashes).
-- Backend tests: passed (`7` tests); scanner tests: passed (`2` tests); runner tests: passed
-  (`3` tests).
-- Ruff checks and Python compilation for changed Python modules: passed.
-- Final `make check`: passed (`525` Python tests, Rust workspace tests, and build/Wasm checks).
-- Latest exact preflight: `blocked`; frozen hash validation, pipeline sanity, micro-overfit,
-  memory, disk, thermal, runtime, and bounded backend checks passed.
-- Latest preflight peak RSS: `381,583,360` bytes; observed free disk:
-  `331,112,599,552` bytes against the frozen `161,061,273,600`-byte floor.
+- Legacy path: `local/phase10r-data/phase10r-prepared/1m/`
+- Legacy manifest file SHA-256:
+  `298654d99e04383a8a63ccca837ff9095ecba45e2bb7aadf747262c8fe7d04c5`
+- Legacy train SHA-256: `5ab54aaa8fc59c5083f4037e1c9cb4b811164f09c9da225d0eda413d837459c0`
+- Replacement path: `local/phase10r-data/phase10r-prepared/1m-mixture-v2/`
+- Replacement manifest file SHA-256:
+  `dcbcfd7584f84bd03d9d948a5633e9b18bb3db06027d1f1a0bec2b2cd7a8e076`
+- Replacement train SHA-256:
+  `8748f5fdf8af7716a347f1faa94d0f4965afca009f368ce1a66463e0e917b161`
+- Target and realized counts: AobaZero 350,000; WCSC 450,000; Denryu 200,000.
+- Eligible-train epoch equivalents: AobaZero 44.7284; WCSC 1.2633; Denryu 17.4429.
+- Maximum record occurrences: AobaZero 45; WCSC 2; Denryu 18.
+- Same-seed reproduction: exact 1,000,000-row/2,077,794,499-byte train hash match.
+- Effective cross-split groups: 0; protected public/internal/final holdouts excluded.
+- Peak preparation RSS: 238,813,184 bytes; free disk after preparation: 283,567,955,968 bytes.
 
 ## Durable artifacts
 
-- Backend implementation: `training/open_shogi_training/phase10r_training.py`
-- Scanner implementation: `training/open_shogi_training/data/phase10r_scan.py`
-- Backend/scanner/runner tests under `tests/python/`
-- Human reports: `PHASE_10R_TRAINING_BACKEND_REPORT.md` and
-  `PHASE_10R_SPLIT_LEAKAGE_REPORT.md`
-- Machine reports and scan identities under `artifacts/phase10r/`
-- Immutable preflight receipts and append-only events under `local/phase10r-runs/`
+- Canonical control: `configs/phase10r/dataset-mixture.yaml`
+- Human reconciliation: `PHASE_10R_MIXTURE_RECONCILIATION_REPORT.md`
+- Machine reconciliation: `artifacts/phase10r/phase10r-mixture-reconciliation.json`
+- Existing replay/leakage proof: `artifacts/phase10r/phase10r-scan-completion-proof.json`
+- Local immutable preparation receipt:
+  `local/phase10r-runs/20260827T094227.338945Z-prepare.json`
 
-## Stop reasons
+## Verification state
 
-1. Only `15/33` approved artifact streams completed replay; `18` streams remain rejected by
-   fail-closed CSA validation.
-2. The completed population contains `3,327` canonical cross-split collisions, `310` final
-   holdout forbidden-path collisions, and `214` parser/normalization collisions.
-3. Exact transposition proof is unavailable because no replay stream supplied the required
-   transposition namespace.
+- Focused mixture/execution/freeze/runner tests: passed (`25` tests).
+- Canonical configuration and pipeline sanity without stale hashes: passed.
+- Versioned preparation self-validation: passed.
+- Frozen-hash validation: passed (`60` paths).
+- Leakage validation: passed (`528,570` effective records; zero effective cross-split groups).
+- Full `make check`: passed (`544` Python tests, `344` Rust tests, lint, boundary, license,
+  provenance, build, and deterministic Wasm binding check).
+- Exact Phase 10R preflight: passed; no failures; preparation control, same-seed proof, leakage,
+  OSAVAL02 bounded backend probe, disk, memory, and thermal controls all passed.
 
-These findings are recorded without deduplication, relabeling, or split mutation. They block
-training authorization.
+## Next boundary
 
-## Exact next command
-
-Execute the frozen Luna C2B objective. After its checksum-bound v2 replay inputs and collision
-decisions pass focused tests, rerun exactly:
-
-```bash
-PYTHONPATH=training uv run --frozen python \
-  -m open_shogi_training.phase10r_run preflight --root .
-```
-
-Do not run `prepare`, `train`, `arena`, `crossplay`, or `selfplay` while this command is blocked.
+Once final validation and local commits are complete, production training is technically unblocked
+at the preparation boundary. Training remains intentionally stopped until the existing Luna Goal is
+explicitly resumed. The first resumed action must re-run exact preflight against the committed clean
+tree before invoking any `train` command.
