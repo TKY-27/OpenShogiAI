@@ -8,6 +8,7 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Final
 
@@ -20,7 +21,7 @@ from open_shogi_training.data.registry import UniqueSafeLoader
 MAX_YAML_BYTES: Final = 2 * 1024 * 1024
 HASH_MANIFEST: Final = "configs/phase10r/frozen-controls.sha256"
 CONFIG_SCHEMAS: Final = {
-    "configs/phase10r/dataset-mixture.yaml": "open_shogiai_phase10r_dataset_mixture/v1",
+    "configs/phase10r/dataset-mixture.yaml": "open_shogiai_phase10r_dataset_mixture/v2",
     "configs/phase10r/curriculum.yaml": "open_shogiai_phase10r_curriculum/v1",
     "configs/phase10r/model-matrix.yaml": "open_shogiai_phase10r_model_matrix/v1",
     "configs/phase10r/target-semantics.yaml": "open_shogiai_phase10r_target_semantics/v1",
@@ -49,8 +50,11 @@ FROZEN_PATHS: Final = frozenset(
         "training/open_shogi_training/phase10r.py",
         "training/open_shogi_training/phase10r_model.py",
         "training/open_shogi_training/phase10r_run.py",
+        "training/open_shogi_training/phase10r_execution.py",
+        "training/open_shogi_training/phase10r_campaign.py",
         "tests/python/test_phase10r_freeze.py",
         "tests/python/test_phase10r_run.py",
+        "tests/python/test_phase10r_execution.py",
         "tests/python/models/test_osaval02.py",
         "tests/python/models/test_osaval02_parity.py",
         "tests/fixtures/osaval02/parity-corpus.json",
@@ -129,7 +133,9 @@ def validate_phase10r(root: Path, *, verify_hashes: bool = True) -> dict[str, An
             raise Phase10RValidationError(f"{name} schema must be {schema}")
 
     registry = _load_yaml(root / "configs/phase10r/source-registry.yaml")
-    _validate_dataset_mixture(configs["configs/phase10r/dataset-mixture.yaml"], registry)
+    mixture_control = _validate_dataset_mixture(
+        configs["configs/phase10r/dataset-mixture.yaml"], registry
+    )
     _validate_targets(configs["configs/phase10r/target-semantics.yaml"])
     _validate_models(configs["configs/phase10r/model-matrix.yaml"])
     _validate_curriculum(configs["configs/phase10r/curriculum.yaml"])
@@ -145,10 +151,111 @@ def validate_phase10r(root: Path, *, verify_hashes: bool = True) -> dict[str, An
         "frozen_hashes": len(FROZEN_PATHS) if verify_hashes else None,
         "approved_external_artifacts": 33,
         "public_weight_sources": 0,
+        "canonical_pretraining_mixture": mixture_control,
     }
 
 
-def _validate_dataset_mixture(mixture: Mapping[str, Any], registry: Mapping[str, Any]) -> None:
+def _decimal_share(value: object, name: str) -> Decimal:
+    if isinstance(value, bool):
+        raise Phase10RValidationError(f"{name} must be a decimal share")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise Phase10RValidationError(f"{name} must be a decimal share") from error
+    if not result.is_finite() or result < 0 or result > 1:
+        raise Phase10RValidationError(f"{name} must be within 0..1")
+    return result
+
+
+def canonical_pretraining_mixture(mixture: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return the sole active-source mixture control."""
+
+    control = mixture.get("canonical_pretraining_mixture")
+    if not isinstance(control, dict):
+        raise Phase10RValidationError("canonical pretraining mixture is missing")
+    if control.get("control_id") != "phase10r-1m-mixture-v2":
+        raise Phase10RValidationError("canonical pretraining mixture identity changed")
+    stages = control.get("applies_to_stages")
+    if stages != [
+        "representation_policy_pretraining",
+        "source_specific_wdl_value_pretraining",
+    ]:
+        raise Phase10RValidationError("canonical pretraining mixture stage scope changed")
+    allocation = control.get("count_allocation")
+    sampling = control.get("sampling")
+    repetition = control.get("repetition")
+    output = control.get("output")
+    if not all(isinstance(value, dict) for value in (allocation, sampling, repetition, output)):
+        raise Phase10RValidationError("canonical pretraining mixture policy is incomplete")
+    if (
+        allocation.get("method") != "largest_remainder"
+        or allocation.get("tie_break_order") != ["aobazero", "wcsc", "denryu"]
+        or allocation.get("allowed_count_tolerance") != 0
+    ):
+        raise Phase10RValidationError("canonical mixture rounding policy changed")
+    if (
+        sampling.get("with_replacement") is not True
+        or sampling.get("order") != "deterministic_deficit_round_robin"
+        or sampling.get("seed") != 20_260_729
+    ):
+        raise Phase10RValidationError("canonical mixture sampling policy changed")
+    if (
+        repetition.get("policy") != "report_epoch_equivalent"
+        or repetition.get("denominator") != "eligible_unique_train_records_after_per_game_cap"
+        or repetition.get("hard_maximum") is not None
+        or repetition.get("report_maximum_record_occurrences") is not True
+    ):
+        raise Phase10RValidationError("canonical mixture repetition policy changed")
+    if output.get("path_template") != "phase10r-prepared/{scale}-mixture-v2":
+        raise Phase10RValidationError("canonical mixture output path changed")
+    entries = control.get("sources")
+    if not isinstance(entries, list) or len(entries) != 3:
+        raise Phase10RValidationError("canonical mixture must contain three active sources")
+    targets: dict[str, Decimal] = {}
+    maximums: dict[str, Decimal] = {}
+    minimums: dict[str, Decimal] = {}
+    for index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            raise Phase10RValidationError("canonical mixture source must be a mapping")
+        source = raw.get("source_id")
+        if not isinstance(source, str) or source in targets:
+            raise Phase10RValidationError("canonical mixture source identity is invalid")
+        target = _decimal_share(raw.get("target_share"), f"target_share[{index}]")
+        maximum = _decimal_share(raw.get("maximum_share"), f"maximum_share[{index}]")
+        minimum = _decimal_share(raw.get("minimum_share", 0), f"minimum_share[{index}]")
+        if not minimum <= target <= maximum:
+            raise Phase10RValidationError("canonical mixture target violates its share bounds")
+        targets[source] = target
+        maximums[source] = maximum
+        minimums[source] = minimum
+    expected_sources = {"aobazero", "wcsc", "denryu"}
+    if set(targets) != expected_sources:
+        raise Phase10RValidationError("canonical mixture active sources changed")
+    declared_sum = _decimal_share(control.get("target_share_sum"), "target_share_sum")
+    if sum(targets.values(), Decimal(0)) != Decimal(1) or declared_sum != Decimal(1):
+        raise Phase10RValidationError("canonical mixture target shares must sum exactly to 1.0")
+    return {
+        "control_id": control["control_id"],
+        "target_shares": {name: float(value) for name, value in targets.items()},
+        "maximum_shares": {name: float(value) for name, value in maximums.items()},
+        "minimum_shares": {name: float(value) for name, value in minimums.items()},
+        "rounding": dict(allocation),
+        "sampling": dict(sampling),
+        "repetition": dict(repetition),
+        "output": dict(output),
+        "selection_basis": control.get("selection_basis"),
+    }
+
+
+def load_canonical_pretraining_mixture(root: Path) -> dict[str, Any]:
+    return canonical_pretraining_mixture(
+        _load_yaml(root.resolve() / "configs/phase10r/dataset-mixture.yaml")
+    )
+
+
+def _validate_dataset_mixture(
+    mixture: Mapping[str, Any], registry: Mapping[str, Any]
+) -> dict[str, Any]:
     if mixture.get("deny_by_default") is not True:
         raise Phase10RValidationError("dataset mixture must deny by default")
     artifacts = registry.get("artifacts")
@@ -165,6 +272,7 @@ def _validate_dataset_mixture(mixture: Mapping[str, Any], registry: Mapping[str,
     if not isinstance(sources, list) or len(sources) != 6:
         raise Phase10RValidationError("dataset mixture must contain six frozen lanes")
     declared: set[str] = set()
+    active_sources = {"aobazero", "wcsc", "denryu"}
     for source in sources:
         if not isinstance(source, dict):
             raise Phase10RValidationError("dataset source must be a mapping")
@@ -174,15 +282,23 @@ def _validate_dataset_mixture(mixture: Mapping[str, Any], registry: Mapping[str,
         declared.update(artifacts_for_source)
         if source.get("may_affect_public_weights") is not False:
             raise Phase10RValidationError("no frozen source may affect public weights")
-        fraction = source.get("maximum_stage_fraction")
-        weight = source.get("sampling_weight")
-        if not _finite_range(fraction, 0.0, 1.0) or not _finite_range(weight, 0.0, 1.0):
-            raise Phase10RValidationError("source fraction or sampling weight is invalid")
+        source_id = source.get("source_id")
+        if source_id in active_sources:
+            if "maximum_stage_fraction" in source or "sampling_weight" in source:
+                raise Phase10RValidationError(
+                    "active source retains a conflicting legacy fraction or weight"
+                )
+        else:
+            fraction = source.get("maximum_stage_fraction")
+            weight = source.get("sampling_weight")
+            if not _finite_range(fraction, 0.0, 1.0) or not _finite_range(weight, 0.0, 1.0):
+                raise Phase10RValidationError("generated source control is invalid")
     if declared != approved:
         raise Phase10RValidationError("dataset mixture differs from approved registry artifacts")
     inactive = mixture.get("inactive_source_policy")
     if not isinstance(inactive, dict) or inactive.get("sampling_weight") != 0.0:
         raise Phase10RValidationError("inactive sources must have zero weight")
+    return canonical_pretraining_mixture(mixture)
 
 
 def _validate_targets(targets: Mapping[str, Any]) -> None:
@@ -374,22 +490,35 @@ def decode_move(index: int) -> str:
     return f"{index_square(origin)}{index_square(target)}{'+' if promoted else ''}"
 
 
-def allocate_source_counts(total: int, weights: Mapping[str, float]) -> dict[str, int]:
-    """Apply configured weights by deterministic largest-remainder allocation."""
+def allocate_source_counts(
+    total: int,
+    target_shares: Mapping[str, float],
+    *,
+    tie_break_order: Sequence[str] | None = None,
+) -> dict[str, int]:
+    """Allocate normalized target shares with deterministic largest remainder."""
 
-    if (
-        total <= 0
-        or not weights
-        or any(not _finite_range(value, 0.0, 1.0) for value in weights.values())
-    ):
-        raise Phase10RValidationError("invalid weighted allocation")
-    denominator = sum(weights.values())
-    if denominator <= 0.0:
-        raise Phase10RValidationError("source weights sum to zero")
-    exact = {name: total * weight / denominator for name, weight in weights.items()}
-    result = {name: math.floor(value) for name, value in exact.items()}
+    if total <= 0 or not target_shares:
+        raise Phase10RValidationError("invalid source allocation")
+    shares = {
+        name: _decimal_share(value, f"target share {name}") for name, value in target_shares.items()
+    }
+    if sum(shares.values(), Decimal(0)) != Decimal(1):
+        raise Phase10RValidationError("source target shares must sum exactly to 1.0")
+    if tie_break_order is None:
+        tie_break_order = sorted(shares)
+    if len(tie_break_order) != len(shares) or set(tie_break_order) != set(shares):
+        raise Phase10RValidationError("source allocation tie-break order is invalid")
+    exact = {name: Decimal(total) * share for name, share in shares.items()}
+    result = {
+        name: int(value.to_integral_value(rounding=ROUND_FLOOR)) for name, value in exact.items()
+    }
     remaining = total - sum(result.values())
-    order = sorted(weights, key=lambda name: (-(exact[name] - result[name]), name))
+    precedence = {name: index for index, name in enumerate(tie_break_order)}
+    order = sorted(
+        shares,
+        key=lambda name: (-(exact[name] - Decimal(result[name])), precedence[name]),
+    )
     for name in order[:remaining]:
         result[name] += 1
     return result
@@ -458,9 +587,12 @@ def run_pipeline_sanity(root: Path) -> dict[str, Any]:
         ]
     )
     checks["split_isolation"] = True
-    checks["source_weights_applied"] = allocate_source_counts(
-        10, {"aobazero": 1.0, "wcsc": 1.0, "denryu": 0.5}
-    ) == {"aobazero": 4, "wcsc": 4, "denryu": 2}
+    mixture = load_canonical_pretraining_mixture(root)
+    checks["canonical_source_mixture_applied"] = allocate_source_counts(
+        100,
+        mixture["target_shares"],
+        tie_break_order=mixture["rounding"]["tie_break_order"],
+    ) == {"aobazero": 35, "wcsc": 45, "denryu": 20}
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)
         raise Phase10RValidationError(f"pipeline sanity failed: {failed}")

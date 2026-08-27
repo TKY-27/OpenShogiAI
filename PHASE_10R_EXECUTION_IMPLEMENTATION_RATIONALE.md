@@ -21,15 +21,16 @@ The existing hash-bound `phase10r_run.py` and its test are necessarily updated
 because they expose the required command interface. The bounded
 `phase10r_training.py` validator remains unchanged: terminal replay roots are
 represented as an unavailable policy target rather than by weakening its
-non-empty legal-mask invariant. The frozen Phase 10R controls, configuration
-values, source registry, split assignments, model dimensions, target semantics,
-gate thresholds, and public/promotion boundaries are not changed. The two
-hash manifests are refreshed only to bind the reviewed implementation at this
-recorded rationale boundary; no frozen control is redefined.
+non-empty legal-mask invariant. The only control revision is the user-authorized
+mixture reconciliation: conflicting maxima and relative weights become one
+canonical `35%/45%/20%` target vector with the prior maxima retained as constraints.
+The source registry, split assignments, model dimensions, target semantics, gate
+thresholds, and public/promotion boundaries are unchanged. The hash manifests are
+refreshed to bind the reviewed implementation and narrow control revision.
 
 The first implementation choice is one deterministic streamed epoch per
 factual stage, within the frozen per-rung maximum epoch limits. Preparation
-uses the pre-existing deterministic source-weight allocator and records the
-observed quotas in its immutable manifest. The run stops before any
+uses deterministic largest-remainder allocation over normalized target shares and
+records realized quotas and repetition pressure in its immutable manifest. The run stops before any
 teacher-dependent hard-example labeling until the rights-gated Apery binary
 and evaluation-file identities are present.

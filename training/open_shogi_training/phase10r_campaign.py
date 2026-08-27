@@ -30,6 +30,8 @@ from open_shogi_training.phase10r_execution import (
     _read_json,
     _sha256_bytes,
     _sha256_file,
+    preparation_manifest_path,
+    validate_preparation,
 )
 from open_shogi_training.phase10r_model import (
     VARIANT_PAIR,
@@ -52,7 +54,7 @@ from open_shogi_training.phase10r_training import (
 CAMPAIGN_SCHEMA: Final = "open_shogiai_phase10r_campaign/v1"
 EVALUATION_SCHEMA: Final = "open_shogiai_phase10r_evaluation/v1"
 SELECTION_SCHEMA: Final = "open_shogiai_phase10r_selection/v1"
-PREPARATION_MANIFEST_SCHEMA: Final = "open_shogiai_phase10r_preparation/v1"
+PREPARATION_MANIFEST_SCHEMA: Final = "open_shogiai_phase10r_preparation/v2"
 TRAINING_SEED: Final = 20_260_729
 TRAINING_BATCH_SIZE: Final = 128
 STAGE_EPOCHS: Final = 1
@@ -106,10 +108,9 @@ def _seed_everything(seed: int) -> None:
 
 
 def _manifest_identity(root: Path, scale: str) -> tuple[Path, dict[str, Any], str]:
-    data_root = _data_root(root)
-    manifest_path = data_root / "phase10r-prepared" / scale / "preparation-manifest.json"
+    manifest_path = preparation_manifest_path(root, scale)
     try:
-        manifest = _read_json(manifest_path)
+        manifest = validate_preparation(root, scale)
     except Phase10RExecutionError as error:
         raise _failure("preparation manifest is unavailable", error) from error
     if (

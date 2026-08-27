@@ -82,7 +82,8 @@ Before any rung, all of these must pass:
 - complete history ends at the represented position and produces matching history facts;
 - qsearch evaluates the exact stand-pat leaf; PV/root labels never move to descendants;
 - canonical/history identities cannot cross train/validation/final/reserved splits; and
-- deterministic sampling counts equal configured source weights.
+- deterministic sampling counts equal the canonical normalized target shares and remain within
+  every frozen maximum.
 
 The bounded commands are `make phase10r-sanity` and `make phase10r-micro-overfit`. The runtime
 implementation must add Python/Rust/Wasm feature parity, legal-root uniqueness, and incremental
@@ -94,14 +95,14 @@ No pending, denied, holdout, or local-prior-art source is admitted. The 33 appro
 the exact AobaZero catalog, WCSC1–29/31–32, and Denryu hardware-3. Family policy applies to every
 listed artifact in `dataset-mixture.yaml`.
 
-| Source lane | Role | Max stage fraction / weight | Dedup priority | Public weights |
+| Source lane | Role | Pretraining target / maximum | Dedup priority | Public weights |
 | --- | --- | ---: | ---: | --- |
-| AobaZero exact100 | behavior policy, factual WDL, representation, teacher pool | 35% / 1.0 | 700 | no; derived rights pending |
-| WCSC1–29/31–32 | behavior policy, factual WDL, representation | 55% / 1.0 | 600 | no; derived rights pending |
-| Denryu hardware-3 | behavior policy, factual WDL, representation | 20% / 0.5 | 500 | no; derived rights pending |
-| frozen OpenShogiAI Apery labels | cp, ranking, mate, active learning | 35% / 1.0 | 800 | no; inherits record/teacher review |
-| bootstrapped cross-play | WDL and selected teacher pool | 25% / 0.5 | 400 | no under this freeze |
-| gated pure self-play | WDL and behavior policy | 40% / 0.5 | 300 | no under this freeze |
+| AobaZero exact100 | behavior policy, factual WDL, representation, teacher pool | 35% / 35% | 700 | no; derived rights pending |
+| WCSC1–29/31–32 | behavior policy, factual WDL, representation | 45% / 55% | 600 | no; derived rights pending |
+| Denryu hardware-3 | behavior policy, factual WDL, representation | 20% / 20% | 500 | no; derived rights pending |
+| frozen OpenShogiAI Apery labels | cp, ranking, mate, active learning | n/a / 35% | 800 | no; inherits record/teacher review |
+| bootstrapped cross-play | WDL and selected teacher pool | n/a / 25% | 400 | no under this freeze |
+| gated pure self-play | WDL and behavior policy | n/a / 40% | 300 | no under this freeze |
 
 WCSC attribution retains program, date, event, and official source; Denryu retains event,
 program, date, and source; AobaZero retains project/source-host attribution. Teacher records bind
@@ -209,3 +210,22 @@ WCSC stream is removed. Full-prefix history and domain-separated transposition i
 mandatory, and canonical collisions are resolved only by the existing protected split precedence
 without moving records. The executable C2B objective is
 `prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md`.
+
+## 2026-08-27 mixture-control reconciliation addendum
+
+The original table combined maximum stage fractions with relative sampling weights. Normalizing
+the three active-source weights `1.0/1.0/0.5` implied a `40%/40%/20%` 1M preparation, which
+exceeded the frozen AobaZero maximum of `35%`. No document froze a stronger target-share vector.
+The user-authorized minimal valid correction is therefore the explicit `35%/45%/20%` target shown
+above: five percentage points move from AobaZero to WCSC, and every prior maximum remains intact.
+This default is used because it is the smallest semantic change satisfying the frozen maxima; it
+is not a normalization of the old weights.
+
+`configs/phase10r/dataset-mixture.yaml` is the sole canonical machine control. It freezes normalized
+target shares summing exactly to `1.0`, per-source maximum constraints, deterministic
+largest-remainder count allocation with a frozen tie-break order and zero count tolerance,
+deterministic deficit-round-robin sampling with replacement at seed `20260729`, and mandatory
+reporting of both source-population and eligible-train repetition pressure. A preparation validates
+realized counts before publication. The invalid legacy 1M preparation remains immutable evidence
+and is excluded with `REJECTED_MIXTURE_CONTROL_CONFLICT`; its replacement uses a distinct versioned
+path.

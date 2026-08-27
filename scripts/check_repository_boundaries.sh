@@ -22,6 +22,7 @@ ignored_parts = {
     "target",
 }
 ignored_local_artifact_roots = {
+    ("local", "phase10r-data"),
     ("local", "phase10r-runs"),
 }
 forbidden_roots = {"node_modules", "package-lock.json", "package.json", "web"}

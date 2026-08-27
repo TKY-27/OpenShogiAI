@@ -1,5 +1,5 @@
-schema: open_shogiai_phase10r_dataset_mixture/v1
-frozen_as_of: "2026-08-21"
+schema: open_shogiai_phase10r_dataset_mixture/v2
+frozen_as_of: "2026-08-27"
 deny_by_default: true
 public_weight_policy: >-
   No source in this freeze may affect published weights while its registry
@@ -15,13 +15,38 @@ global_rules:
   maximum_positions_per_game_per_epoch: 128
   maximum_game_fraction: 0.02
   maximum_opening_history_fraction: 0.05
+canonical_pretraining_mixture:
+  control_id: phase10r-1m-mixture-v2
+  applies_to_stages: [representation_policy_pretraining, source_specific_wdl_value_pretraining]
+  selection_basis: >-
+    Minimal valid correction of the previously implied 40/40/20 allocation: move the five
+    percentage points above the AobaZero ceiling to WCSC. No stronger frozen target-share vector
+    exists, so the user-authorized 35/45/20 default is used.
+  target_share_sum: 1.0
+  count_allocation:
+    method: largest_remainder
+    tie_break_order: [aobazero, wcsc, denryu]
+    allowed_count_tolerance: 0
+  sampling:
+    with_replacement: true
+    order: deterministic_deficit_round_robin
+    seed: 20260729
+  repetition:
+    policy: report_epoch_equivalent
+    denominator: eligible_unique_train_records_after_per_game_cap
+    hard_maximum: null
+    report_maximum_record_occurrences: true
+  output:
+    path_template: phase10r-prepared/{scale}-mixture-v2
+  sources:
+    - {source_id: aobazero, target_share: 0.35, maximum_share: 0.35}
+    - {source_id: wcsc, target_share: 0.45, maximum_share: 0.55}
+    - {source_id: denryu, target_share: 0.20, maximum_share: 0.20}
 sources:
   - source_id: aobazero
     registry_artifacts: [aobazero-no-noise-exact100]
     decision: approved_local_experimental
     roles: [behavior_policy, factual_wdl, representation, teacher_position_pool]
-    maximum_stage_fraction: 0.35
-    sampling_weight: 1.0
     deduplication_priority: 700
     losses: [masked_behavior_policy_cross_entropy, factual_wdl_cross_entropy]
     attribution: Preserve AobaZero project and source-host attribution.
@@ -63,8 +88,6 @@ sources:
       - wcsc32-kifu
     decision: approved_local_experimental
     roles: [behavior_policy, factual_wdl, representation]
-    maximum_stage_fraction: 0.55
-    sampling_weight: 1.0
     deduplication_priority: 600
     losses: [masked_behavior_policy_cross_entropy, factual_wdl_cross_entropy]
     attribution: Retain program name, game date, event name, and official CSA source.
@@ -75,8 +98,6 @@ sources:
     registry_artifacts: [denryu-dr5-hardware3]
     decision: approved_local_experimental
     roles: [behavior_policy, factual_wdl, representation]
-    maximum_stage_fraction: 0.20
-    sampling_weight: 0.5
     deduplication_priority: 500
     losses: [masked_behavior_policy_cross_entropy, factual_wdl_cross_entropy]
     attribution: Retain Denryu event, program names, dates, and official source.

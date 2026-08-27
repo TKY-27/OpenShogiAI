@@ -60,7 +60,7 @@ PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run r
 
 `preflight` must re-run hashes, sanity, micro-overfit, memory, disk, RSS/thermal checks, and verify
 that the final runtime mode is pure. `prepare` streams only approved registry artifacts, assigns
-protected splits before extraction, deduplicates, records source weights, and never reads reserved
+protected splits before extraction, deduplicates, records canonical target and realized shares, and never reads reserved
 content. A missing approved archive may be acquired only with the existing resumable rights-gated
 data command and the 150 GiB free-space floor. WCSC LZH archives require an audited bounded
 extractor; skip and report any archive whose format path is not implemented rather than improvising.
@@ -158,7 +158,7 @@ Write `local/phase10r-runs/PHASE10R_EXECUTION_REPORT.md` and a machine-readable 
 
 - commit and dirty state; every config/model/data/teacher/start/checkpoint hash;
 - acquired/streamed/unique/deduplicated/quarantined examples by source/split/rung;
-- source weights actually observed and all attribution obligations;
+- canonical source targets, realized shares, repetition factors, and all attribution obligations;
 - sanity, micro-overfit, feature/move/incremental/cross-runtime results;
 - every head metric, source-held-out metric, calibration, tactical result, latency, RSS, disk, and thermal receipt;
 - active-learning selections/budgets and checkpoint lineage;

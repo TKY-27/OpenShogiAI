@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import resource
 import shutil
 import sqlite3
 import subprocess
@@ -22,11 +24,17 @@ from pathlib import Path
 from typing import Any, Final
 
 from open_shogi_training.data.phase10r_identity import canonical_game_hash
-from open_shogi_training.phase10r import allocate_source_counts
+from open_shogi_training.phase10r import (
+    Phase10RValidationError,
+    allocate_source_counts,
+    load_canonical_pretraining_mixture,
+)
 from open_shogi_training.phase10r_model import HistoryFacts
 from open_shogi_training.phase10r_training import Phase10RExample
 
-PREPARATION_SCHEMA: Final = "open_shogiai_phase10r_preparation/v1"
+PREPARATION_SCHEMA: Final = "open_shogiai_phase10r_preparation/v2"
+LEGACY_PREPARATION_SCHEMA: Final = "open_shogiai_phase10r_preparation/v1"
+REJECTION_SCHEMA: Final = "open_shogiai_phase10r_preparation_rejection/v1"
 TRAINING_EXAMPLE_SCHEMA: Final = "phase10r_training_example/v1"
 HELPER_SCHEMA: Final = "phase10r_replay_features/v1"
 PREPARATION_SEED: Final = 20_260_729
@@ -34,10 +42,10 @@ TRAINING_SOURCES: Final = ("aobazero", "wcsc", "denryu")
 TRAINING_SPLIT: Final = "train"
 EVALUATION_SPLITS: Final = ("validation", "source_held_out")
 PREPARATION_SPLITS: Final = (TRAINING_SPLIT, *EVALUATION_SPLITS)
-SOURCE_WEIGHTS: Final = {"aobazero": 1.0, "wcsc": 1.0, "denryu": 0.5}
 MAX_POSITIONS_PER_GAME_PER_EPOCH: Final = 128
 MAX_HELPER_LINE_BYTES: Final = 64 * 1024 * 1024
 HELPER_BUILD_TIMEOUT_SECONDS: Final = 300
+AGGREGATE_RSS_TARGET_BYTES: Final = 16 * 1024**3
 SCALE_COUNTS: Final = {
     "1m": 1_000_000,
     "10m": 10_000_000,
@@ -241,6 +249,10 @@ def _scan_identity(root: Path, data_root: Path) -> dict[str, Any]:
     completion_path = data_root / "replay-v2/replay-completion.json"
     proof_path = scan_root / "phase10r-completion-proof.json"
     database_path = scan_root / "phase10r-scan-v2.sqlite3"
+    input_manifest_path = scan_root / "phase10r-scan-input-manifest.json"
+    scan_manifest_path = scan_root / "phase10r-leakage-manifest.jsonl"
+    collision_decisions_path = scan_root / "phase10r-collision-decisions.jsonl"
+    transposition_path = scan_root / "phase10r-transposition-proof.json"
     completion = _read_json(completion_path)
     proof = _read_json(proof_path)
     for value, name, expected in (
@@ -272,16 +284,35 @@ def _scan_identity(root: Path, data_root: Path) -> dict[str, Any]:
         connection.close()
     if database_input is None or database_input[0] != input_manifest_sha:
         raise Phase10RExecutionError("v2 scan database input identity mismatches its proof")
+    input_hashes = {
+        "replay_completion": _sha256_file(completion_path),
+        "scan_completion": _sha256_file(proof_path),
+        "scan_input_manifest": _sha256_file(input_manifest_path),
+        "scan_manifest": _sha256_file(scan_manifest_path),
+        "collision_decisions": _sha256_file(collision_decisions_path),
+        "transposition_proof": _sha256_file(transposition_path),
+        "scan_database": _sha256_file(database_path),
+    }
+    if input_hashes["scan_input_manifest"] != input_manifest_sha:
+        raise Phase10RExecutionError("v2 scan input manifest hash changed")
+    if input_hashes["scan_manifest"] != scan_manifest_sha:
+        raise Phase10RExecutionError("v2 scan manifest hash changed")
+    if input_hashes["collision_decisions"] != proof.get("collision_decisions_sha256"):
+        raise Phase10RExecutionError("v2 collision decision hash changed")
     return {
         "data_root": data_root.as_posix(),
         "database": database_path,
         "completion_path": completion_path,
         "completion_sha256": completion_sha,
+        "input_hashes": input_hashes,
         "input_manifest_sha256": input_manifest_sha,
         "scan_manifest_sha256": scan_manifest_sha,
         "effective_records": proof.get("effective_published_records"),
         "unique_positions": proof.get("unique_positions"),
         "unique_games": proof.get("unique_games"),
+        "source_position_counts": proof.get("source_position_counts"),
+        "source_split_counts": proof.get("source_split_counts"),
+        "effective_cross_split_groups": transposition.get("effective_cross_split_groups"),
     }
 
 
@@ -297,11 +328,166 @@ def _resource_check(root: Path, data_root: Path) -> dict[str, int | bool]:
         raise Phase10RExecutionError(
             f"free disk crossed the frozen 150 GiB floor: {usage.free} < {minimum}"
         )
+    rss_unit = 1 if os.uname().sysname == "Darwin" else 1024
+    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * rss_unit
+    if peak_rss > AGGREGATE_RSS_TARGET_BYTES:
+        raise Phase10RExecutionError(
+            "preparation crossed the frozen aggregate RSS target: "
+            f"{peak_rss} > {AGGREGATE_RSS_TARGET_BYTES}"
+        )
     return {
         "free_disk_bytes": int(usage.free),
         "minimum_free_bytes": minimum,
         "disk_passed": True,
+        "peak_rss_bytes": int(peak_rss),
+        "maximum_rss_bytes": AGGREGATE_RSS_TARGET_BYTES,
+        "memory_passed": True,
     }
+
+
+def preparation_manifest_path(root: Path, scale: str) -> Path:
+    root = root.resolve()
+    mixture = load_canonical_pretraining_mixture(root)
+    template = mixture["output"]["path_template"]
+    relative = Path(str(template).format(scale=scale))
+    if relative.is_absolute() or ".." in relative.parts or relative.name != f"{scale}-mixture-v2":
+        raise Phase10RExecutionError("canonical preparation output path is unsafe")
+    return _data_root(root) / relative / "preparation-manifest.json"
+
+
+def _legacy_rejection_evidence(
+    data_root: Path,
+    mixture: Mapping[str, Any],
+    replacement_manifest: Path,
+) -> dict[str, Any]:
+    legacy_dir = data_root / "phase10r-prepared/1m"
+    legacy_manifest_path = legacy_dir / "preparation-manifest.json"
+    marker_path = legacy_dir / "REJECTED_MIXTURE_CONTROL_CONFLICT.json"
+    if not legacy_manifest_path.is_file() or legacy_manifest_path.is_symlink():
+        return {"status": "legacy_preparation_not_present", "marker": None}
+    legacy = _read_json(legacy_manifest_path)
+    if legacy.get("schema") != LEGACY_PREPARATION_SCHEMA or legacy.get("scale") != "1m":
+        raise Phase10RExecutionError("legacy 1M preparation identity is incompatible")
+    total = legacy.get("streamed_examples")
+    counts = legacy.get("source_stream_counts")
+    if total != 1_000_000 or not isinstance(counts, dict) or sum(counts.values()) != total:
+        raise Phase10RExecutionError("legacy 1M preparation counts are invalid")
+    maximums = mixture["maximum_shares"]
+    shares = {source: count / total for source, count in counts.items()}
+    violations = [
+        {
+            "source_id": source,
+            "realized_share": shares[source],
+            "maximum_share": maximums[source],
+        }
+        for source in TRAINING_SOURCES
+        if shares[source] > maximums[source]
+    ]
+    if not violations:
+        raise Phase10RExecutionError("legacy 1M preparation no longer proves the mixture conflict")
+    legacy_manifest_file_sha = _sha256_file(legacy_manifest_path)
+    replacement_relative = replacement_manifest.relative_to(data_root).as_posix()
+    evidence = {
+        "schema": REJECTION_SCHEMA,
+        "status": "REJECTED_MIXTURE_CONTROL_CONFLICT",
+        "reason": (
+            "The legacy sampler normalized 1.0/1.0/0.5 weights to 40%/40%/20%, "
+            "exceeding the frozen AobaZero maximum share of 35%."
+        ),
+        "legacy_preparation_manifest": "phase10r-prepared/1m/preparation-manifest.json",
+        "legacy_preparation_manifest_file_sha256": legacy_manifest_file_sha,
+        "legacy_preparation_manifest_declared_sha256": legacy.get("manifest_sha256"),
+        "legacy_train_sha256": legacy.get("files", {}).get("train.jsonl", {}).get("sha256"),
+        "legacy_source_counts": counts,
+        "legacy_realized_shares": shares,
+        "frozen_maximum_shares": maximums,
+        "violations": violations,
+        "replacement_preparation_manifest": replacement_relative,
+        "preservation_policy": "do_not_delete_or_overwrite_legacy_preparation_or_manifest",
+    }
+    if marker_path.exists() or marker_path.is_symlink():
+        observed = _read_json(marker_path)
+        if observed != evidence:
+            raise Phase10RExecutionError("legacy rejection marker differs from current evidence")
+    else:
+        _write_immutable_json(marker_path, evidence)
+    return {
+        "status": evidence["status"],
+        "marker": marker_path,
+        "marker_sha256": _sha256_file(marker_path),
+        "legacy_manifest_sha256": legacy_manifest_file_sha,
+        "legacy_train_sha256": evidence["legacy_train_sha256"],
+        "violations": violations,
+    }
+
+
+def _stream_digest(rows: Iterable[Mapping[str, Any]]) -> dict[str, int | str]:
+    digest = hashlib.sha256()
+    count = 0
+    size = 0
+    for row in rows:
+        encoded = _json_bytes(dict(row))
+        digest.update(encoded)
+        count += 1
+        size += len(encoded)
+    return {"sha256": digest.hexdigest(), "rows": count, "bytes": size}
+
+
+def _source_statistics(
+    files: Mapping[str, Mapping[str, int | str]],
+    quotas: Mapping[str, int],
+    total: int,
+    source_population_counts: Mapping[str, int],
+    effective_unique_counts: Mapping[str, Mapping[str, int]],
+    mixture: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for source in TRAINING_SOURCES:
+        eligible = int(files[f"base-train-{source}.jsonl"]["rows"])
+        population = int(source_population_counts[source])
+        realized = int(quotas[source])
+        result[source] = {
+            "target_share": mixture["target_shares"][source],
+            "realized_share": realized / total,
+            "minimum_share": mixture["minimum_shares"][source],
+            "maximum_share": mixture["maximum_shares"][source],
+            "target_count": realized,
+            "realized_count": realized,
+            "source_population_positions_before_effective_publication": population,
+            "effective_unique_records_all_splits": effective_unique_counts[source]["all"],
+            "effective_unique_train_records_before_game_cap": effective_unique_counts[source][
+                "train"
+            ],
+            "eligible_unique_train_records_after_per_game_cap": eligible,
+            "source_population_repetition_factor": realized / population,
+            "eligible_train_epoch_equivalent": realized / eligible,
+            "maximum_record_occurrences": math.ceil(realized / eligible),
+            "sampling_with_replacement": mixture["sampling"]["with_replacement"],
+        }
+    return result
+
+
+def _effective_unique_source_counts(
+    connection: sqlite3.Connection,
+) -> dict[str, dict[str, int]]:
+    result = {source: {"all": 0, "train": 0} for source in TRAINING_SOURCES}
+    for source, count in connection.execute(
+        "SELECT p.source_id,COUNT(*) FROM positions p "
+        "JOIN effective_positions e ON e.row_id=p.row_id GROUP BY p.source_id"
+    ):
+        if source in result:
+            result[str(source)]["all"] = int(count)
+    for source, count in connection.execute(
+        "SELECT p.source_id,COUNT(*) FROM positions p "
+        "JOIN effective_positions e ON e.row_id=p.row_id "
+        "WHERE p.split=? GROUP BY p.source_id",
+        (TRAINING_SPLIT,),
+    ):
+        if source in result:
+            result[str(source)]["train"] = int(count)
+    if any(not counts["all"] or not counts["train"] for counts in result.values()):
+        raise Phase10RExecutionError("effective unique source counts are incomplete")
+    return result
 
 
 def _effective_rows(
@@ -621,7 +807,7 @@ def _example_row(
         "artifact_id": row["artifact_id"],
         "record_id": f"{row['record_id']}:{index}",
         "split": row["split"],
-        "weight": SOURCE_WEIGHTS.get(str(row["source_id"]), 0.0),
+        "weight": 1.0,
         "legal_moves": legal if legal else None,
         "played_move": played,
         "wdl": wdl,
@@ -762,14 +948,27 @@ def _cycle_rows(path: Path) -> Iterator[dict[str, Any]]:
             raise Phase10RExecutionError(f"cannot sample an empty source stream: {path}")
 
 
-def _schedule_source_counts(total: int) -> dict[str, int]:
-    return allocate_source_counts(total, SOURCE_WEIGHTS)
+def _schedule_source_counts(total: int, mixture: Mapping[str, Any]) -> dict[str, int]:
+    try:
+        return allocate_source_counts(
+            total,
+            mixture["target_shares"],
+            tie_break_order=mixture["rounding"]["tie_break_order"],
+        )
+    except (KeyError, TypeError, Phase10RValidationError) as error:
+        raise Phase10RExecutionError("canonical source allocation is invalid") from error
 
 
 def _stream_rows(
-    source_paths: Mapping[str, Path], total: int, *, seed: int = PREPARATION_SEED
+    source_paths: Mapping[str, Path],
+    total: int,
+    mixture: Mapping[str, Any],
+    *,
+    seed: int = PREPARATION_SEED,
 ) -> Iterator[dict[str, Any]]:
-    quotas = _schedule_source_counts(total)
+    if seed != mixture["sampling"]["seed"]:
+        raise Phase10RExecutionError("sampling seed differs from the canonical mixture")
+    quotas = _schedule_source_counts(total, mixture)
     emitted = {source: 0 for source in TRAINING_SOURCES}
     iterators = {source: _cycle_rows(source_paths[source]) for source in TRAINING_SOURCES}
     for stream_index in range(total):
@@ -799,13 +998,13 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
         raise Phase10RExecutionError(f"unsupported preparation scale: {scale}")
     root = root.resolve()
     data_root = _data_root(root)
+    mixture = load_canonical_pretraining_mixture(root)
     scan = _scan_identity(root, data_root)
-    output_dir = data_root / "phase10r-prepared" / scale
-    manifest_path = output_dir / "preparation-manifest.json"
+    manifest_path = preparation_manifest_path(root, scale)
+    output_dir = manifest_path.parent
+    legacy_rejection = _legacy_rejection_evidence(data_root, mixture, manifest_path)
     if manifest_path.is_file() and not manifest_path.is_symlink():
-        manifest = _read_json(manifest_path)
-        if manifest.get("schema") != PREPARATION_SCHEMA or manifest.get("scale") != scale:
-            raise Phase10RExecutionError("existing preparation manifest has incompatible identity")
+        manifest = validate_preparation(root, scale)
         return {"status": "passed", "manifest": manifest_path, "details": manifest}
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -816,6 +1015,7 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
     connection = sqlite3.connect(f"file:{scan['database']}?mode=ro", uri=True)
     connection.execute("PRAGMA query_only=ON")
     try:
+        effective_unique_counts = _effective_unique_source_counts(connection)
         files = _write_base_files(
             root,
             connection,
@@ -825,16 +1025,40 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
         source_paths = {
             source: output_dir / f"base-train-{source}.jsonl" for source in TRAINING_SOURCES
         }
+        quotas = _schedule_source_counts(SCALE_COUNTS[scale], mixture)
         stream_path = output_dir / "train.jsonl"
         stream_info = _write_jsonl_immutable(
             stream_path,
-            _stream_rows(source_paths, SCALE_COUNTS[scale]),
+            _stream_rows(source_paths, SCALE_COUNTS[scale], mixture),
             resource_check=resource_check,
         )
         files[stream_path.name] = stream_info
     finally:
         connection.close()
     resource_after = resource_check()
+    reproduced = _stream_digest(
+        _stream_rows(source_paths, SCALE_COUNTS[scale], mixture, seed=mixture["sampling"]["seed"])
+    )
+    if reproduced != stream_info:
+        raise Phase10RExecutionError("same-seed deterministic preparation reproduction failed")
+    source_population_counts = scan.get("source_position_counts")
+    if not isinstance(source_population_counts, dict) or set(source_population_counts) != set(
+        TRAINING_SOURCES
+    ):
+        raise Phase10RExecutionError("scan source population counts are incomplete")
+    source_statistics = _source_statistics(
+        files,
+        quotas,
+        SCALE_COUNTS[scale],
+        source_population_counts,
+        effective_unique_counts,
+        mixture,
+    )
+    for source, statistics in source_statistics.items():
+        if statistics["realized_share"] > statistics["maximum_share"]:
+            raise Phase10RExecutionError(f"realized {source} share exceeds its maximum")
+    if scan.get("effective_cross_split_groups") != 0:
+        raise Phase10RExecutionError("effective split or holdout leakage remains")
     configuration_hashes = _configuration_hashes(root)
     manifest_body: dict[str, Any] = {
         "schema": PREPARATION_SCHEMA,
@@ -842,8 +1066,27 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
         "scale": scale,
         "streamed_examples": SCALE_COUNTS[scale],
         "seed": PREPARATION_SEED,
-        "source_weights": SOURCE_WEIGHTS,
-        "source_stream_counts": _schedule_source_counts(SCALE_COUNTS[scale]),
+        "mixture_control": mixture,
+        "source_stream_counts": quotas,
+        "source_statistics": source_statistics,
+        "count_validation": {
+            "target_total": SCALE_COUNTS[scale],
+            "realized_total": sum(quotas.values()),
+            "allowed_count_tolerance": mixture["rounding"]["allowed_count_tolerance"],
+            "passed": sum(quotas.values()) == SCALE_COUNTS[scale],
+        },
+        "deterministic_reproduction": {
+            "seed": mixture["sampling"]["seed"],
+            "first_pass_sha256": stream_info["sha256"],
+            "reproduced_sha256": reproduced["sha256"],
+            "rows": reproduced["rows"],
+            "bytes": reproduced["bytes"],
+            "passed": reproduced == stream_info,
+        },
+        "legacy_preparation": {
+            key: (value.relative_to(data_root).as_posix() if isinstance(value, Path) else value)
+            for key, value in legacy_rejection.items()
+        },
         "max_positions_per_game_per_epoch": MAX_POSITIONS_PER_GAME_PER_EPOCH,
         "split_policy": {
             "training": [TRAINING_SPLIT],
@@ -852,6 +1095,12 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
         },
         "scan": {
             key: value for key, value in scan.items() if key not in {"database", "completion_path"}
+        },
+        "leakage_validation": {
+            "scan_manifest_sha256": scan["scan_manifest_sha256"],
+            "effective_cross_split_groups": scan["effective_cross_split_groups"],
+            "protected_splits_excluded": ["public_test", "internal_test", "final_holdout"],
+            "passed": scan["effective_cross_split_groups"] == 0,
         },
         "configuration_hashes": configuration_hashes,
         "legal_mask_helper": {
@@ -864,7 +1113,103 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
     }
     manifest_body["manifest_sha256"] = _sha256_bytes(_json_bytes(manifest_body))
     _write_immutable_json(manifest_path, manifest_body)
-    return {"status": "passed", "manifest": manifest_path, "details": manifest_body}
+    validated = validate_preparation(root, scale)
+    return {"status": "passed", "manifest": manifest_path, "details": validated}
+
+
+def validate_preparation(root: Path, scale: str) -> dict[str, Any]:
+    """Verify an existing versioned preparation and every bound local file."""
+
+    root = root.resolve()
+    manifest_path = preparation_manifest_path(root, scale)
+    manifest = _read_json(manifest_path)
+    if (
+        manifest.get("schema") != PREPARATION_SCHEMA
+        or manifest.get("status") != "passed"
+        or manifest.get("scale") != scale
+        or manifest.get("streamed_examples") != SCALE_COUNTS[scale]
+    ):
+        raise Phase10RExecutionError("versioned preparation manifest identity is invalid")
+    declared_manifest_sha = manifest.get("manifest_sha256")
+    body = dict(manifest)
+    body.pop("manifest_sha256", None)
+    if declared_manifest_sha != _sha256_bytes(_json_bytes(body)):
+        raise Phase10RExecutionError("versioned preparation manifest digest is invalid")
+    if manifest.get("configuration_hashes") != _configuration_hashes(root):
+        raise Phase10RExecutionError("versioned preparation configuration hashes are stale")
+    mixture = load_canonical_pretraining_mixture(root)
+    if manifest.get("mixture_control") != mixture:
+        raise Phase10RExecutionError("versioned preparation mixture control is stale")
+    counts = manifest.get("source_stream_counts")
+    if counts != _schedule_source_counts(SCALE_COUNTS[scale], mixture):
+        raise Phase10RExecutionError("versioned preparation realized counts are invalid")
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise Phase10RExecutionError("versioned preparation file inventory is invalid")
+    for name, expected in files.items():
+        if not isinstance(name, str) or not isinstance(expected, dict):
+            raise Phase10RExecutionError("versioned preparation file entry is invalid")
+        path = manifest_path.parent / name
+        if _sha256_file(path) != expected.get("sha256"):
+            raise Phase10RExecutionError(f"versioned preparation file hash changed: {name}")
+        stat = path.stat()
+        if stat.st_size != expected.get("bytes"):
+            raise Phase10RExecutionError(f"versioned preparation file size changed: {name}")
+    train = files.get("train.jsonl")
+    determinism = manifest.get("deterministic_reproduction")
+    if (
+        not isinstance(train, dict)
+        or train.get("rows") != SCALE_COUNTS[scale]
+        or not isinstance(determinism, dict)
+        or determinism.get("passed") is not True
+        or determinism.get("first_pass_sha256") != train.get("sha256")
+        or determinism.get("reproduced_sha256") != train.get("sha256")
+    ):
+        raise Phase10RExecutionError("versioned preparation determinism proof is invalid")
+    statistics = manifest.get("source_statistics")
+    if not isinstance(statistics, dict) or set(statistics) != set(TRAINING_SOURCES):
+        raise Phase10RExecutionError("versioned preparation source statistics are invalid")
+    tolerance = mixture["rounding"]["allowed_count_tolerance"]
+    for source in TRAINING_SOURCES:
+        row = statistics[source]
+        if (
+            not isinstance(row, dict)
+            or abs(row.get("realized_count", -1) - counts[source]) > tolerance
+            or row.get("realized_share") > mixture["maximum_shares"][source]
+            or row.get("eligible_unique_train_records_after_per_game_cap")
+            != files[f"base-train-{source}.jsonl"]["rows"]
+        ):
+            raise Phase10RExecutionError(f"versioned preparation {source} statistics are invalid")
+    leakage = manifest.get("leakage_validation")
+    if (
+        not isinstance(leakage, dict)
+        or leakage.get("passed") is not True
+        or leakage.get("effective_cross_split_groups") != 0
+    ):
+        raise Phase10RExecutionError("versioned preparation leakage proof is invalid")
+    resources = manifest.get("resources")
+    if not isinstance(resources, dict) or any(
+        not isinstance(resources.get(stage), dict)
+        or resources[stage].get("disk_passed") is not True
+        or resources[stage].get("memory_passed") is not True
+        for stage in ("before", "after")
+    ):
+        raise Phase10RExecutionError("versioned preparation resource proof is invalid")
+    legacy = manifest.get("legacy_preparation")
+    if not isinstance(legacy, dict):
+        raise Phase10RExecutionError("legacy preparation rejection evidence is missing")
+    if legacy.get("status") == "REJECTED_MIXTURE_CONTROL_CONFLICT":
+        marker = legacy.get("marker")
+        if not isinstance(marker, str) or _sha256_file(_data_root(root) / marker) != legacy.get(
+            "marker_sha256"
+        ):
+            raise Phase10RExecutionError("legacy preparation rejection marker changed")
+    elif (
+        legacy != {"status": "legacy_preparation_not_present", "marker": None}
+        or (_data_root(root) / "phase10r-prepared/1m/preparation-manifest.json").exists()
+    ):
+        raise Phase10RExecutionError("legacy preparation rejection state is invalid")
+    return manifest
 
 
 __all__ = [
@@ -872,5 +1217,7 @@ __all__ = [
     "PREPARATION_SCHEMA",
     "SCALE_COUNTS",
     "Phase10RExecutionError",
+    "preparation_manifest_path",
     "prepare_scale",
+    "validate_preparation",
 ]

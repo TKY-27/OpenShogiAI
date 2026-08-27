@@ -45,7 +45,9 @@ from open_shogi_training.phase10r_campaign import (
 )
 from open_shogi_training.phase10r_execution import (
     Phase10RExecutionError,
+    preparation_manifest_path,
     prepare_scale,
+    validate_preparation,
 )
 from open_shogi_training.phase10r_model import (
     VARIANT_PAIR,
@@ -337,9 +339,10 @@ def _run_preflight(root: Path, argv: Sequence[str]) -> tuple[dict[str, Any], boo
     receipt = _base_receipt(root, "preflight", argv)
     failures: list[str] = []
     try:
-        validate_phase10r(root)
+        frozen = validate_phase10r(root)
         receipt["frozen_validation"] = "passed"
         receipt["frozen_hashes"] = _hash_manifest(root)
+        receipt["mixture_control"] = frozen["canonical_pretraining_mixture"]
     except (Phase10RValidationError, OSError, KeyError) as error:
         receipt["frozen_validation"] = "failed"
         failures.append(f"frozen validation: {error}")
@@ -386,6 +389,28 @@ def _run_preflight(root: Path, argv: Sequence[str]) -> tuple[dict[str, Any], boo
     except (OSError, ValueError, RuntimeError, Phase10RScanError) as error:
         receipt["split_leakage"] = {"status": "failed", "passed": False, "error": str(error)}
         failures.append(f"split leakage: {error}")
+    try:
+        preparation_path = preparation_manifest_path(root, "1m")
+        if preparation_path.is_file() and not preparation_path.is_symlink():
+            preparation = validate_preparation(root, "1m")
+            receipt["preparation_control"] = {
+                "status": "passed",
+                "manifest": str(preparation_path.relative_to(root)),
+                "manifest_sha256": preparation["manifest_sha256"],
+                "source_stream_counts": preparation["source_stream_counts"],
+                "source_statistics": preparation["source_statistics"],
+                "deterministic_reproduction": preparation["deterministic_reproduction"],
+                "leakage_validation": preparation["leakage_validation"],
+                "legacy_preparation": preparation["legacy_preparation"],
+            }
+        else:
+            receipt["preparation_control"] = {
+                "status": "not_prepared",
+                "manifest": str(preparation_path.relative_to(root)),
+            }
+    except (OSError, ValueError, RuntimeError, Phase10RExecutionError) as error:
+        receipt["preparation_control"] = {"status": "failed", "error": str(error)}
+        failures.append(f"preparation control: {error}")
     receipt["frozen_runtime"] = {
         "mode": "PureValue",
         "handcrafted_leaf_contribution": False,

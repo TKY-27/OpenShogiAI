@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+from open_shogi_training.phase10r import load_canonical_pretraining_mixture
 from open_shogi_training.phase10r_execution import (
     _example_row,
+    _legacy_rejection_evidence,
     _outcome_wdl,
     _ReplayFeatureProcess,
+    _source_statistics,
     _stream_rows,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+MIXTURE = load_canonical_pretraining_mixture(ROOT)
 START_SFEN = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
 
 
@@ -33,15 +38,76 @@ def test_stream_rows_is_deterministic_and_applies_frozen_weights(tmp_path: Path)
         )
         paths[source] = path
 
-    first = list(_stream_rows(paths, 10, seed=123))
-    second = list(_stream_rows(paths, 10, seed=123))
+    first = list(_stream_rows(paths, 100, MIXTURE))
+    second = list(_stream_rows(paths, 100, MIXTURE))
 
     assert first == second
-    assert [row["source"] for row in first].count("aobazero") == 4
-    assert [row["source"] for row in first].count("wcsc") == 4
-    assert [row["source"] for row in first].count("denryu") == 2
-    assert [row["raw_targets"]["stream_index"] for row in first] == list(range(10))
-    assert all(row["raw_targets"]["sampling_seed"] == 123 for row in first)
+    assert [row["source"] for row in first].count("aobazero") == 35
+    assert [row["source"] for row in first].count("wcsc") == 45
+    assert [row["source"] for row in first].count("denryu") == 20
+    assert [row["raw_targets"]["stream_index"] for row in first] == list(range(100))
+    assert all(row["raw_targets"]["sampling_seed"] == 20_260_729 for row in first)
+
+
+def test_legacy_preparation_is_marked_without_changing_its_manifest(tmp_path: Path) -> None:
+    legacy = tmp_path / "phase10r-prepared/1m"
+    legacy.mkdir(parents=True)
+    manifest_path = legacy / "preparation-manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "open_shogiai_phase10r_preparation/v1",
+                "scale": "1m",
+                "streamed_examples": 1_000_000,
+                "manifest_sha256": "a" * 64,
+                "source_stream_counts": {
+                    "aobazero": 400_000,
+                    "wcsc": 400_000,
+                    "denryu": 200_000,
+                },
+                "files": {"train.jsonl": {"sha256": "b" * 64}},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original = manifest_path.read_bytes()
+    replacement = tmp_path / "phase10r-prepared/1m-mixture-v2/preparation-manifest.json"
+
+    first = _legacy_rejection_evidence(tmp_path, MIXTURE, replacement)
+    second = _legacy_rejection_evidence(tmp_path, MIXTURE, replacement)
+
+    assert first == second
+    assert first["status"] == "REJECTED_MIXTURE_CONTROL_CONFLICT"
+    assert manifest_path.read_bytes() == original
+    marker = legacy / "REJECTED_MIXTURE_CONTROL_CONFLICT.json"
+    assert json.loads(marker.read_text(encoding="utf-8"))["violations"] == [
+        {"maximum_share": 0.35, "realized_share": 0.4, "source_id": "aobazero"}
+    ]
+
+
+def test_source_statistics_report_population_and_eligible_repetition() -> None:
+    files = {
+        "base-train-aobazero.jsonl": {"rows": 7_825},
+        "base-train-wcsc.jsonl": {"rows": 356_214},
+        "base-train-denryu.jsonl": {"rows": 11_466},
+    }
+    quotas = {"aobazero": 350_000, "wcsc": 450_000, "denryu": 200_000}
+    populations = {"aobazero": 15_488, "wcsc": 618_038, "denryu": 25_993}
+    effective = {
+        "aobazero": {"all": 14_055, "train": 11_493},
+        "wcsc": {"all": 618_038, "train": 490_968},
+        "denryu": {"all": 25_993, "train": 20_667},
+    }
+
+    result = _source_statistics(files, quotas, 1_000_000, populations, effective, MIXTURE)
+
+    assert result["aobazero"]["maximum_record_occurrences"] == 45
+    assert result["wcsc"]["maximum_record_occurrences"] == 2
+    assert result["denryu"]["maximum_record_occurrences"] == 18
+    assert result["aobazero"]["effective_unique_train_records_before_game_cap"] == 11_493
+    assert result["aobazero"]["eligible_train_epoch_equivalent"] == pytest.approx(350_000 / 7_825)
 
 
 def test_replay_feature_helper_emits_authoritative_legal_root_and_history() -> None:
@@ -101,6 +167,7 @@ def test_example_row_keeps_rust_legality_and_source_targets() -> None:
     assert result["played_move"] == "7g7f"
     assert result["wdl"] == 2
     assert result["wdl_mask"] is True
+    assert result["weight"] == 1.0
     assert result["raw_targets"]["legal_mask_runtime"].startswith("open-shogi-core/")
 
 
