@@ -125,7 +125,10 @@ Focused mixture, deterministic-stream, immutable-rejection, repetition, and exec
 effective records and zero effective cross-split groups. Full `make check` passed (`545` Python
 tests, `344` Rust tests, lint, boundary, license, provenance, build, and deterministic Wasm binding
 check). Exact Phase 10R preflight passed with no failures; its immutable receipt and SHA-256 are
-recorded in `artifacts/phase10r/phase10r-mixture-reconciliation.json`.
+recorded in `artifacts/phase10r/phase10r-mixture-reconciliation.json`. The bound receipt is
+`local/phase10r-runs/20260827T101006.626267Z-preflight.json`, SHA-256
+`0bc783fb984c371fe97d18e98851b5814577b4399814411959fec064a9d36e1a`, produced from clean
+implementation commit `dc47868b449d0a32b885e38e5b64a20009a6dcb4`.
 
 No production training, teacher labeling, Arena, cross-play, self-play, final holdout evaluation,
 promotion, push, or deployment was run.

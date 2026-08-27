@@ -43,9 +43,11 @@
     "frozen_hash_validation": "passed: 62 paths",
     "make_check": "passed: 545 Python tests, 344 Rust tests, lint, boundary, license, provenance, build, and Wasm reproducibility",
     "exact_preflight": "passed",
-    "preflight_receipt": "local/phase10r-runs/20260827T095052.948088Z-preflight.json",
-    "preflight_receipt_sha256": "19636de4c82c6a708461eefe965b9934f76e5600a4df7dffd9bc1042ff382dc4",
-    "preflight_peak_rss_bytes": 782925824
+    "preflight_receipt": "local/phase10r-runs/20260827T101006.626267Z-preflight.json",
+    "preflight_receipt_sha256": "0bc783fb984c371fe97d18e98851b5814577b4399814411959fec064a9d36e1a",
+    "preflight_commit": "dc47868b449d0a32b885e38e5b64a20009a6dcb4",
+    "preflight_git_dirty": false,
+    "preflight_peak_rss_bytes": 843350016
   },
   "production_training_unblocked": true,
   "production_training_started": false,
