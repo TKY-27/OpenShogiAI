@@ -86,8 +86,8 @@ The replacement is at:
 
 `local/phase10r-data/phase10r-prepared/1m-mixture-v2/`
 
-- manifest file SHA-256: `dcbcfd7584f84bd03d9d948a5633e9b18bb3db06027d1f1a0bec2b2cd7a8e076`
-- declared manifest-body SHA-256: `6f7c244e9cba098fed99daef12f11962b2e36c546012f058c961daada28cdd48`
+- manifest file SHA-256: `9dddab33fa50ec070f267f43ea12ebab1c1931e16c8826219eb50b85d8061d2b`
+- declared manifest-body SHA-256: `3e36bf596ddb25356abad276745c3b2b2cae2bf01a38894f65d1a362b6481ecf`
 - train SHA-256: `8748f5fdf8af7716a347f1faa94d0f4965afca009f368ce1a66463e0e917b161`
 - train bytes/rows: 2,077,794,499 / 1,000,000
 
@@ -100,8 +100,8 @@ The replacement is at:
 The same seed reproduced the exact train hash and byte/row counts. The bound scan proves zero
 effective cross-split/transposition groups and excludes public/internal/final holdouts. All config,
 scan input, collision-decision, transposition-proof, SQLite, helper, base-stream, evaluation-stream,
-and train hashes are recorded in the manifest. Peak preparation RSS was 238,813,184 bytes against
-the 17,179,869,184-byte target, and post-preparation free disk was 283,567,955,968 bytes against the
+and train hashes are recorded in the manifest. Peak preparation RSS was 213,958,656 bytes against
+the 17,179,869,184-byte target, and post-preparation free disk was 278,063,026,176 bytes against the
 161,061,273,600-byte floor.
 
 ## Changed frozen controls
@@ -121,8 +121,8 @@ the 17,179,869,184-byte target, and post-preparation free disk was 283,567,955,9
 ## Verification
 
 Focused mixture, deterministic-stream, immutable-rejection, repetition, and execution tests passed
-(`25` tests). Frozen-hash validation passed (`60` paths). Leakage validation passed with `528,570`
-effective records and zero effective cross-split groups. Full `make check` passed (`544` Python
+(`26` tests). Frozen-hash validation passed (`62` paths). Leakage validation passed with `528,570`
+effective records and zero effective cross-split groups. Full `make check` passed (`545` Python
 tests, `344` Rust tests, lint, boundary, license, provenance, build, and deterministic Wasm binding
 check). Exact Phase 10R preflight passed with no failures; its immutable receipt and SHA-256 are
 recorded in `artifacts/phase10r/phase10r-mixture-reconciliation.json`.

@@ -52,6 +52,8 @@ FROZEN_PATHS: Final = frozenset(
         "training/open_shogi_training/phase10r_run.py",
         "training/open_shogi_training/phase10r_execution.py",
         "training/open_shogi_training/phase10r_campaign.py",
+        "training/open_shogi_training/data/phase10r_scan.py",
+        "training/open_shogi_training/data/phase10r_scan_v2.py",
         "tests/python/test_phase10r_freeze.py",
         "tests/python/test_phase10r_run.py",
         "tests/python/test_phase10r_execution.py",
@@ -234,6 +236,18 @@ def canonical_pretraining_mixture(mixture: Mapping[str, Any]) -> dict[str, Any]:
     declared_sum = _decimal_share(control.get("target_share_sum"), "target_share_sum")
     if sum(targets.values(), Decimal(0)) != Decimal(1) or declared_sum != Decimal(1):
         raise Phase10RValidationError("canonical mixture target shares must sum exactly to 1.0")
+    expected_targets = {
+        "aobazero": Decimal("0.35"),
+        "wcsc": Decimal("0.45"),
+        "denryu": Decimal("0.20"),
+    }
+    expected_maximums = {
+        "aobazero": Decimal("0.35"),
+        "wcsc": Decimal("0.55"),
+        "denryu": Decimal("0.20"),
+    }
+    if targets != expected_targets or maximums != expected_maximums:
+        raise Phase10RValidationError("canonical mixture target or maximum vector changed")
     return {
         "control_id": control["control_id"],
         "target_shares": {name: float(value) for name, value in targets.items()},

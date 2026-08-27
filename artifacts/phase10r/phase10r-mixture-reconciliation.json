@@ -19,8 +19,8 @@
   "new_preparation": {
     "status": "passed",
     "path": "local/phase10r-data/phase10r-prepared/1m-mixture-v2",
-    "manifest_file_sha256": "dcbcfd7584f84bd03d9d948a5633e9b18bb3db06027d1f1a0bec2b2cd7a8e076",
-    "manifest_body_sha256": "6f7c244e9cba098fed99daef12f11962b2e36c546012f058c961daada28cdd48",
+    "manifest_file_sha256": "9dddab33fa50ec070f267f43ea12ebab1c1931e16c8826219eb50b85d8061d2b",
+    "manifest_body_sha256": "3e36bf596ddb25356abad276745c3b2b2cae2bf01a38894f65d1a362b6481ecf",
     "train_sha256": "8748f5fdf8af7716a347f1faa94d0f4965afca009f368ce1a66463e0e917b161",
     "rows": 1000000,
     "bytes": 2077794499,
@@ -29,7 +29,7 @@
     "maximums": {"aobazero": 0.35, "wcsc": 0.55, "denryu": 0.2},
     "deterministic_same_seed": true,
     "effective_cross_split_groups": 0,
-    "resource_compliance": {"disk": true, "memory": true, "peak_rss_bytes": 238813184, "free_disk_bytes_after": 283567955968}
+    "resource_compliance": {"disk": true, "memory": true, "peak_rss_bytes": 213958656, "free_disk_bytes_after": 278063026176}
   },
   "source_statistics": {
     "aobazero": {"raw_positions": 15488, "effective_unique_all": 12237, "effective_unique_train": 8765, "eligible_unique_after_game_cap": 7825, "epoch_equivalent": 44.72843450479233, "maximum_record_occurrences": 45},
@@ -37,11 +37,11 @@
     "denryu": {"raw_positions": 25993, "effective_unique_all": 21849, "effective_unique_train": 17051, "eligible_unique_after_game_cap": 11466, "epoch_equivalent": 17.44287458573173, "maximum_record_occurrences": 18}
   },
   "verification": {
-    "focused_tests": "passed: 25 tests",
+    "focused_tests": "passed: 26 tests",
     "deterministic_preparation": "passed",
     "leakage_validation": "passed: 528570 effective records and zero effective cross-split groups",
-    "frozen_hash_validation": "passed: 60 paths",
-    "make_check": "passed: 544 Python tests, 344 Rust tests, lint, boundary, license, provenance, build, and Wasm reproducibility",
+    "frozen_hash_validation": "passed: 62 paths",
+    "make_check": "passed: 545 Python tests, 344 Rust tests, lint, boundary, license, provenance, build, and Wasm reproducibility",
     "exact_preflight": "passed",
     "preflight_receipt": "local/phase10r-runs/20260827T095052.948088Z-preflight.json",
     "preflight_receipt_sha256": "19636de4c82c6a708461eefe965b9934f76e5600a4df7dffd9bc1042ff382dc4",

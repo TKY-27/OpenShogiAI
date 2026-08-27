@@ -255,6 +255,7 @@ def _scan_identity(root: Path, data_root: Path) -> dict[str, Any]:
     transposition_path = scan_root / "phase10r-transposition-proof.json"
     completion = _read_json(completion_path)
     proof = _read_json(proof_path)
+    input_manifest = _read_json(input_manifest_path)
     for value, name, expected in (
         (completion, "replay completion", "open_shogiai_phase10r_replay_completion/v2"),
         (proof, "scan completion", "open_shogiai_phase10r_scan_completion/v2"),
@@ -273,17 +274,49 @@ def _scan_identity(root: Path, data_root: Path) -> dict[str, Any]:
     scan_manifest_sha = proof.get("scan_manifest_sha256")
     if not isinstance(input_manifest_sha, str) or not isinstance(scan_manifest_sha, str):
         raise Phase10RExecutionError("v2 scan identity is incomplete")
+    if (
+        input_manifest.get("schema") != "open_shogiai_phase10r_scan_input_manifest/v2"
+        or input_manifest.get("replay_completion_sha256") != completion_sha
+    ):
+        raise Phase10RExecutionError("v2 scan input does not bind the replay completion")
     connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
     try:
         database_input = connection.execute(
             "SELECT value FROM meta WHERE key='input_manifest_sha256'"
         ).fetchone()
+        database_counts = {
+            "effective_records": int(
+                connection.execute("SELECT COUNT(*) FROM effective_positions").fetchone()[0]
+            ),
+            "unique_positions": int(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT canonical_position_id) FROM positions"
+                ).fetchone()[0]
+            ),
+            "unique_games": int(
+                connection.execute("SELECT COUNT(DISTINCT game_id) FROM positions").fetchone()[0]
+            ),
+            "source_position_counts": {
+                str(source): int(count)
+                for source, count in connection.execute(
+                    "SELECT source_id,COUNT(*) FROM positions GROUP BY source_id"
+                )
+            },
+        }
     except sqlite3.DatabaseError as error:
         raise Phase10RExecutionError("v2 scan database metadata is unreadable") from error
     finally:
         connection.close()
     if database_input is None or database_input[0] != input_manifest_sha:
         raise Phase10RExecutionError("v2 scan database input identity mismatches its proof")
+    expected_database_counts = {
+        "effective_records": proof.get("effective_published_records"),
+        "unique_positions": proof.get("unique_positions"),
+        "unique_games": proof.get("unique_games"),
+        "source_position_counts": proof.get("source_position_counts"),
+    }
+    if database_counts != expected_database_counts:
+        raise Phase10RExecutionError("v2 scan database counts mismatch the completion proof")
     input_hashes = {
         "replay_completion": _sha256_file(completion_path),
         "scan_completion": _sha256_file(proof_path),
@@ -372,6 +405,22 @@ def _legacy_rejection_evidence(
     counts = legacy.get("source_stream_counts")
     if total != 1_000_000 or not isinstance(counts, dict) or sum(counts.values()) != total:
         raise Phase10RExecutionError("legacy 1M preparation counts are invalid")
+    declared_legacy_sha = legacy.get("manifest_sha256")
+    legacy_body = dict(legacy)
+    legacy_body.pop("manifest_sha256", None)
+    if declared_legacy_sha != _sha256_bytes(_json_bytes(legacy_body)):
+        raise Phase10RExecutionError("legacy 1M preparation manifest digest is invalid")
+    legacy_files = legacy.get("files")
+    if not isinstance(legacy_files, dict) or "train.jsonl" not in legacy_files:
+        raise Phase10RExecutionError("legacy 1M preparation file inventory is invalid")
+    for name, expected in legacy_files.items():
+        if not isinstance(name, str) or not isinstance(expected, dict):
+            raise Phase10RExecutionError("legacy 1M preparation file entry is invalid")
+        path = legacy_dir / name
+        if _sha256_file(path) != expected.get("sha256") or path.stat().st_size != expected.get(
+            "bytes"
+        ):
+            raise Phase10RExecutionError(f"legacy 1M preparation file changed: {name}")
     maximums = mixture["maximum_shares"]
     shares = {source: count / total for source, count in counts.items()}
     violations = [
@@ -1137,6 +1186,14 @@ def validate_preparation(root: Path, scale: str) -> dict[str, Any]:
         raise Phase10RExecutionError("versioned preparation manifest digest is invalid")
     if manifest.get("configuration_hashes") != _configuration_hashes(root):
         raise Phase10RExecutionError("versioned preparation configuration hashes are stale")
+    current_scan = _scan_identity(root, _data_root(root))
+    current_scan_evidence = {
+        key: value
+        for key, value in current_scan.items()
+        if key not in {"database", "completion_path"}
+    }
+    if manifest.get("scan") != current_scan_evidence:
+        raise Phase10RExecutionError("versioned preparation scan inputs or counts changed")
     mixture = load_canonical_pretraining_mixture(root)
     if manifest.get("mixture_control") != mixture:
         raise Phase10RExecutionError("versioned preparation mixture control is stale")

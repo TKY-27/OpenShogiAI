@@ -26,7 +26,7 @@ holdout evaluation, promotion, push, release, or deployment was performed.
 - Legacy train SHA-256: `5ab54aaa8fc59c5083f4037e1c9cb4b811164f09c9da225d0eda413d837459c0`
 - Replacement path: `local/phase10r-data/phase10r-prepared/1m-mixture-v2/`
 - Replacement manifest file SHA-256:
-  `dcbcfd7584f84bd03d9d948a5633e9b18bb3db06027d1f1a0bec2b2cd7a8e076`
+  `9dddab33fa50ec070f267f43ea12ebab1c1931e16c8826219eb50b85d8061d2b`
 - Replacement train SHA-256:
   `8748f5fdf8af7716a347f1faa94d0f4965afca009f368ce1a66463e0e917b161`
 - Target and realized counts: AobaZero 350,000; WCSC 450,000; Denryu 200,000.
@@ -34,7 +34,7 @@ holdout evaluation, promotion, push, release, or deployment was performed.
 - Maximum record occurrences: AobaZero 45; WCSC 2; Denryu 18.
 - Same-seed reproduction: exact 1,000,000-row/2,077,794,499-byte train hash match.
 - Effective cross-split groups: 0; protected public/internal/final holdouts excluded.
-- Peak preparation RSS: 238,813,184 bytes; free disk after preparation: 283,567,955,968 bytes.
+- Peak preparation RSS: 213,958,656 bytes; free disk after preparation: 278,063,026,176 bytes.
 
 ## Durable artifacts
 
@@ -43,16 +43,16 @@ holdout evaluation, promotion, push, release, or deployment was performed.
 - Machine reconciliation: `artifacts/phase10r/phase10r-mixture-reconciliation.json`
 - Existing replay/leakage proof: `artifacts/phase10r/phase10r-scan-completion-proof.json`
 - Local immutable preparation receipt:
-  `local/phase10r-runs/20260827T094227.338945Z-prepare.json`
+  `local/phase10r-runs/20260827T100448.829117Z-prepare.json`
 
 ## Verification state
 
-- Focused mixture/execution/freeze/runner tests: passed (`25` tests).
+- Focused mixture/execution/freeze/runner tests: passed (`26` tests).
 - Canonical configuration and pipeline sanity without stale hashes: passed.
 - Versioned preparation self-validation: passed.
-- Frozen-hash validation: passed (`60` paths).
+- Frozen-hash validation: passed (`62` paths).
 - Leakage validation: passed (`528,570` effective records; zero effective cross-split groups).
-- Full `make check`: passed (`544` Python tests, `344` Rust tests, lint, boundary, license,
+- Full `make check`: passed (`545` Python tests, `344` Rust tests, lint, boundary, license,
   provenance, build, and deterministic Wasm binding check).
 - Exact Phase 10R preflight: passed; no failures; preparation control, same-seed proof, leakage,
   OSAVAL02 bounded backend probe, disk, memory, and thermal controls all passed.

@@ -86,6 +86,15 @@ def test_canonical_mixture_requires_exact_normalization() -> None:
         canonical_pretraining_mixture(mixture)
 
 
+def test_canonical_mixture_rejects_a_different_normalized_vector() -> None:
+    mixture = copy.deepcopy(_load_yaml(ROOT / "configs/phase10r/dataset-mixture.yaml"))
+    mixture["canonical_pretraining_mixture"]["sources"][0]["target_share"] = 0.34
+    mixture["canonical_pretraining_mixture"]["sources"][1]["target_share"] = 0.46
+
+    with pytest.raises(Phase10RValidationError, match="target or maximum vector changed"):
+        canonical_pretraining_mixture(mixture)
+
+
 def test_tiny_dataset_can_be_intentionally_overfit() -> None:
     result = run_micro_overfit()
     assert result["final_loss"] < 0.001

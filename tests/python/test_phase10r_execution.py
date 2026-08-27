@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -53,24 +54,28 @@ def test_legacy_preparation_is_marked_without_changing_its_manifest(tmp_path: Pa
     legacy = tmp_path / "phase10r-prepared/1m"
     legacy.mkdir(parents=True)
     manifest_path = legacy / "preparation-manifest.json"
+    train_path = legacy / "train.jsonl"
+    train_path.write_text("{}\n", encoding="utf-8")
+    body = {
+        "schema": "open_shogiai_phase10r_preparation/v1",
+        "scale": "1m",
+        "streamed_examples": 1_000_000,
+        "source_stream_counts": {
+            "aobazero": 400_000,
+            "wcsc": 400_000,
+            "denryu": 200_000,
+        },
+        "files": {
+            "train.jsonl": {
+                "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+                "bytes": 3,
+            }
+        },
+    }
+    canonical_body = json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n"
+    body["manifest_sha256"] = hashlib.sha256(canonical_body.encode()).hexdigest()
     manifest_path.write_text(
-        json.dumps(
-            {
-                "schema": "open_shogiai_phase10r_preparation/v1",
-                "scale": "1m",
-                "streamed_examples": 1_000_000,
-                "manifest_sha256": "a" * 64,
-                "source_stream_counts": {
-                    "aobazero": 400_000,
-                    "wcsc": 400_000,
-                    "denryu": 200_000,
-                },
-                "files": {"train.jsonl": {"sha256": "b" * 64}},
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+        json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"
     )
     original = manifest_path.read_bytes()
     replacement = tmp_path / "phase10r-prepared/1m-mixture-v2/preparation-manifest.json"
