@@ -75,12 +75,12 @@ fn run() -> Result<(), String> {
         if request.usi_moves.len() > MAX_MOVES {
             return Err(format!("request contains more than {MAX_MOVES} moves"));
         }
-        emit_game(&mut writer, request)?;
+        emit_game(&mut writer, &request)?;
     }
     Ok(())
 }
 
-fn emit_game(writer: &mut impl Write, request: Request) -> Result<(), String> {
+fn emit_game(writer: &mut impl Write, request: &Request) -> Result<(), String> {
     let mut position = parse_sfen(&request.initial_sfen)
         .map_err(|error| format!("invalid initial SFEN: {error}"))?;
     let mut positions = vec![position.clone()];
@@ -121,7 +121,7 @@ fn emit_position(
     let legal_moves = position
         .legal_moves()
         .into_iter()
-        .map(|movement| to_usi_move(movement))
+        .map(to_usi_move)
         .collect();
     let history = history_facts(index, position, positions, gave_check);
     write_json_line(
