@@ -77,6 +77,8 @@ ARENA_EXECUTION_MANIFEST_SCHEMA: Final = "phase6_arena_execution_manifest/v1"
 MAX_COMMAND_ARGUMENTS: Final = 256
 MAX_ARGUMENT_BYTES: Final = 16 * 1024
 MAX_COMMAND_OUTPUT_BYTES: Final = 4 * 1024 * 1024
+_PROCESS_IDENTITY_BIND_TIMEOUT_SECONDS: Final = 1.0
+_PROCESS_IDENTITY_BIND_RETRY_SECONDS: Final = 0.005
 
 _PLAN_KEYS = {
     SELFPLAY_PLAN_SCHEMA: frozenset(
@@ -2898,6 +2900,22 @@ def _sanitized_environment() -> dict[str, str]:
     return environment
 
 
+def _bind_process_start_identity(process: subprocess.Popen[bytes]) -> str | None:
+    """Bind the owned leader while it is live, tolerating a transient Darwin gap."""
+
+    deadline = time.monotonic() + _PROCESS_IDENTITY_BIND_TIMEOUT_SECONDS
+    while True:
+        identity = _process_start_identity(process.pid)
+        if identity is not None:
+            return identity
+        if process.poll() is not None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(_PROCESS_IDENTITY_BIND_RETRY_SECONDS, remaining))
+
+
 def _run_bounded_process(
     argv: list[str],
     *,
@@ -2976,7 +2994,7 @@ def _run_bounded_process(
     ]
     for reader in readers:
         reader.start()
-    leader_start_identity = _process_start_identity(process.pid)
+    leader_start_identity = _bind_process_start_identity(process)
     if leader_start_identity is None and process.poll() is None:
         # The process table is also our PID-reuse authority.  Continuing without
         # a launch identity would make every later group signal ambiguous.

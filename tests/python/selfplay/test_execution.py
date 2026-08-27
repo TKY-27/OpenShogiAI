@@ -720,6 +720,51 @@ def test_bounded_process_terminates_child_when_post_spawn_guard_fails(
     assert time.monotonic() - started < 5
 
 
+def test_bounded_process_retries_transient_leader_identity_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_identity = execution_module._process_start_identity
+    attempts = 0
+
+    def transient_identity(process_id: int) -> str | None:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            return None
+        return real_identity(process_id)
+
+    monkeypatch.setattr(execution_module, "_process_start_identity", transient_identity)
+    outcome = execution_module._run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(.2)"],
+        cwd=tmp_path,
+        timeout_seconds=5,
+        memory_limit_bytes=128 * 1024 * 1024,
+    )
+
+    assert outcome[2] == 0
+    assert outcome[5] is False
+    assert attempts >= 3
+
+
+def test_bounded_process_fails_closed_when_leader_identity_never_binds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(execution_module, "_process_start_identity", lambda _pid: None)
+    started = time.monotonic()
+
+    with pytest.raises(
+        ContractError, match="cannot bind repository command process-start identity"
+    ):
+        execution_module._run_bounded_process(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            cwd=tmp_path,
+            timeout_seconds=30,
+            memory_limit_bytes=128 * 1024 * 1024,
+        )
+
+    assert time.monotonic() - started < 5
+
+
 def test_bounded_process_allows_only_an_explicit_short_lived_no_sample(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
