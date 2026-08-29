@@ -61,23 +61,23 @@ def test_stage4_affine_fit_is_positive_and_finite(monkeypatch: pytest.MonkeyPatc
     model = StubModel()
     examples = [
         SimpleNamespace(
-                raw_targets={
-                    "raw_logit": -1.0,
-                    "teacher_binding": {
-                        "score": {"kind": "cp", "value": 100},
-                        "candidates": [{}],
-                    },
-                }
-            ),
-            SimpleNamespace(
-                raw_targets={
-                    "raw_logit": 1.0,
-                    "teacher_binding": {
-                        "score": {"kind": "cp", "value": 300},
-                        "candidates": [{}],
-                    },
-                }
-            ),
+            raw_targets={
+                "raw_logit": -1.0,
+                "teacher_binding": {
+                    "score": {"kind": "cp", "value": 100},
+                    "candidates": [{}],
+                },
+            }
+        ),
+        SimpleNamespace(
+            raw_targets={
+                "raw_logit": 1.0,
+                "teacher_binding": {
+                    "score": {"kind": "cp", "value": 300},
+                    "candidates": [{}],
+                },
+            }
+        ),
     ]
 
     scale, bias, details = _fit_positive_affine(model, examples, VARIANT_PAIR)
