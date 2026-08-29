@@ -28,6 +28,7 @@ from open_shogi_training.phase10r import (
     Phase10RValidationError,
     allocate_source_counts,
     load_canonical_pretraining_mixture,
+    validate_phase10r,
 )
 from open_shogi_training.phase10r_model import HistoryFacts
 from open_shogi_training.phase10r_training import Phase10RExample
@@ -352,6 +353,34 @@ def _scan_identity(root: Path, data_root: Path) -> dict[str, Any]:
 def _configuration_hashes(root: Path) -> dict[str, str]:
     paths = (*CONFIG_PATHS, "configs/phase10r/frozen-controls.sha256")
     return {path: _sha256_file(root / path) for path in paths}
+
+
+def _validate_preparation_configuration_hashes(root: Path, declared: object) -> None:
+    current = _configuration_hashes(root)
+    if not isinstance(declared, dict) or set(declared) != set(current):
+        raise Phase10RExecutionError("versioned preparation configuration inventory is invalid")
+    if any(
+        not isinstance(declared[path], str)
+        or len(declared[path]) != 64
+        or declared[path] != current[path]
+        for path in CONFIG_PATHS
+    ):
+        raise Phase10RExecutionError("versioned preparation configuration hashes are stale")
+
+    # The frozen-control manifest binds implementation, documentation, generated runtime, and
+    # tests in addition to every data-affecting configuration above. Preserve its preparation-time
+    # digest as provenance while independently requiring the current registry to validate. This
+    # permits an implementation-only repair without rewriting immutable prepared data.
+    frozen_manifest = "configs/phase10r/frozen-controls.sha256"
+    if not isinstance(declared[frozen_manifest], str) or len(declared[frozen_manifest]) != 64:
+        raise Phase10RExecutionError("versioned preparation frozen-control identity is invalid")
+    if declared[frozen_manifest] != current[frozen_manifest]:
+        try:
+            validate_phase10r(root)
+        except Phase10RValidationError as error:
+            raise Phase10RExecutionError(
+                "current frozen controls are invalid after preparation"
+            ) from error
 
 
 def _resource_check(root: Path, data_root: Path) -> dict[str, int | bool]:
@@ -1184,8 +1213,7 @@ def validate_preparation(root: Path, scale: str) -> dict[str, Any]:
     body.pop("manifest_sha256", None)
     if declared_manifest_sha != _sha256_bytes(_json_bytes(body)):
         raise Phase10RExecutionError("versioned preparation manifest digest is invalid")
-    if manifest.get("configuration_hashes") != _configuration_hashes(root):
-        raise Phase10RExecutionError("versioned preparation configuration hashes are stale")
+    _validate_preparation_configuration_hashes(root, manifest.get("configuration_hashes"))
     current_scan = _scan_identity(root, _data_root(root))
     current_scan_evidence = {
         key: value

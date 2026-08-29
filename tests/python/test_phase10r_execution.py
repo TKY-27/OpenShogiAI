@@ -7,12 +7,16 @@ from pathlib import Path
 import pytest
 from open_shogi_training.phase10r import load_canonical_pretraining_mixture
 from open_shogi_training.phase10r_execution import (
+    CONFIG_PATHS,
+    Phase10RExecutionError,
+    _configuration_hashes,
     _example_row,
     _legacy_rejection_evidence,
     _outcome_wdl,
     _ReplayFeatureProcess,
     _source_statistics,
     _stream_rows,
+    _validate_preparation_configuration_hashes,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +52,29 @@ def test_stream_rows_is_deterministic_and_applies_frozen_weights(tmp_path: Path)
     assert [row["source"] for row in first].count("denryu") == 20
     assert [row["raw_targets"]["stream_index"] for row in first] == list(range(100))
     assert all(row["raw_targets"]["sampling_seed"] == 20_260_729 for row in first)
+
+
+def test_preparation_accepts_only_implementation_registry_drift() -> None:
+    declared = _configuration_hashes(ROOT)
+    declared["configs/phase10r/frozen-controls.sha256"] = "0" * 64
+
+    _validate_preparation_configuration_hashes(ROOT, declared)
+
+
+def test_preparation_rejects_data_affecting_configuration_drift() -> None:
+    declared = _configuration_hashes(ROOT)
+    declared[CONFIG_PATHS[0]] = "0" * 64
+
+    with pytest.raises(Phase10RExecutionError, match="configuration hashes are stale"):
+        _validate_preparation_configuration_hashes(ROOT, declared)
+
+
+def test_preparation_rejects_missing_configuration_identity() -> None:
+    declared = _configuration_hashes(ROOT)
+    declared.pop("configs/phase10r/frozen-controls.sha256")
+
+    with pytest.raises(Phase10RExecutionError, match="configuration inventory is invalid"):
+        _validate_preparation_configuration_hashes(ROOT, declared)
 
 
 def test_legacy_preparation_is_marked_without_changing_its_manifest(tmp_path: Path) -> None:
