@@ -532,9 +532,13 @@ def prepare_teacher_binding(root: Path, scale: str) -> dict[str, Any]:
                 raise Phase10RTeacherBindingError(
                     f"current preparation row is invalid: {error}"
                 ) from error
-            if canonical != row.get("sfen") or row.get("source") != "aobazero":
+            if canonical != row.get("sfen") or row.get("source") not in {
+                "aobazero",
+                "wcsc",
+                "denryu",
+            }:
                 raise Phase10RTeacherBindingError(
-                    "current calibration source row is not canonical AobaZero"
+                    "current calibration source row is not a frozen factual lane"
                 )
             if row.get("split") not in {"train", "validation"}:
                 raise Phase10RTeacherBindingError("current calibration row uses a forbidden split")
