@@ -90,7 +90,9 @@ CALIBRATION_ROOT: Final = Path("local/phase10r-data/phase10r-teacher-binding")
 CALIBRATION_DIRECTORY: Final = CALIBRATION_ROOT / SCALE
 CALIBRATION_TRAIN_NAME: Final = "calibration-train.jsonl"
 CALIBRATION_VALIDATION_NAME: Final = "calibration-validation.jsonl"
-CALIBRATION_MANIFEST_NAME: Final = "calibration-input-manifest.json"
+# The first implementation attempt published an invalid absolute-path manifest.  Keep that
+# immutable failure evidence and publish the corrected input under a new versioned filename.
+CALIBRATION_MANIFEST_NAME: Final = "calibration-input-manifest-v2.json"
 STAGE3_NAME: Final = "stage3-checkpoint.pt"
 STAGE3_PROGRESS_NAME: Final = "stage3-progress.pt"
 STAGE4_NAME: Final = "stage4-calibration.json"
@@ -613,6 +615,8 @@ def prepare_teacher_binding(root: Path, scale: str) -> dict[str, Any]:
     validation_ref = _ensure_payload(
         validation_path, validation_payload, "calibration validation rows"
     )
+    train_ref["path"] = train_path.resolve().relative_to(root.resolve()).as_posix()
+    validation_ref["path"] = validation_path.resolve().relative_to(root.resolve()).as_posix()
     control_path = root / CONTROL_PATH
     control_ref = _artifact_ref(
         root, control_path, "teacher-binding control", expected_sha256=CONTROL_SHA256
