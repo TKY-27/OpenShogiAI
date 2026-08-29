@@ -930,14 +930,36 @@ def _encode_features(
 
     triple: list[tuple[int, int]] = []
     if variant_id == VARIANT_PRIMARY:
+        pinned_by_index = tuple(pinned[piece.square] for piece in pieces)
+        near_kings = tuple(
+            tuple(_chebyshev(piece.square, king) <= 2 for piece in pieces) for king in kings
+        )
+        edge_masks = tuple(
+            sum(
+                1 << other_index
+                for other_index, other in enumerate(pieces)
+                if other_index != piece_index
+                and _manhattan(pieces[piece_index].square, other.square) <= 4
+            )
+            for piece_index in range(len(pieces))
+        )
         candidates: list[tuple[int, tuple[int, int, int], bytes]] = []
         for first in range(len(pieces)):
             for second in range(first + 1, len(pieces)):
                 for third in range(second + 1, len(pieces)):
-                    group = (pieces[first], pieces[second], pieces[third])
-                    category = _triple_category(group, kings, pinned, attack_masks)
+                    indexes = (first, second, third)
+                    category = _triple_category(
+                        indexes,
+                        pieces,
+                        kings,
+                        near_kings,
+                        pinned_by_index,
+                        attack_masks,
+                        edge_masks,
+                    )
                     if category is None:
                         continue
+                    group = tuple(pieces[index] for index in indexes)
                     squares = tuple(piece.square for piece in group)
                     key = bytearray((3, category))
                     for piece in group:
@@ -1041,45 +1063,55 @@ def _scalar_features(
 
 
 def _triple_category(
-    pieces: tuple[Piece, Piece, Piece],
+    indexes: tuple[int, int, int],
+    pieces: Sequence[Piece],
     kings: tuple[int, int],
-    pinned: Mapping[int, bool],
+    near_kings: tuple[tuple[bool, ...], tuple[bool, ...]],
+    pinned: Sequence[bool],
     attack_masks: Mapping[Piece, int],
+    edge_masks: Sequence[int],
 ) -> int | None:
-    for king in kings:
-        if any(piece.square == king for piece in pieces) and all(
-            piece.square == king or _chebyshev(piece.square, king) <= 2 for piece in pieces
+    for king_index, king in enumerate(kings):
+        if any(pieces[index].square == king for index in indexes) and all(
+            near_kings[king_index][index] for index in indexes
         ):
             return 0
     for king in kings:
-        king_piece = next((piece for piece in pieces if piece.square == king), None)
-        if king_piece is None:
+        king_index = next((index for index in indexes if pieces[index].square == king), None)
+        if king_index is None:
             continue
-        for pinned_piece in pieces:
-            if not pinned.get(pinned_piece.square, False) or pinned_piece.side != king_piece.side:
+        king_side = pieces[king_index].side
+        for pinned_index in indexes:
+            pinned_piece = pieces[pinned_index]
+            if not pinned[pinned_index] or pinned_piece.side != king_side:
                 continue
             if any(
-                other.side != king_piece.side
-                and bool(attack_masks[other] & (1 << pinned_piece.square))
-                for other in pieces
+                other_index != pinned_index
+                and pieces[other_index].side != king_side
+                and bool(attack_masks[pieces[other_index]] & (1 << pinned_piece.square))
+                for other_index in indexes
             ):
                 return 1
         if any(
-            piece.side != king_piece.side and bool(attack_masks[piece] & (1 << king))
-            for piece in pieces
+            pieces[index].side != king_side
+            and bool(attack_masks[pieces[index]] & (1 << king))
+            for index in indexes
         ):
             return 2
-    for target in pieces:
-        attackers = [
-            piece
-            for piece in pieces
-            if piece != target and bool(attack_masks[piece] & (1 << target.square))
-        ]
-        if len(attackers) == 2:
+    for target_index in indexes:
+        target = pieces[target_index]
+        other_indexes = tuple(index for index in indexes if index != target_index)
+        if all(
+            bool(attack_masks[pieces[index]] & (1 << target.square)) for index in other_indexes
+        ):
             return 3
     edges = sum(
-        _manhattan(pieces[left].square, pieces[right].square) <= 4
-        for left, right in ((0, 1), (0, 2), (1, 2))
+        bool(edge_masks[left] & (1 << right))
+        for left, right in (
+            (indexes[0], indexes[1]),
+            (indexes[0], indexes[2]),
+            (indexes[1], indexes[2]),
+        )
     )
     return 4 if edges >= 2 else None
 
