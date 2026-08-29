@@ -730,6 +730,25 @@ impl Osaval02Evaluator {
     /// # Panics
     ///
     /// Panics only if validated internal tensor dimensions or fixed head counts are violated.
+    pub fn evaluate_score(
+        &self,
+        position: &Position,
+        history: Osaval02History,
+    ) -> Result<i32, Osaval02Error> {
+        let (_, _, _, outputs) = self.forward_values(position, history)?;
+        let (_, raw_score, _, _) = self.score_components(&outputs)?;
+        let calibrated = raw_score.mul_add(
+            f64::from(self.calibration_scale),
+            f64::from(self.calibration_bias),
+        );
+        if !calibrated.is_finite() {
+            return Err(Osaval02Error::Invalid(
+                "OSAVAL02 calibrated score is not finite",
+            ));
+        }
+        Ok(round_and_clamp(calibrated))
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "all output heads share one auditable deterministic inference order"
@@ -739,79 +758,14 @@ impl Osaval02Evaluator {
         position: &Position,
         history: Osaval02History,
     ) -> Result<Osaval02Inference, Osaval02Error> {
-        history.validate()?;
-        let legal_moves = position.legal_moves();
-        let features = encode_features(position, &legal_moves, history, self.variant)?;
-        let king_piece = embedding_sum(
-            self.tensor("king_piece_embeddings")?,
-            &features.king_piece,
-            4,
-        );
-        let king_hand = embedding_sum(self.tensor("king_hand_embeddings")?, &features.king_hand, 4);
-        let pair = embedding_sum(self.tensor("pair_hash_embeddings")?, &features.pair, 8);
-        let projected = linear(
-            self.tensor("scalar_projection.weight")?,
-            self.tensor("scalar_projection.bias")?,
-            &features.scalars,
-            32,
-            false,
-        );
-        let mut trunk_input = Vec::with_capacity(self.variant.trunk_input());
-        trunk_input.extend(king_piece);
-        trunk_input.extend(king_hand);
-        trunk_input.extend(pair);
-        if self.variant == Osaval02Variant::FactorizedPairTriplePolicyScore {
-            trunk_input.extend(embedding_sum(
-                self.tensor("triple_hash_embeddings")?,
-                &features.triple,
-                8,
-            ));
-        }
-        trunk_input.extend(projected);
-        let hidden = linear(
-            self.tensor("trunk.0.weight")?,
-            self.tensor("trunk.0.bias")?,
-            &trunk_input,
-            TRUNK_HIDDEN,
-            true,
-        );
-        let hidden = linear(
-            self.tensor("trunk.1.weight")?,
-            self.tensor("trunk.1.bias")?,
-            &hidden,
-            TRUNK_HIDDEN,
-            true,
-        );
-        let outputs = linear(
-            self.tensor("value_heads.weight")?,
-            self.tensor("value_heads.bias")?,
-            &hidden,
-            self.variant.value_outputs(),
-            false,
-        );
+        let (legal_moves, features, hidden, outputs) = self.forward_values(position, history)?;
         let wdl_values = softmax(&outputs[..3]);
         let wdl = WdlOutput {
             loss: wdl_values[0],
             draw: wdl_values[1],
             win: wdl_values[2],
         };
-        let (transformed, raw_score, source_head, mate_offset) = match self.variant {
-            Osaval02Variant::SparsePairPolicyWdl => {
-                let epsilon = f64::from(self.wdl_epsilon);
-                let transformed = ((wdl.win + epsilon) / (wdl.loss + epsilon)).ln();
-                (transformed, transformed, "wdl_log_odds", 3)
-            }
-            Osaval02Variant::FactorizedPairTriplePolicyScore => {
-                let transformed = outputs[3];
-                let raw = transformed
-                    .abs()
-                    .min(1.0)
-                    .mul_add(3000.0_f64.ln_1p(), 0.0)
-                    .exp_m1()
-                    .copysign(transformed);
-                (transformed, raw, "direct_transformed_score", 4)
-            }
-        };
+        let (transformed, raw_score, source_head, mate_offset) = self.score_components(&outputs)?;
         let calibrated = raw_score.mul_add(
             f64::from(self.calibration_scale),
             f64::from(self.calibration_bias),
@@ -933,6 +887,94 @@ impl Osaval02Evaluator {
         Ok(inference)
     }
 
+    fn forward_values(
+        &self,
+        position: &Position,
+        history: Osaval02History,
+    ) -> Result<(Vec<Move>, FeatureSet, Vec<f64>, Vec<f64>), Osaval02Error> {
+        history.validate()?;
+        let legal_moves = position.legal_moves();
+        let features = encode_features(position, &legal_moves, history, self.variant)?;
+        let king_piece = embedding_sum(
+            self.tensor("king_piece_embeddings")?,
+            &features.king_piece,
+            4,
+        );
+        let king_hand = embedding_sum(self.tensor("king_hand_embeddings")?, &features.king_hand, 4);
+        let pair = embedding_sum(self.tensor("pair_hash_embeddings")?, &features.pair, 8);
+        let projected = linear(
+            self.tensor("scalar_projection.weight")?,
+            self.tensor("scalar_projection.bias")?,
+            &features.scalars,
+            32,
+            false,
+        );
+        let mut trunk_input = Vec::with_capacity(self.variant.trunk_input());
+        trunk_input.extend(king_piece);
+        trunk_input.extend(king_hand);
+        trunk_input.extend(pair);
+        if self.variant == Osaval02Variant::FactorizedPairTriplePolicyScore {
+            trunk_input.extend(embedding_sum(
+                self.tensor("triple_hash_embeddings")?,
+                &features.triple,
+                8,
+            ));
+        }
+        trunk_input.extend(projected);
+        let hidden = linear(
+            self.tensor("trunk.0.weight")?,
+            self.tensor("trunk.0.bias")?,
+            &trunk_input,
+            TRUNK_HIDDEN,
+            true,
+        );
+        let hidden = linear(
+            self.tensor("trunk.1.weight")?,
+            self.tensor("trunk.1.bias")?,
+            &hidden,
+            TRUNK_HIDDEN,
+            true,
+        );
+        let outputs = linear(
+            self.tensor("value_heads.weight")?,
+            self.tensor("value_heads.bias")?,
+            &hidden,
+            self.variant.value_outputs(),
+            false,
+        );
+        Ok((legal_moves, features, hidden, outputs))
+    }
+
+    fn score_components(
+        &self,
+        outputs: &[f64],
+    ) -> Result<(f64, f64, &'static str, usize), Osaval02Error> {
+        let (transformed, raw_score, source_head, mate_offset) = match self.variant {
+            Osaval02Variant::SparsePairPolicyWdl => {
+                let wdl_values = softmax(&outputs[..3]);
+                let epsilon = f64::from(self.wdl_epsilon);
+                let transformed = ((wdl_values[2] + epsilon) / (wdl_values[0] + epsilon)).ln();
+                (transformed, transformed, "wdl_log_odds", 3)
+            }
+            Osaval02Variant::FactorizedPairTriplePolicyScore => {
+                let transformed = outputs[3];
+                let raw = transformed
+                    .abs()
+                    .min(1.0)
+                    .mul_add(3000.0_f64.ln_1p(), 0.0)
+                    .exp_m1()
+                    .copysign(transformed);
+                (transformed, raw, "direct_transformed_score", 4)
+            }
+        };
+        if !transformed.is_finite() || !raw_score.is_finite() {
+            return Err(Osaval02Error::Invalid(
+                "OSAVAL02 score output is not finite",
+            ));
+        }
+        Ok((transformed, raw_score, source_head, mate_offset))
+    }
+
     fn tensor(&self, name: &str) -> Result<&Tensor, Osaval02Error> {
         self.tensors.get(name).ok_or(Osaval02Error::Invalid(
             "OSAVAL02 required tensor is missing",
@@ -982,10 +1024,7 @@ impl Osaval02SearchAdapter {
 
     /// Run the strict OSAVAL02 inference and return its calibrated current-side search score.
     pub fn evaluate(&self, position: &Position) -> Result<i32, Osaval02Error> {
-        Ok(self
-            .evaluator
-            .infer(position, self.history)?
-            .calibrated_score_cp())
+        self.evaluator.evaluate_score(position, self.history)
     }
 
     /// Run the strict OSAVAL02 inference and return the legal policy logit for one move.
@@ -1201,6 +1240,18 @@ fn encode_features(
             .king_square(us.opposite())
             .ok_or(Osaval02Error::Invalid("opponent king is missing"))?,
     ];
+    let king_pieces = [
+        position
+            .piece_at(kings[0])
+            .ok_or(Osaval02Error::Invalid("current-side king piece is missing"))?,
+        position.piece_at(kings[1]).ok_or(Osaval02Error::Invalid(
+            "opponent-side king piece is missing",
+        ))?,
+    ];
+    let attack_masks = pieces
+        .iter()
+        .map(|(piece, square)| attack_mask(position, *piece, *square))
+        .collect::<Vec<_>>();
     let mut king_piece = Vec::with_capacity(pieces.len() * 2);
     for (piece, square) in &pieces {
         let owner = usize::from(piece.side != us);
@@ -1227,20 +1278,25 @@ fn encode_features(
             }
         }
     }
-    let pinned = pieces
-        .iter()
-        .map(|(piece, square)| (square.index(), is_pinned(position, *piece, *square)))
-        .collect::<BTreeMap<_, _>>();
+    let mut pinned = [false; 81];
+    for (piece, square) in &pieces {
+        pinned[square.index()] = is_pinned(position, *piece, *square);
+    }
     let mut pair = Vec::new();
     for left_index in 0..pieces.len() {
         let (left_piece, left_square) = pieces[left_index];
-        for (right_piece, right_square) in pieces.iter().copied().skip(left_index + 1) {
+        for (right_index, (right_piece, right_square)) in
+            pieces.iter().copied().enumerate().skip(left_index + 1)
+        {
             let flags = pair_flags(
-                position,
+                left_index,
+                right_index,
                 (left_piece, left_square),
                 (right_piece, right_square),
                 kings,
+                us,
                 &pinned,
+                &attack_masks,
             );
             let mut key = vec![
                 1,
@@ -1292,28 +1348,36 @@ fn encode_features(
             for second in first + 1..pieces.len() {
                 for third in second + 1..pieces.len() {
                     let group = [pieces[first], pieces[second], pieces[third]];
-                    let Some(category) = triple_category(position, group, kings, &pinned) else {
+                    let Some(category) = triple_category(
+                        [first, second, third],
+                        &pieces,
+                        kings,
+                        king_pieces,
+                        &pinned,
+                        &attack_masks,
+                    ) else {
                         continue;
                     };
                     let squares = [group[0].1.index(), group[1].1.index(), group[2].1.index()];
-                    let mut key = vec![3, category];
-                    for (piece, square) in group {
-                        key.extend([
-                            relative_owner(piece, us),
-                            u8_from_usize(piece.kind.index()),
-                            u8_from_usize(square.index()),
-                        ]);
-                        for king in kings {
-                            key.extend(signed_offsets(square, king));
-                        }
-                    }
-                    candidates.push((category, squares, key));
+                    candidates.push((category, squares, [first, second, third]));
                 }
             }
         }
         candidates.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
         let mut seen = HashSet::new();
-        for (_, _, key) in candidates {
+        for (category, _, piece_indices) in candidates {
+            let mut key = vec![3, category];
+            for index in piece_indices {
+                let (piece, square) = pieces[index];
+                key.extend([
+                    relative_owner(piece, us),
+                    u8_from_usize(piece.kind.index()),
+                    u8_from_usize(square.index()),
+                ]);
+                for king in kings {
+                    key.extend(signed_offsets(square, king));
+                }
+            }
             if !seen.insert(key.clone()) {
                 continue;
             }
@@ -1330,6 +1394,7 @@ fn encode_features(
         &pieces,
         kings,
         &pinned,
+        &attack_masks,
         pair.len(),
         triple.len(),
         drop_count,
@@ -1371,7 +1436,8 @@ fn scalar_features(
     history: Osaval02History,
     pieces: &[(Piece, Square)],
     kings: [Square; 2],
-    pinned: &BTreeMap<usize, bool>,
+    pinned: &[bool; 81],
+    attack_masks: &[u128],
     pair_count: usize,
     triple_count: usize,
     drop_count: usize,
@@ -1395,21 +1461,19 @@ fn scalar_features(
             }),
         );
     }
-    let attacked_us = Square::all()
-        .filter(|square| position.square_is_attacked(*square, us))
-        .count();
-    let attacked_them = Square::all()
-        .filter(|square| position.square_is_attacked(*square, us.opposite()))
-        .count();
+    let attacks_us = side_attack_mask(pieces, attack_masks, us);
+    let attacks_them = side_attack_mask(pieces, attack_masks, us.opposite());
+    let attacked_us = attacks_us.count_ones();
+    let attacked_them = attacks_them.count_ones();
     values.extend([
-        usize_f64(attacked_us) / 81.0,
-        usize_f64(attacked_them) / 81.0,
+        f64::from(attacked_us) / 81.0,
+        f64::from(attacked_them) / 81.0,
     ]);
     values.push(
         usize_f64(
             king_zone(kings[0])
                 .into_iter()
-                .filter(|square| position.square_is_attacked(*square, us.opposite()))
+                .filter(|square| attack_mask_contains(attacks_them, *square))
                 .count(),
         ) / 25.0,
     );
@@ -1417,22 +1481,23 @@ fn scalar_features(
         usize_f64(
             king_zone(kings[1])
                 .into_iter()
-                .filter(|square| position.square_is_attacked(*square, us))
+                .filter(|square| attack_mask_contains(attacks_us, *square))
                 .count(),
         ) / 25.0,
     );
     values.push(usize_f64(legal_moves.len()) / 600.0);
-    values.push(f64::from(u8::from(
-        position.square_is_attacked(kings[0], us.opposite()),
-    )));
-    values.push(f64::from(u8::from(
-        position.square_is_attacked(kings[1], us),
-    )));
+    values.push(f64::from(u8::from(attack_mask_contains(
+        attacks_them,
+        kings[0],
+    ))));
+    values.push(f64::from(u8::from(attack_mask_contains(
+        attacks_us, kings[1],
+    ))));
     values.push(
         usize_f64(
             pieces
                 .iter()
-                .filter(|(piece, square)| piece.side == us && pinned[&square.index()])
+                .filter(|(piece, square)| piece.side == us && pinned[square.index()])
                 .count(),
         ) / 20.0,
     );
@@ -1440,7 +1505,7 @@ fn scalar_features(
         usize_f64(
             pieces
                 .iter()
-                .filter(|(piece, square)| piece.side != us && pinned[&square.index()])
+                .filter(|(piece, square)| piece.side != us && pinned[square.index()])
                 .count(),
         ) / 20.0,
     );
@@ -1483,11 +1548,14 @@ fn scalar_features(
 }
 
 fn triple_category(
-    position: &Position,
-    pieces: [(Piece, Square); 3],
+    piece_indices: [usize; 3],
+    all_pieces: &[(Piece, Square)],
     kings: [Square; 2],
-    pinned: &BTreeMap<usize, bool>,
+    king_pieces: [Piece; 2],
+    pinned: &[bool; 81],
+    attack_masks: &[u128],
 ) -> Option<u8> {
+    let pieces = piece_indices.map(|index| all_pieces[index]);
     for king in kings {
         if pieces.iter().any(|(_, square)| *square == king)
             && pieces
@@ -1497,34 +1565,39 @@ fn triple_category(
             return Some(0);
         }
     }
-    for king in kings {
-        let king_piece = position.piece_at(king)?;
+    for (king_index, king) in kings.into_iter().enumerate() {
+        let king_piece = king_pieces[king_index];
         if !pieces.iter().any(|(_, square)| *square == king) {
             continue;
         }
         for (pinned_piece, pinned_square) in pieces {
-            if !pinned[&pinned_square.index()] || pinned_piece.side != king_piece.side {
+            if !pinned[pinned_square.index()] || pinned_piece.side != king_piece.side {
                 continue;
             }
-            if pieces.iter().any(|(other, other_square)| {
+            if piece_indices.iter().any(|index| {
+                let (other, _) = all_pieces[*index];
                 other.side != king_piece.side
-                    && position.piece_attacks(*other_square, *other, pinned_square)
+                    && attack_mask_contains(attack_masks[*index], pinned_square)
             }) {
                 return Some(1);
             }
         }
-        if pieces.iter().any(|(piece, square)| {
-            piece.side != king_piece.side && position.piece_attacks(*square, *piece, king)
+        if piece_indices.iter().any(|index| {
+            let (piece, _) = all_pieces[*index];
+            piece.side != king_piece.side && attack_mask_contains(attack_masks[*index], king)
         }) {
             return Some(2);
         }
     }
-    for (target, target_square) in pieces {
-        let attackers = pieces
+    for (target_index, (_, target_square)) in piece_indices
+        .iter()
+        .map(|index| (*index, all_pieces[*index]))
+    {
+        let attackers = piece_indices
             .iter()
-            .filter(|(piece, square)| {
-                (*piece, *square) != (target, target_square)
-                    && position.piece_attacks(*square, *piece, target_square)
+            .filter(|index| {
+                **index != target_index
+                    && attack_mask_contains(attack_masks[**index], target_square)
             })
             .count();
         if attackers == 2 {
@@ -1539,35 +1612,53 @@ fn triple_category(
 }
 
 fn pair_flags(
-    position: &Position,
+    left_index: usize,
+    right_index: usize,
     left: (Piece, Square),
     right: (Piece, Square),
     kings: [Square; 2],
-    pinned: &BTreeMap<usize, bool>,
+    us: Side,
+    pinned: &[bool; 81],
+    attack_masks: &[u128],
 ) -> u16 {
-    let left_attacks = position.piece_attacks(left.1, left.0, right.1);
-    let right_attacks = position.piece_attacks(right.1, right.0, left.1);
+    let left_attacks = attack_mask_contains(attack_masks[left_index], right.1);
+    let right_attacks = attack_mask_contains(attack_masks[right_index], left.1);
     let mut flags = u16::from(left_attacks);
     flags |= u16::from(right_attacks) << 1;
     flags |= u16::from(left.0.side == right.0.side && (left_attacks || right_attacks)) << 2;
-    flags |= u16::from(pinned[&left.1.index()]) << 3;
-    flags |= u16::from(pinned[&right.1.index()]) << 4;
-    let left_king = position
-        .king_square(left.0.side.opposite())
-        .expect("validated positions contain both kings");
-    let right_king = position
-        .king_square(right.0.side.opposite())
-        .expect("validated positions contain both kings");
-    flags |= u16::from(position.piece_attacks(left.1, left.0, left_king)) << 5;
-    flags |= u16::from(position.piece_attacks(right.1, right.0, right_king)) << 6;
-    let common = Square::all().any(|square| {
-        position.piece_attacks(left.1, left.0, square)
-            && position.piece_attacks(right.1, right.0, square)
-    });
+    flags |= u16::from(pinned[left.1.index()]) << 3;
+    flags |= u16::from(pinned[right.1.index()]) << 4;
+    let left_king = kings[usize::from(left.0.side == us)];
+    let right_king = kings[usize::from(right.0.side == us)];
+    flags |= u16::from(attack_mask_contains(attack_masks[left_index], left_king)) << 5;
+    flags |= u16::from(attack_mask_contains(attack_masks[right_index], right_king)) << 6;
+    let common = attack_masks[left_index] & attack_masks[right_index] != 0;
     flags |= u16::from(common) << 7;
     flags |= u16::from(kings.iter().any(|king| chebyshev(left.1, *king) <= 2)) << 8;
     flags |= u16::from(kings.iter().any(|king| chebyshev(right.1, *king) <= 2)) << 9;
     flags
+}
+
+fn attack_mask(position: &Position, piece: Piece, square: Square) -> u128 {
+    Square::all().fold(0_u128, |mask, target| {
+        if position.piece_attacks(square, piece, target) {
+            mask | (1_u128 << target.index())
+        } else {
+            mask
+        }
+    })
+}
+
+fn attack_mask_contains(mask: u128, square: Square) -> bool {
+    mask & (1_u128 << square.index()) != 0
+}
+
+fn side_attack_mask(pieces: &[(Piece, Square)], attack_masks: &[u128], side: Side) -> u128 {
+    pieces
+        .iter()
+        .zip(attack_masks)
+        .filter(|((piece, _), _)| piece.side == side)
+        .fold(0_u128, |mask, (_, attacks)| mask | attacks)
 }
 
 fn is_pinned(position: &Position, piece: Piece, square: Square) -> bool {
