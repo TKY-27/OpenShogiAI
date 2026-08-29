@@ -586,7 +586,12 @@ def prepare_teacher_binding(root: Path, scale: str) -> dict[str, Any]:
         raise Phase10RTeacherBindingError(
             f"calibration exclusions differ: {excluded} != {expected_excluded}"
         )
-    expected_rows = control["calibration"]["expected_rows"]
+    frozen_rows = control["calibration"]["expected_rows"]
+    expected_rows = {
+        "train": frozen_rows["train"],
+        "validation": frozen_rows["validation"],
+        "validation_cp": frozen_rows["validation_cp_for_affine_fit"],
+    }
     counts = {
         "train": len(joined["train"]),
         "validation": len(joined["validation"]),
