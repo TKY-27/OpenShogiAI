@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing
 import os
 import random
 import subprocess
 import time
+from concurrent.futures import ProcessPoolExecutor
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
@@ -920,6 +922,85 @@ def _evaluate_file(
     model: Phase10RModel,
     data_root: Path,
 ) -> dict[str, Any]:
+    ranges = _evaluation_file_ranges(path, expected_rows)
+    global _EVALUATION_WORKER_MODEL
+    _EVALUATION_WORKER_MODEL = model
+    try:
+        with ProcessPoolExecutor(
+            max_workers=len(ranges),
+            mp_context=multiprocessing.get_context("fork"),
+            initializer=_initialize_evaluation_worker,
+        ) as pool:
+            partials = list(
+                pool.map(
+                    _evaluate_file_range,
+                    ((path, start, end, first_row) for start, end, first_row in ranges),
+                )
+            )
+    except (OSError, RuntimeError) as error:
+        raise _failure("parallel source-held-out evaluation failed", error) from error
+    finally:
+        _EVALUATION_WORKER_MODEL = None
+    result = _merge_evaluation_partials(partials, expected_rows)
+    _resource_guard(data_root)
+    return result
+
+
+_EVALUATION_WORKER_MODEL: Phase10RModel | None = None
+
+
+def _initialize_evaluation_worker() -> None:
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+
+
+def _evaluation_file_ranges(path: Path, expected_rows: int) -> list[tuple[int, int, int]]:
+    if expected_rows <= 0:
+        raise Phase10RCampaignError("source-held-out evaluation requires positive rows")
+    offsets = [0]
+    with path.open("rb") as handle:
+        while handle.readline():
+            offsets.append(handle.tell())
+    if len(offsets) != expected_rows + 1:
+        raise Phase10RCampaignError(
+            f"evaluation row count mismatches its manifest: {len(offsets) - 1} != {expected_rows}"
+        )
+    worker_count = min(8, expected_rows)
+    ranges = []
+    for worker in range(worker_count):
+        first_row = (expected_rows * worker) // worker_count
+        last_row = (expected_rows * (worker + 1)) // worker_count
+        ranges.append((offsets[first_row], offsets[last_row], first_row))
+    return ranges
+
+
+def _evaluate_file_range(
+    arguments: tuple[Path, int, int, int],
+) -> dict[str, Any]:
+    model = _EVALUATION_WORKER_MODEL
+    if model is None:
+        raise Phase10RCampaignError("source-held-out worker model is not initialized")
+    path, start, end, first_row = arguments
+    with path.open(encoding="utf-8") as handle:
+        handle.seek(start)
+        lines = []
+        while handle.tell() < end:
+            line = handle.readline()
+            if not line:
+                break
+            lines.append(line)
+    model.eval()
+    with torch.no_grad():
+        return _evaluate_rows(lines, path=path, model=model, first_row=first_row)
+
+
+def _evaluate_rows(
+    lines: Sequence[str],
+    *,
+    path: Path,
+    model: Phase10RModel,
+    first_row: int,
+) -> dict[str, Any]:
     counts: Counter[str] = Counter()
     policy_correct = 0
     policy_total = 0
@@ -928,46 +1009,76 @@ def _evaluate_file(
     wdl_nll = 0.0
     wdl_total = 0
     calibration_bins = [{"count": 0, "confidence": 0.0, "correct": 0.0} for _ in range(10)]
-    observed = 0
     model.eval()
-    with torch.no_grad(), path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle):
-            observed = line_number + 1
-            if not line.strip():
-                raise Phase10RCampaignError(
-                    f"evaluation file contains a blank row: {path}:{line_number}"
-                )
-            row = _row_from_line(line, None)
-            split = row.get("split")
-            if split not in EVALUATION_SPLITS:
-                raise Phase10RCampaignError(f"evaluation file contains a forbidden split: {split}")
-            example = _example_from_row(row, expected_split=None)
-            counts[str(example.source)] += 1
-            output = model.forward_example(example)
-            if example.policy_mask:
-                probabilities = torch.softmax(output["policy_logits"], dim=0)
-                target_index = example.legal_moves.index(example.played_move)
-                prediction = int(torch.argmax(probabilities).item())
-                policy_correct += int(prediction == target_index)
-                policy_total += 1
-                policy_nll += float(
-                    -torch.log(probabilities[target_index].clamp_min(1.0e-12)).cpu()
-                )
-            if example.wdl_mask:
-                probabilities = torch.softmax(output["values"][:3], dim=0)
-                target = torch.nn.functional.one_hot(
-                    torch.tensor(example.wdl, dtype=torch.long), num_classes=3
-                ).to(dtype=probabilities.dtype, device=probabilities.device)
-                wdl_brier += float(torch.mean((probabilities - target) ** 2).cpu())
-                wdl_nll += float(-torch.log(probabilities[example.wdl].clamp_min(1.0e-12)).cpu())
-                wdl_total += 1
-                confidence, predicted = torch.max(probabilities, dim=0)
-                bin_index = min(9, int(float(confidence.cpu()) * 10.0))
-                calibration_bins[bin_index]["count"] += 1
-                calibration_bins[bin_index]["confidence"] += float(confidence.cpu())
-                calibration_bins[bin_index]["correct"] += int(int(predicted) == example.wdl)
-            if line_number and line_number % 1024 == 0:
-                _resource_guard(data_root)
+    for offset, line in enumerate(lines):
+        line_number = first_row + offset
+        if not line.strip():
+            raise Phase10RCampaignError(f"evaluation file contains a blank row: {path}:{line_number}")
+        row = _row_from_line(line, None)
+        split = row.get("split")
+        if split not in EVALUATION_SPLITS:
+            raise Phase10RCampaignError(f"evaluation file contains a forbidden split: {split}")
+        example = _example_from_row(row, expected_split=None)
+        counts[str(example.source)] += 1
+        output = model.forward_example(example)
+        if example.policy_mask:
+            probabilities = torch.softmax(output["policy_logits"], dim=0)
+            target_index = example.legal_moves.index(example.played_move)
+            prediction = int(torch.argmax(probabilities).item())
+            policy_correct += int(prediction == target_index)
+            policy_total += 1
+            policy_nll += float(-torch.log(probabilities[target_index].clamp_min(1.0e-12)).cpu())
+        if example.wdl_mask:
+            probabilities = torch.softmax(output["values"][:3], dim=0)
+            target = torch.nn.functional.one_hot(
+                torch.tensor(example.wdl, dtype=torch.long), num_classes=3
+            ).to(dtype=probabilities.dtype, device=probabilities.device)
+            wdl_brier += float(torch.mean((probabilities - target) ** 2).cpu())
+            wdl_nll += float(-torch.log(probabilities[example.wdl].clamp_min(1.0e-12)).cpu())
+            wdl_total += 1
+            confidence, predicted = torch.max(probabilities, dim=0)
+            bin_index = min(9, int(float(confidence.cpu()) * 10.0))
+            calibration_bins[bin_index]["count"] += 1
+            calibration_bins[bin_index]["confidence"] += float(confidence.cpu())
+            calibration_bins[bin_index]["correct"] += int(int(predicted) == example.wdl)
+    return {
+        "rows": len(lines),
+        "source_counts": dict(sorted(counts.items())),
+        "policy_correct": policy_correct,
+        "policy_examples": policy_total,
+        "policy_nll_sum": policy_nll,
+        "wdl_examples": wdl_total,
+        "wdl_brier_sum": wdl_brier,
+        "wdl_nll_sum": wdl_nll,
+        "calibration_bins": calibration_bins,
+    }
+
+
+def _merge_evaluation_partials(
+    partials: Sequence[Mapping[str, Any]], expected_rows: int
+) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    observed = 0
+    policy_correct = 0
+    policy_total = 0
+    policy_nll = 0.0
+    wdl_brier = 0.0
+    wdl_nll = 0.0
+    wdl_total = 0
+    calibration_bins = [{"count": 0, "confidence": 0.0, "correct": 0.0} for _ in range(10)]
+    for partial in partials:
+        observed += int(partial["rows"])
+        counts.update({str(key): int(value) for key, value in partial["source_counts"].items()})
+        policy_correct += int(partial["policy_correct"])
+        policy_total += int(partial["policy_examples"])
+        policy_nll += float(partial["policy_nll_sum"])
+        wdl_total += int(partial["wdl_examples"])
+        wdl_brier += float(partial["wdl_brier_sum"])
+        wdl_nll += float(partial["wdl_nll_sum"])
+        for index, bucket in enumerate(partial["calibration_bins"]):
+            calibration_bins[index]["count"] += int(bucket["count"])
+            calibration_bins[index]["confidence"] += float(bucket["confidence"])
+            calibration_bins[index]["correct"] += float(bucket["correct"])
     if observed != expected_rows:
         raise Phase10RCampaignError(
             f"evaluation row count mismatches its manifest: {observed} != {expected_rows}"
