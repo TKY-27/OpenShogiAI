@@ -247,7 +247,12 @@ def serialize_osaval02(
     _validate_hex_hash(dataset_manifest_sha256, "dataset manifest")
     if not _GIT_COMMIT.fullmatch(git_commit):
         raise ValueError("git commit must be 40 lowercase hexadecimal characters")
-    _validate_fixed_text(training_run_reference, 64, "training run reference")
+    _validate_fixed_text(
+        training_run_reference,
+        64,
+        "training run reference",
+        allow_full_width=True,
+    )
     if not math.isfinite(calibration_scale) or calibration_scale <= 0.0:
         raise ValueError("calibration scale must be finite and positive")
     if not math.isfinite(calibration_bias):
@@ -351,7 +356,7 @@ def serialize_osaval02(
         header[96 + index * 32 : 128 + index * 32] = bytes.fromhex(digest)
     _write_fixed_text(header, 352, 32, EXPORTER_VERSION)
     header[384:424] = git_commit.encode("ascii")
-    _write_fixed_text(header, 424, 64, training_run_reference)
+    _write_fixed_text(header, 424, 64, training_run_reference, allow_full_width=True)
     _pack_u32(header, 488, DESCRIPTOR_OFFSET)
     _pack_u32(header, 492, DESCRIPTOR_BYTES)
     struct.pack_into("<Q", header, 496, HEADER_BYTES)
@@ -462,7 +467,13 @@ def parse_osaval02(data: bytes) -> Osaval02Model:
         raise ValueError("OSAVAL02 Git commit identity is not ASCII") from error
     if not _GIT_COMMIT.fullmatch(git_commit):
         raise ValueError("OSAVAL02 Git commit identity is invalid")
-    training_run_reference = _read_fixed_text(header, 424, 64, "training run reference")
+    training_run_reference = _read_fixed_text(
+        header,
+        424,
+        64,
+        "training run reference",
+        allow_full_width=True,
+    )
     if _u32(header, 488) != DESCRIPTOR_OFFSET or _u32(header, 492) != DESCRIPTOR_BYTES:
         raise ValueError("OSAVAL02 tensor-table layout is incompatible")
 
@@ -1309,33 +1320,58 @@ def _validate_hex_hash(value: str, label: str) -> None:
         raise ValueError(f"{label} SHA-256 must not be zero")
 
 
-def _validate_fixed_text(value: str, width: int, label: str) -> None:
+def _validate_fixed_text(
+    value: str, width: int, label: str, *, allow_full_width: bool = False
+) -> None:
     try:
         encoded = value.encode("ascii")
     except UnicodeEncodeError as error:
         raise ValueError(f"{label} must be ASCII") from error
-    if not encoded or len(encoded) >= width or any(byte < 0x21 or byte > 0x7E for byte in encoded):
-        raise ValueError(f"{label} must be nonempty printable ASCII shorter than {width} bytes")
+    if (
+        not encoded
+        or len(encoded) > width
+        or (len(encoded) == width and not allow_full_width)
+        or any(byte < 0x21 or byte > 0x7E for byte in encoded)
+    ):
+        bound = "at most" if allow_full_width else "shorter than"
+        raise ValueError(f"{label} must be nonempty printable ASCII {bound} {width} bytes")
 
 
-def _write_fixed_text(target: bytearray, offset: int, width: int, value: str) -> None:
-    _validate_fixed_text(value, width, "fixed text")
+def _write_fixed_text(
+    target: bytearray,
+    offset: int,
+    width: int,
+    value: str,
+    *,
+    allow_full_width: bool = False,
+) -> None:
+    _validate_fixed_text(value, width, "fixed text", allow_full_width=allow_full_width)
     encoded = value.encode("ascii")
     target[offset : offset + len(encoded)] = encoded
 
 
-def _read_fixed_text(source: bytes, offset: int, width: int, label: str) -> str:
+def _read_fixed_text(
+    source: bytes,
+    offset: int,
+    width: int,
+    label: str,
+    *,
+    allow_full_width: bool = False,
+) -> str:
     field = source[offset : offset + width]
     if b"\0" not in field:
-        raise ValueError(f"OSAVAL02 {label} lacks NUL padding")
-    value, padding = field.split(b"\0", 1)
-    if not value or any(padding):
-        raise ValueError(f"OSAVAL02 {label} padding is invalid")
+        if not allow_full_width or any(byte < 0x21 or byte > 0x7E for byte in field):
+            raise ValueError(f"OSAVAL02 {label} lacks NUL padding")
+        value = field
+    else:
+        value, padding = field.split(b"\0", 1)
+        if not value or any(padding):
+            raise ValueError(f"OSAVAL02 {label} padding is invalid")
     try:
         decoded = value.decode("ascii")
     except UnicodeDecodeError as error:
         raise ValueError(f"OSAVAL02 {label} is not ASCII") from error
-    _validate_fixed_text(decoded, width, label)
+    _validate_fixed_text(decoded, width, label, allow_full_width=allow_full_width)
     return decoded
 
 

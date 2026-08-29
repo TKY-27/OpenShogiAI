@@ -8,9 +8,9 @@ use std::{
 
 use open_shogi_core::{
     CancellationToken, EvaluationConfig, MATE_SCORE, NeuralEvaluationMode, NeuralEvaluator,
-    NeuralQuantization, OpeningBookV2, OpeningPolicy, OpeningProfile, Position, SearchConfig,
-    SearchEngine, SearchInfo, TimeControl, TimeManager, is_mate_score, parse_sfen, parse_usi_move,
-    to_usi_move,
+    NeuralQuantization, OpeningBookV2, OpeningPolicy, OpeningProfile, Osaval02Evaluator,
+    Osaval02Quantization, Position, SearchConfig, SearchEngine, SearchInfo, SearchTermination,
+    TimeControl, TimeManager, is_mate_score, parse_sfen, parse_usi_move, to_usi_move,
 };
 
 use crate::{GoParameters, UsiCommand, engine_id_line, parse_command, parser::MAX_GO_DEPTH};
@@ -33,6 +33,10 @@ pub enum ModelKind {
     NeuralFloat,
     /// Require an `OSAVAL01` model containing symmetric per-layer `i8` weights.
     NeuralQuantized,
+    /// Require an `OSAVAL02` Phase 10R model containing `f32` weights.
+    Osaval02Float,
+    /// Require an `OSAVAL02` Phase 10R model containing `i8` weights.
+    Osaval02Quantized,
 }
 
 impl ModelKind {
@@ -41,6 +45,8 @@ impl ModelKind {
             Self::Handcrafted => "overall-champion",
             Self::NeuralFloat => "neural-float",
             Self::NeuralQuantized => "neural-quantized",
+            Self::Osaval02Float => "osaval02-float",
+            Self::Osaval02Quantized => "osaval02-quantized",
         }
     }
 
@@ -49,9 +55,10 @@ impl ModelKind {
             Some("overall-champion" | "handcrafted") => Ok(Self::Handcrafted),
             Some("neural-float") => Ok(Self::NeuralFloat),
             Some("neural-quantized") => Ok(Self::NeuralQuantized),
+            Some("osaval02-float") => Ok(Self::Osaval02Float),
+            Some("osaval02-quantized") => Ok(Self::Osaval02Quantized),
             _ => Err(
-                "ModelKind must be `overall-champion`, `neural-float`, or `neural-quantized`"
-                    .to_owned(),
+                "ModelKind must be `overall-champion`, `neural-float`, `neural-quantized`, `osaval02-float`, or `osaval02-quantized`".to_owned(),
             ),
         }
     }
@@ -61,6 +68,33 @@ impl ModelKind {
             Self::Handcrafted => None,
             Self::NeuralFloat => Some(NeuralQuantization::Float32),
             Self::NeuralQuantized => Some(NeuralQuantization::Int8),
+            Self::Osaval02Float | Self::Osaval02Quantized => None,
+        }
+    }
+
+    const fn required_osaval02_quantization(self) -> Option<Osaval02Quantization> {
+        match self {
+            Self::Osaval02Float => Some(Osaval02Quantization::Float32),
+            Self::Osaval02Quantized => Some(Osaval02Quantization::Int8),
+            _ => None,
+        }
+    }
+
+    const fn is_osaval02(self) -> bool {
+        self.required_osaval02_quantization().is_some()
+    }
+}
+
+enum LoadedModel {
+    Neural(NeuralEvaluator),
+    Osaval02(Osaval02Evaluator),
+}
+
+impl LoadedModel {
+    fn artifact_sha256(&self) -> String {
+        match self {
+            Self::Neural(model) => model.identity().sha256_hex(),
+            Self::Osaval02(model) => model.identity().artifact_sha256.clone(),
         }
     }
 }
@@ -199,6 +233,7 @@ pub struct UsiSession {
     output_authority: Arc<OutputAuthority>,
     active: Option<ActiveSearch>,
     neural_evaluator: Option<Arc<NeuralEvaluator>>,
+    osaval02_evaluator: Option<Arc<Osaval02Evaluator>>,
     pending_model: Option<(ModelKind, String)>,
     opening_book: Option<Arc<OpeningBookV2>>,
     sink: Arc<dyn ProtocolSink>,
@@ -213,6 +248,7 @@ impl UsiSession {
             output_authority: Arc::new(OutputAuthority::default()),
             active: None,
             neural_evaluator: None,
+            osaval02_evaluator: None,
             pending_model: None,
             opening_book: None,
             sink,
@@ -294,7 +330,7 @@ impl UsiSession {
         self.sink
             .send("option name MaxDepth type spin default 8 min 1 max 64");
         self.sink.send(
-            "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized",
+            "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized var osaval02-float var osaval02-quantized",
         );
         self.sink.send(
             "option name ModelSemantics type combo default pure-value var pure-value var residual var composite-50-50",
@@ -366,7 +402,7 @@ impl UsiSession {
                 self.apply_model_candidate(model_kind, model_path)?;
             }
             "ModelSemantics" => {
-                self.options.model_semantics = match value {
+                let semantics = match value {
                     Some("pure-value") => NeuralEvaluationMode::PureValue,
                     Some("residual") => NeuralEvaluationMode::Residual,
                     Some("composite-50-50") => NeuralEvaluationMode::Composite,
@@ -377,6 +413,15 @@ impl UsiSession {
                         );
                     }
                 };
+                if self.options.model_kind.is_osaval02()
+                    && semantics != NeuralEvaluationMode::PureValue
+                {
+                    return Err(
+                        "OSAVAL02 only supports pure-value semantics; score blending is forbidden"
+                            .to_owned(),
+                    );
+                }
+                self.options.model_semantics = semantics;
             }
             "ModelPath" => {
                 let path = value.ok_or_else(|| "ModelPath requires a value".to_owned())?;
@@ -484,6 +529,7 @@ impl UsiSession {
         let position = self.position.clone();
         let config = search_config(&self.options);
         let neural_evaluator = self.neural_evaluator.clone();
+        let osaval02_evaluator = self.osaval02_evaluator.clone();
         let model_semantics = self.options.model_semantics;
         let time_control = time_control(&self.options, parameters);
         let plan = TimeManager::default().plan(
@@ -500,9 +546,16 @@ impl UsiSession {
             .then(|| Arc::new(CompletionGate::default()));
         let worker_gate = completion_gate.clone();
         let handle = thread::spawn(move || {
-            let mut engine = neural_evaluator.map_or_else(
-                || SearchEngine::new(config),
-                |evaluator| SearchEngine::with_neural_mode(config, evaluator, model_semantics),
+            let mut engine = osaval02_evaluator.map_or_else(
+                || {
+                    neural_evaluator.map_or_else(
+                        || SearchEngine::new(config),
+                        |evaluator| {
+                            SearchEngine::with_neural_mode(config, evaluator, model_semantics)
+                        },
+                    )
+                },
+                |evaluator| SearchEngine::with_osaval02(config, evaluator),
             );
             let callback_sink = Arc::clone(&sink);
             let callback_authority = Arc::clone(&output_authority);
@@ -521,9 +574,21 @@ impl UsiSession {
             {
                 return;
             }
-            let bestmove = result
-                .best_move
-                .map_or_else(|| "resign".to_owned(), to_usi_move);
+            if result.termination == SearchTermination::EvaluationError {
+                output_authority.send_if_current(generation, sink.as_ref(), || {
+                    format!(
+                        "info string error OSAVAL02 strict inference failed after {} calls",
+                        result.stats.neural_inference_calls
+                    )
+                });
+            }
+            let bestmove = if result.termination == SearchTermination::EvaluationError {
+                "resign".to_owned()
+            } else {
+                result
+                    .best_move
+                    .map_or_else(|| "resign".to_owned(), to_usi_move)
+            };
             output_authority
                 .send_if_current(generation, sink.as_ref(), || format!("bestmove {bestmove}"));
         });
@@ -538,9 +603,10 @@ impl UsiSession {
     fn ensure_model_ready(&mut self) -> Result<(), String> {
         if self.options.model_kind == ModelKind::Handcrafted {
             self.neural_evaluator = None;
+            self.osaval02_evaluator = None;
             return Ok(());
         }
-        if self.neural_evaluator.is_some() {
+        if self.neural_evaluator.is_some() || self.osaval02_evaluator.is_some() {
             return Ok(());
         }
         self.load_configured_model()
@@ -553,13 +619,14 @@ impl UsiSession {
                 self.sink.send(&format!(
                     "info string model loaded {} {}",
                     self.options.model_kind.usi_value(),
-                    evaluator.identity().sha256_hex()
+                    evaluator.artifact_sha256()
                 ));
-                self.neural_evaluator = Some(Arc::new(evaluator));
+                self.set_loaded_model(evaluator);
                 Ok(())
             }
             Err(error) => {
                 self.neural_evaluator = None;
+                self.osaval02_evaluator = None;
                 Err(error)
             }
         }
@@ -574,6 +641,7 @@ impl UsiSession {
             self.options.model_kind = model_kind;
             self.options.model_path = model_path;
             self.neural_evaluator = None;
+            self.osaval02_evaluator = None;
             self.pending_model = None;
             return Ok(());
         }
@@ -581,6 +649,7 @@ impl UsiSession {
             self.options.model_kind = model_kind;
             self.options.model_path = model_path;
             self.neural_evaluator = None;
+            self.osaval02_evaluator = None;
             self.pending_model = None;
             return Ok(());
         }
@@ -592,15 +661,15 @@ impl UsiSession {
                 self.sink.send(&format!(
                     "info string model loaded {} {}",
                     candidate.model_kind.usi_value(),
-                    evaluator.identity().sha256_hex()
+                    evaluator.artifact_sha256()
                 ));
                 self.options.model_kind = model_kind;
                 self.options.model_path = model_path;
-                self.neural_evaluator = Some(Arc::new(evaluator));
+                self.set_loaded_model(evaluator);
                 self.pending_model = None;
                 Ok(())
             }
-            Err(error) if self.neural_evaluator.is_some() => {
+            Err(error) if self.neural_evaluator.is_some() || self.osaval02_evaluator.is_some() => {
                 self.pending_model = Some((model_kind, model_path));
                 Err(error)
             }
@@ -608,31 +677,57 @@ impl UsiSession {
                 self.options.model_kind = model_kind;
                 self.options.model_path = model_path;
                 self.neural_evaluator = None;
+                self.osaval02_evaluator = None;
                 self.pending_model = None;
                 Err(error)
             }
         }
     }
 
-    fn try_load_model(options: &UsiOptions) -> Result<NeuralEvaluator, String> {
+    fn set_loaded_model(&mut self, evaluator: LoadedModel) {
+        match evaluator {
+            LoadedModel::Neural(model) => {
+                self.neural_evaluator = Some(Arc::new(model));
+                self.osaval02_evaluator = None;
+            }
+            LoadedModel::Osaval02(model) => {
+                self.neural_evaluator = None;
+                self.osaval02_evaluator = Some(Arc::new(model));
+            }
+        }
+    }
+
+    fn try_load_model(options: &UsiOptions) -> Result<LoadedModel, String> {
         if options.model_path.is_empty() {
             return Err("ModelPath is required for neural evaluation".to_owned());
         }
-        let evaluator = NeuralEvaluator::load_file(&options.model_path)
-            .map_err(|error| format!("failed to load neural model: {error}"))?;
-        let required = options
-            .model_kind
-            .required_quantization()
-            .ok_or_else(|| "handcrafted evaluation does not load a model".to_owned())?;
-        if evaluator.quantization() != required {
-            return Err(format!(
-                "ModelKind {} requires {:?} weights, but the model contains {:?}",
-                options.model_kind.usi_value(),
-                required,
-                evaluator.quantization()
-            ));
+        if let Some(required) = options.model_kind.required_quantization() {
+            let evaluator = NeuralEvaluator::load_file(&options.model_path)
+                .map_err(|error| format!("failed to load neural model: {error}"))?;
+            if evaluator.quantization() != required {
+                return Err(format!(
+                    "ModelKind {} requires {:?} weights, but the model contains {:?}",
+                    options.model_kind.usi_value(),
+                    required,
+                    evaluator.quantization()
+                ));
+            }
+            return Ok(LoadedModel::Neural(evaluator));
         }
-        Ok(evaluator)
+        if let Some(required) = options.model_kind.required_osaval02_quantization() {
+            let evaluator = Osaval02Evaluator::load_file(&options.model_path)
+                .map_err(|error| format!("failed to load OSAVAL02 model: {error}"))?;
+            if evaluator.quantization() != required {
+                return Err(format!(
+                    "ModelKind {} requires {:?} weights, but the model contains {:?}",
+                    options.model_kind.usi_value(),
+                    required,
+                    evaluator.quantization()
+                ));
+            }
+            return Ok(LoadedModel::Osaval02(evaluator));
+        }
+        Err("handcrafted evaluation does not load a model".to_owned())
     }
 
     fn cancel_active(&mut self, suppress_output: bool) {
@@ -1033,7 +1128,7 @@ mod tests {
                 .any(|line| line.starts_with("option name Hash "))
         );
         assert!(lines.iter().any(|line| {
-            line == "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized"
+            line == "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized var osaval02-float var osaval02-quantized"
         }));
         assert!(lines.iter().any(|line| {
             line == "option name TimeSafetyMarginMs type spin default 50 min 0 max 1000"

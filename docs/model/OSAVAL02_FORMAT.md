@@ -16,7 +16,8 @@ extension record, or trailing byte is permitted. The defensive maximum is 16 MiB
 
 All integers and IEEE-754 binary32 values are little-endian. Reserved and unused bytes must be
 zero. Text fields are nonempty printable ASCII followed by NUL padding; embedded NULs and nonzero
-padding are invalid.
+padding are invalid. The 64-byte training-run reference is the sole exception: a printable
+reference may consume all 64 bytes and therefore has no padding byte.
 
 | Offset | Bytes | Type | Required value or meaning |
 | ---: | ---: | --- | --- |

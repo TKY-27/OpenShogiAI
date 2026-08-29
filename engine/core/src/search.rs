@@ -11,7 +11,8 @@ use std::{
 use web_time::Instant;
 
 use crate::{
-    EvaluationConfig, Move, NeuralEvaluator, PieceKind, Position, Side, TimePlan, evaluate,
+    EvaluationConfig, Move, NeuralEvaluator, Osaval02SearchAdapter, PieceKind, Position, Side,
+    TimePlan, evaluate,
 };
 
 /// Base score used for checkmates. Distance in plies is subtracted from this value.
@@ -148,6 +149,8 @@ pub enum SearchTermination {
     NodeLimit,
     TimeLimit,
     Cancelled,
+    /// The selected model failed its strict runtime inference contract.
+    EvaluationError,
 }
 
 /// Completed evidence for one root move at the latest fully searched depth.
@@ -180,6 +183,8 @@ pub struct SearchStats {
     pub neural_inference_calls: u64,
     /// Wall-clock time spent encoding features and running neural inference.
     pub neural_inference_time: Duration,
+    /// Number of failed strict OSAVAL02 inferences.
+    pub osaval02_inference_errors: u64,
 }
 
 /// A completed iterative-deepening update.
@@ -291,6 +296,8 @@ impl NodeValue {
 pub struct SearchEngine {
     config: SearchConfig,
     neural: Option<Arc<NeuralEvaluator>>,
+    osaval02: Option<Osaval02SearchAdapter>,
+    root_osaval02_policy: Vec<(Move, i32)>,
     neural_mode: NeuralEvaluationMode,
     transposition_table: Vec<Option<TranspositionEntry>>,
     killers: Vec<[Option<Move>; 2]>,
@@ -333,6 +340,8 @@ impl SearchEngine {
         Self {
             config,
             neural: None,
+            osaval02: None,
+            root_osaval02_policy: Vec::new(),
             neural_mode: NeuralEvaluationMode::PureValue,
             transposition_table: vec![None; config.transposition_entries],
             killers: vec![[None; 2]; MAX_SEARCH_PLY],
@@ -383,6 +392,64 @@ impl SearchEngine {
         let mut engine = Self::with_clock(config, clock);
         engine.neural = Some(neural);
         engine.neural_mode = mode;
+        engine
+    }
+
+    /// Builds a pure-value search engine backed by the strict OSAVAL02 adapter.
+    ///
+    /// OSAVAL02 is deliberately a separate constructor from the historical OSAVAL01 path. The
+    /// selected artifact is never reinterpreted as OSAVAL01 and never blended with handcrafted
+    /// evaluation.
+    #[must_use]
+    pub fn with_osaval02(config: SearchConfig, evaluator: Arc<crate::Osaval02Evaluator>) -> Self {
+        Self::with_osaval02_history_and_clock(
+            config,
+            evaluator,
+            crate::Osaval02History::default(),
+            Arc::new(SystemMonotonicClock::default()),
+        )
+    }
+
+    /// Builds an OSAVAL02 search engine with explicit history facts.
+    #[must_use]
+    pub fn with_osaval02_history(
+        config: SearchConfig,
+        evaluator: Arc<crate::Osaval02Evaluator>,
+        history: crate::Osaval02History,
+    ) -> Self {
+        Self::with_osaval02_history_and_clock(
+            config,
+            evaluator,
+            history,
+            Arc::new(SystemMonotonicClock::default()),
+        )
+    }
+
+    /// Builds an OSAVAL02 search engine with an injected monotonic clock.
+    #[must_use]
+    pub fn with_osaval02_and_clock(
+        config: SearchConfig,
+        evaluator: Arc<crate::Osaval02Evaluator>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        Self::with_osaval02_history_and_clock(
+            config,
+            evaluator,
+            crate::Osaval02History::default(),
+            clock,
+        )
+    }
+
+    /// Builds an OSAVAL02 search engine with explicit history and clock dependencies.
+    #[must_use]
+    pub fn with_osaval02_history_and_clock(
+        config: SearchConfig,
+        evaluator: Arc<crate::Osaval02Evaluator>,
+        history: crate::Osaval02History,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        let mut engine = Self::with_clock(config, clock);
+        engine.osaval02 = Some(Osaval02SearchAdapter::with_history(evaluator, history));
         engine
     }
 
@@ -512,7 +579,11 @@ impl SearchEngine {
                 // cancelled/zero-budget search must not run an uncounted neural inference.
                 0
             } else {
-                self.evaluate_position(position, &mut context.stats)
+                if limits.max_depth > 0 {
+                    self.prepare_osaval02_root_policy(position, &mut context);
+                }
+                self.evaluate_position(position, &mut context)
+                    .unwrap_or_default()
             },
             pv: fallback.into_iter().collect(),
         };
@@ -640,6 +711,7 @@ impl SearchEngine {
         }
         self.killers.fill([None; 2]);
         self.history.fill(0);
+        self.root_osaval02_policy.clear();
     }
 
     #[expect(
@@ -676,7 +748,7 @@ impl SearchEngine {
                 return Ok(terminal_node(position, ply));
             }
             return Ok(NodeValue {
-                score: self.evaluate_position(position, &mut context.stats),
+                score: self.evaluate_position(position, context)?,
                 pv: Vec::new(),
             });
         }
@@ -852,7 +924,7 @@ impl SearchEngine {
         let stand_pat = if in_check {
             -INFINITY
         } else {
-            self.evaluate_position(position, &mut context.stats)
+            self.evaluate_position(position, context)?
         };
         if ply >= MAX_SEARCH_PLY {
             return Ok(NodeValue::leaf(if in_check {
@@ -1005,6 +1077,14 @@ impl SearchEngine {
         if matches!(movement, Move::Normal { promote: true, .. }) {
             score += 100_000;
         }
+        if ply == 0
+            && let Some((_, policy_bonus)) = self
+                .root_osaval02_policy
+                .iter()
+                .find(|(candidate, _)| *candidate == movement)
+        {
+            score += *policy_bonus;
+        }
         if is_quiet(position, movement) {
             if self.config.enable_killers
                 && let Some(killers) = self.killers.get(ply)
@@ -1037,17 +1117,42 @@ impl SearchEngine {
         }
     }
 
-    fn evaluate_position(&self, position: &Position, stats: &mut SearchStats) -> i32 {
+    fn evaluate_position(
+        &self,
+        position: &Position,
+        context: &mut SearchContext<'_>,
+    ) -> Result<i32, ()> {
+        if let Some(osaval02) = &self.osaval02 {
+            let started = self.clock.now();
+            let result = osaval02.evaluate(position);
+            context.stats.neural_inference_calls =
+                context.stats.neural_inference_calls.saturating_add(1);
+            context.stats.neural_inference_time = context
+                .stats
+                .neural_inference_time
+                .saturating_add(self.clock.now().saturating_sub(started));
+            return match result {
+                Ok(score) => Ok(score),
+                Err(_) => {
+                    context.stats.osaval02_inference_errors =
+                        context.stats.osaval02_inference_errors.saturating_add(1);
+                    context.termination = Some(SearchTermination::EvaluationError);
+                    Err(())
+                }
+            };
+        }
         let Some(neural) = &self.neural else {
-            return evaluate(position, &self.config.evaluation);
+            return Ok(evaluate(position, &self.config.evaluation));
         };
         let started = self.clock.now();
         let learned = neural.evaluate(position);
-        stats.neural_inference_calls = stats.neural_inference_calls.saturating_add(1);
-        stats.neural_inference_time = stats
+        context.stats.neural_inference_calls =
+            context.stats.neural_inference_calls.saturating_add(1);
+        context.stats.neural_inference_time = context
+            .stats
             .neural_inference_time
             .saturating_add(self.clock.now().saturating_sub(started));
-        match self.neural_mode {
+        Ok(match self.neural_mode {
             NeuralEvaluationMode::PureValue => learned,
             NeuralEvaluationMode::Residual => {
                 evaluate(position, &self.config.evaluation).saturating_add(learned)
@@ -1056,7 +1161,52 @@ impl SearchEngine {
                 let handcrafted = evaluate(position, &self.config.evaluation);
                 handcrafted.saturating_add(learned) / 2
             }
-        }
+        })
+    }
+
+    fn prepare_osaval02_root_policy(
+        &mut self,
+        position: &Position,
+        context: &mut SearchContext<'_>,
+    ) {
+        let Some(osaval02) = &self.osaval02 else {
+            return;
+        };
+        let started = self.clock.now();
+        let inference = osaval02.infer(position);
+        context.stats.neural_inference_calls =
+            context.stats.neural_inference_calls.saturating_add(1);
+        context.stats.neural_inference_time = context
+            .stats
+            .neural_inference_time
+            .saturating_add(self.clock.now().saturating_sub(started));
+        let Ok(inference) = inference else {
+            context.stats.osaval02_inference_errors =
+                context.stats.osaval02_inference_errors.saturating_add(1);
+            context.termination = Some(SearchTermination::EvaluationError);
+            return;
+        };
+        let legal_moves = position.legal_moves();
+        let mut ranked = legal_moves
+            .into_iter()
+            .filter_map(|movement| inference.policy_logit(movement).map(|_| movement))
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            inference
+                .policy_logit(*right)
+                .unwrap_or(f64::NEG_INFINITY)
+                .total_cmp(&inference.policy_logit(*left).unwrap_or(f64::NEG_INFINITY))
+                .then_with(|| left.cmp(right))
+        });
+        let count = i32::try_from(ranked.len()).unwrap_or(i32::MAX);
+        self.root_osaval02_policy = ranked
+            .into_iter()
+            .enumerate()
+            .map(|(rank, movement)| {
+                let rank = i32::try_from(rank).unwrap_or(i32::MAX);
+                (movement, count.saturating_sub(rank).saturating_mul(1_000))
+            })
+            .collect();
     }
 }
 
@@ -2112,8 +2262,14 @@ mod tests {
         let evaluator = Arc::new(NeuralEvaluator::side_to_move_test_evaluator());
         let learned = evaluator.evaluate(&position);
         let score = |mode| {
-            SearchEngine::with_neural_mode(config, Arc::clone(&evaluator), mode)
-                .evaluate_position(&position, &mut SearchStats::default())
+            let engine = SearchEngine::with_neural_mode(config, Arc::clone(&evaluator), mode);
+            let cancellation = CancellationToken::new();
+            let clock = SystemMonotonicClock::default();
+            let mut context =
+                SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
+            engine
+                .evaluate_position(&position, &mut context)
+                .expect("test evaluator is valid")
         };
 
         assert_eq!(score(NeuralEvaluationMode::PureValue), learned);

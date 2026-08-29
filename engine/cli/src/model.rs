@@ -6,7 +6,7 @@ use std::{
 
 use open_shogi_core::{
     AnchoredDir, EvaluationConfig, MAX_NEURAL_MODEL_BYTES, NeuralActivation, NeuralEvaluator,
-    NeuralQuantization, evaluate, parse_sfen, to_sfen,
+    NeuralQuantization, Osaval02Evaluator, Osaval02Inference, evaluate, parse_sfen, to_sfen,
 };
 use serde::Serialize;
 
@@ -18,6 +18,7 @@ use crate::{
 const INSPECTION_SCHEMA: &str = "phase5_model_inspection/v1";
 const INFERENCE_SCHEMA: &str = "phase5_model_inference/v1";
 const HANDCRAFTED_INFERENCE_SCHEMA: &str = "phase5_handcrafted_inference/v1";
+const OSAVAL02_CLI_INFERENCE_SCHEMA: &str = "phase10r_osaval02_cli_inference/v1";
 const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_POSITIONS: usize = 10_000;
@@ -65,6 +66,58 @@ struct HandcraftedInferenceRecord<'a> {
     sfen: String,
     score_cp: i32,
     elapsed_ns: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Osaval02Inspection {
+    schema: &'static str,
+    model_path: String,
+    artifact_sha256: String,
+    artifact_size: u64,
+    weight_payload_sha256: String,
+    format_version: u32,
+    variant_id: &'static str,
+    quantization: &'static str,
+    parameter_count: usize,
+    feature_schema_sha256: &'static str,
+    architecture_config_sha256: &'static str,
+    target_semantics_sha256: &'static str,
+    input_normalization_sha256: &'static str,
+    dataset_manifest_sha256: String,
+    move_index_sha256: &'static str,
+    exporter_version: String,
+    git_commit: String,
+    training_run_reference: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Osaval02InferenceRecord {
+    schema: &'static str,
+    model_artifact_sha256: String,
+    index: usize,
+    sfen: String,
+    elapsed_ns: u64,
+    inference: Osaval02Inference,
+}
+
+enum LoadedModel {
+    Osaval01(NeuralEvaluator),
+    Osaval02(Osaval02Evaluator),
+}
+
+impl LoadedModel {
+    #[cfg(test)]
+    fn evaluate(&self, position: &open_shogi_core::Position) -> i32 {
+        match self {
+            Self::Osaval01(model) => model.evaluate(position),
+            Self::Osaval02(model) => model
+                .infer(position, open_shogi_core::Osaval02History::default())
+                .expect("test model is valid")
+                .calibrated_score_cp(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,30 +182,62 @@ fn print_help() {
 fn inspect(arguments: &[String]) -> Result<(), String> {
     let model_path = parse_single_model_path(arguments)?;
     let (model, artifact_sha256, artifact_size) = load_model_artifact(&model_path)?;
-    let identity = model.identity();
-    let inspection = ModelInspection {
-        schema: INSPECTION_SCHEMA,
-        model_path: model_path.display().to_string(),
-        artifact_sha256,
-        artifact_size,
-        payload_sha256: identity.sha256_hex(),
-        format_version: identity.format_version,
-        architecture_version: identity.architecture_version,
-        feature_schema_version: identity.feature_schema_version,
-        feature_flags: identity.feature_flags,
-        input_dimension: identity.input_dimension,
-        hidden_layers: identity.hidden_layers,
-        hidden_dimension: identity.hidden_dimension,
-        activation: activation_name(identity.activation),
-        quantization: quantization_name(identity.quantization),
-        layer_count: identity.layer_count,
-        output_scale_cp: identity.output_scale_cp,
-    };
-    println!(
-        "{}",
-        serde_json::to_string(&inspection)
-            .map_err(|error| format!("cannot serialize model inspection: {error}"))?
-    );
+    match model {
+        LoadedModel::Osaval01(model) => {
+            let identity = model.identity();
+            let inspection = ModelInspection {
+                schema: INSPECTION_SCHEMA,
+                model_path: model_path.display().to_string(),
+                artifact_sha256,
+                artifact_size,
+                payload_sha256: identity.sha256_hex(),
+                format_version: identity.format_version,
+                architecture_version: identity.architecture_version,
+                feature_schema_version: identity.feature_schema_version,
+                feature_flags: identity.feature_flags,
+                input_dimension: identity.input_dimension,
+                hidden_layers: identity.hidden_layers,
+                hidden_dimension: identity.hidden_dimension,
+                activation: activation_name(identity.activation),
+                quantization: quantization_name(identity.quantization),
+                layer_count: identity.layer_count,
+                output_scale_cp: identity.output_scale_cp,
+            };
+            println!(
+                "{}",
+                serde_json::to_string(&inspection)
+                    .map_err(|error| format!("cannot serialize model inspection: {error}"))?
+            );
+        }
+        LoadedModel::Osaval02(model) => {
+            let identity = model.identity();
+            let inspection = Osaval02Inspection {
+                schema: "phase10r_osaval02_inspection/v1",
+                model_path: model_path.display().to_string(),
+                artifact_sha256,
+                artifact_size,
+                weight_payload_sha256: identity.weight_payload_sha256.clone(),
+                format_version: identity.format_version,
+                variant_id: identity.variant_id,
+                quantization: identity.quantization,
+                parameter_count: identity.parameter_count,
+                feature_schema_sha256: identity.feature_schema_sha256,
+                architecture_config_sha256: identity.architecture_config_sha256,
+                target_semantics_sha256: identity.target_semantics_sha256,
+                input_normalization_sha256: identity.input_normalization_sha256,
+                dataset_manifest_sha256: identity.dataset_manifest_sha256.clone(),
+                move_index_sha256: identity.move_index_sha256,
+                exporter_version: identity.exporter_version.clone(),
+                git_commit: identity.git_commit.clone(),
+                training_run_reference: identity.training_run_reference.clone(),
+            };
+            println!(
+                "{}",
+                serde_json::to_string(&inspection)
+                    .map_err(|error| format!("cannot serialize OSAVAL02 inspection: {error}"))?
+            );
+        }
+    }
     Ok(())
 }
 
@@ -191,29 +276,56 @@ fn infer(arguments: &[String]) -> Result<(), String> {
         _ => return Err("model infer requires exactly one of --sfen or --input".to_owned()),
     };
     let (model, model_artifact_sha256, _) = load_model_artifact(&model_path)?;
-    let model_payload_sha256 = model.identity().sha256_hex();
     let mut records = Vec::with_capacity(positions.len());
-    for (index, raw_sfen) in positions.into_iter().enumerate() {
-        let position = parse_inference_sfen(&raw_sfen, index + 1)?;
-        let started = Instant::now();
-        let score_cp = model.evaluate(&position);
-        records.push(InferenceRecord {
-            schema: INFERENCE_SCHEMA,
-            model_artifact_sha256: &model_artifact_sha256,
-            model_payload_sha256: &model_payload_sha256,
-            index,
-            sfen: to_sfen(&position),
-            score_cp,
-            elapsed_ns: json_safe_elapsed_ns(started.elapsed())?,
-        });
-    }
     let mut encoded = String::new();
-    for record in records {
-        encoded.push_str(
-            &serde_json::to_string(&record)
-                .map_err(|error| format!("cannot serialize inference result: {error}"))?,
-        );
-        encoded.push('\n');
+    match model {
+        LoadedModel::Osaval01(model) => {
+            let model_payload_sha256 = model.identity().sha256_hex();
+            for (index, raw_sfen) in positions.into_iter().enumerate() {
+                let position = parse_inference_sfen(&raw_sfen, index + 1)?;
+                let started = Instant::now();
+                let score_cp = model.evaluate(&position);
+                records.push(InferenceRecord {
+                    schema: INFERENCE_SCHEMA,
+                    model_artifact_sha256: &model_artifact_sha256,
+                    model_payload_sha256: &model_payload_sha256,
+                    index,
+                    sfen: to_sfen(&position),
+                    score_cp,
+                    elapsed_ns: json_safe_elapsed_ns(started.elapsed())?,
+                });
+            }
+            for record in records {
+                encoded.push_str(
+                    &serde_json::to_string(&record)
+                        .map_err(|error| format!("cannot serialize inference result: {error}"))?,
+                );
+                encoded.push('\n');
+            }
+        }
+        LoadedModel::Osaval02(model) => {
+            for (index, raw_sfen) in positions.into_iter().enumerate() {
+                let position = parse_inference_sfen(&raw_sfen, index + 1)?;
+                let started = Instant::now();
+                let inference = model
+                    .infer(&position, open_shogi_core::Osaval02History::default())
+                    .map_err(|error| format!("OSAVAL02 inference failed: {error}"))?;
+                let record = Osaval02InferenceRecord {
+                    schema: OSAVAL02_CLI_INFERENCE_SCHEMA,
+                    model_artifact_sha256: model_artifact_sha256.clone(),
+                    index,
+                    sfen: to_sfen(&position),
+                    elapsed_ns: json_safe_elapsed_ns(started.elapsed())?,
+                    inference,
+                };
+                encoded.push_str(
+                    &serde_json::to_string(&record).map_err(|error| {
+                        format!("cannot serialize OSAVAL02 inference result: {error}")
+                    })?,
+                );
+                encoded.push('\n');
+            }
+        }
     }
     write_output(output.as_deref(), &encoded)
 }
@@ -301,13 +413,20 @@ fn parse_single_model_path(arguments: &[String]) -> Result<PathBuf, String> {
     model_path.ok_or_else(|| "model inspect requires --model".to_owned())
 }
 
-fn load_model_artifact(path: &Path) -> Result<(NeuralEvaluator, String, u64), String> {
+fn load_model_artifact(path: &Path) -> Result<(LoadedModel, String, u64), String> {
     let artifact = read_file_artifact(
         path,
         u64::try_from(MAX_NEURAL_MODEL_BYTES).unwrap_or(u64::MAX),
     )?;
-    let model = NeuralEvaluator::from_bytes(&artifact.bytes)
-        .map_err(|error| format!("cannot load neural model {}: {error}", path.display()))?;
+    let model = if artifact.bytes.starts_with(b"OSAVAL02") {
+        Osaval02Evaluator::from_bytes(&artifact.bytes)
+            .map(LoadedModel::Osaval02)
+            .map_err(|error| format!("cannot load OSAVAL02 model {}: {error}", path.display()))?
+    } else {
+        NeuralEvaluator::from_bytes(&artifact.bytes)
+            .map(LoadedModel::Osaval01)
+            .map_err(|error| format!("cannot load neural model {}: {error}", path.display()))?
+    };
     Ok((model, artifact.sha256, artifact.size))
 }
 

@@ -6,6 +6,7 @@ use std::{
     fmt::{self, Write as _},
     io::{self, Read},
     path::Path,
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
@@ -486,7 +487,7 @@ impl Osaval02Evaluator {
                 "OSAVAL02 move-index table hash is incompatible",
             ));
         }
-        let exporter_version = read_fixed_text(header, 352, 32, "exporter version")?;
+        let exporter_version = read_fixed_text(header, 352, 32, "exporter version", false)?;
         if exporter_version != EXPORTER_VERSION {
             return Err(Osaval02Error::Invalid(
                 "OSAVAL02 exporter version is incompatible",
@@ -504,7 +505,8 @@ impl Osaval02Evaluator {
                 "OSAVAL02 Git commit identity is invalid",
             ));
         }
-        let training_run_reference = read_fixed_text(header, 424, 64, "training run reference")?;
+        let training_run_reference =
+            read_fixed_text(header, 424, 64, "training run reference", true)?;
         if read_usize_u32(header, 488)? != DESCRIPTOR_OFFSET
             || read_usize_u32(header, 492)? != DESCRIPTOR_BYTES
         {
@@ -938,6 +940,73 @@ impl Osaval02Evaluator {
     }
 }
 
+/// Search-facing adapter for a validated OSAVAL02 evaluator.
+///
+/// The adapter keeps the model's history contract beside the evaluator and exposes only the
+/// two values search needs: the calibrated current-side score and legal-root policy logits.
+/// Search still owns terminal, mate, and quiescence semantics; no OSAVAL01 or handcrafted score
+/// is substituted when this adapter is selected.
+#[derive(Clone, Debug)]
+pub struct Osaval02SearchAdapter {
+    evaluator: Arc<Osaval02Evaluator>,
+    history: Osaval02History,
+}
+
+impl Osaval02SearchAdapter {
+    /// Build an adapter with the standalone history facts required for a USI/browser root.
+    #[must_use]
+    pub fn new(evaluator: Arc<Osaval02Evaluator>) -> Self {
+        Self {
+            evaluator,
+            history: Osaval02History::default(),
+        }
+    }
+
+    /// Build an adapter with an explicit validated-history contract.
+    #[must_use]
+    pub const fn with_history(evaluator: Arc<Osaval02Evaluator>, history: Osaval02History) -> Self {
+        Self { evaluator, history }
+    }
+
+    /// Return the immutable evaluator identity used by runtime evidence.
+    #[must_use]
+    pub fn identity(&self) -> &Osaval02Identity {
+        self.evaluator.identity()
+    }
+
+    /// Return the configured bounded history facts.
+    #[must_use]
+    pub const fn history(&self) -> Osaval02History {
+        self.history
+    }
+
+    /// Run the strict OSAVAL02 inference and return its calibrated current-side search score.
+    pub fn evaluate(&self, position: &Position) -> Result<i32, Osaval02Error> {
+        Ok(self
+            .evaluator
+            .infer(position, self.history)?
+            .calibrated_score_cp())
+    }
+
+    /// Run the strict OSAVAL02 inference and return the legal policy logit for one move.
+    pub fn policy_logit(
+        &self,
+        position: &Position,
+        movement: Move,
+    ) -> Result<Option<f64>, Osaval02Error> {
+        Ok(self
+            .evaluator
+            .infer(position, self.history)?
+            .policy_logit(movement))
+    }
+
+    /// Run one root inference for policy-guided move ordering without changing search score
+    /// semantics.
+    pub fn infer(&self, position: &Position) -> Result<Osaval02Inference, Osaval02Error> {
+        self.evaluator.infer(position, self.history)
+    }
+}
+
 /// Complete deterministic inference document returned by native and Wasm callers.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -956,6 +1025,22 @@ pub struct Osaval02Inference {
 }
 
 impl Osaval02Inference {
+    /// Return the calibrated current-side score. Mate scores are never derived from this value.
+    #[must_use]
+    pub const fn calibrated_score_cp(&self) -> i32 {
+        self.score.calibrated_cp
+    }
+
+    /// Return the legal-root policy logit for a move, if that move is legal at this root.
+    #[must_use]
+    pub fn policy_logit(&self, movement: Move) -> Option<f64> {
+        let index = encode_move(movement);
+        self.legal_moves
+            .iter()
+            .find(|policy| policy.index == index)
+            .map(|policy| policy.logit)
+    }
+
     fn validate_finite(&self) -> Result<(), Osaval02Error> {
         let values = [
             self.wdl.loss,
@@ -1714,7 +1799,7 @@ fn round_and_clamp(value: f64) -> i32 {
 }
 
 fn read_tensor_name(bytes: &[u8], offset: usize) -> Result<String, Osaval02Error> {
-    read_fixed_text(bytes, offset, 48, "tensor name")
+    read_fixed_text(bytes, offset, 48, "tensor name", false)
 }
 
 fn read_fixed_text(
@@ -1722,19 +1807,28 @@ fn read_fixed_text(
     offset: usize,
     width: usize,
     label: &'static str,
+    allow_full_width: bool,
 ) -> Result<String, Osaval02Error> {
     let field = bytes
         .get(offset..offset + width)
         .ok_or(Osaval02Error::Invalid("OSAVAL02 is truncated"))?;
-    let nul = field.iter().position(|byte| *byte == 0).ok_or_else(|| {
-        Osaval02Error::InvalidOwned(format!("OSAVAL02 {label} lacks NUL padding"))
-    })?;
-    if nul == 0 || field[nul..].iter().any(|byte| *byte != 0) {
-        return Err(Osaval02Error::InvalidOwned(format!(
-            "OSAVAL02 {label} padding is invalid"
-        )));
-    }
-    let value = std::str::from_utf8(&field[..nul])
+    let value_bytes = match field.iter().position(|byte| *byte == 0) {
+        Some(nul) => {
+            if nul == 0 || field[nul..].iter().any(|byte| *byte != 0) {
+                return Err(Osaval02Error::InvalidOwned(format!(
+                    "OSAVAL02 {label} padding is invalid"
+                )));
+            }
+            &field[..nul]
+        }
+        None if allow_full_width && field.iter().all(|byte| (0x21..=0x7e).contains(byte)) => field,
+        None => {
+            return Err(Osaval02Error::InvalidOwned(format!(
+                "OSAVAL02 {label} lacks NUL padding"
+            )));
+        }
+    };
+    let value = std::str::from_utf8(value_bytes)
         .map_err(|_| Osaval02Error::InvalidOwned(format!("OSAVAL02 {label} is not ASCII")))?;
     if !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
         return Err(Osaval02Error::InvalidOwned(format!(

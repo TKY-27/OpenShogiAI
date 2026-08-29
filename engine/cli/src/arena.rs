@@ -14,8 +14,10 @@ use open_shogi_core::{
     AnchoredDir, AnchoredFile, CancellationToken, CsaGame, CsaResultValidation, CsaSpecialMove,
     EngineIdentity, EntryKind, EvaluationConfig, Game, GameEnd, MAX_NEURAL_MODEL_BYTES, Move,
     MAX_SECURE_CLEANUP_QUARANTINE_ENTRIES, NeuralEvaluationMode, NeuralEvaluator,
-    NeuralQuantization, Position, RandomMoveSelector, RepetitionOutcome, SearchConfig,
-    SearchEngine, SearchLimits, SearchStats, Side, parse_csa_game, parse_sfen, to_csa_game, to_sfen,
+    NeuralQuantization, Osaval02Evaluator, Osaval02Quantization, Position, RandomMoveSelector,
+    RepetitionOutcome, SearchConfig, SearchEngine, SearchLimits, SearchStats, SearchTermination,
+    Side,
+    parse_csa_game, parse_sfen, to_csa_game, to_sfen,
 };
 
 use crate::{
@@ -125,9 +127,15 @@ struct PlayerSpec {
     model_path: Option<PathBuf>,
     model_sha256: Option<String>,
     model_size: Option<u64>,
-    model: Option<Arc<NeuralEvaluator>>,
+    model: Option<LoadedModel>,
     opening: bool,
     opening_profile: OpeningProfile,
+}
+
+#[derive(Clone, Debug)]
+enum LoadedModel {
+    Osaval01(Arc<NeuralEvaluator>),
+    Osaval02(Arc<Osaval02Evaluator>),
 }
 
 impl PlayerSpec {
@@ -162,19 +170,30 @@ impl PlayerSpec {
     }
 
     fn model_payload_sha256(&self) -> Option<String> {
-        self.model
-            .as_ref()
-            .map(|model| model.identity().sha256_hex())
+        self.model.as_ref().map(|model| match model {
+            LoadedModel::Osaval01(model) => model.identity().sha256_hex(),
+            LoadedModel::Osaval02(model) => model.identity().weight_payload_sha256.clone(),
+        })
     }
 
     fn model_architecture_version(&self) -> Option<u32> {
-        self.model
-            .as_ref()
-            .map(|model| model.identity().architecture_version)
+        self.model.as_ref().map(|model| match model {
+            LoadedModel::Osaval01(model) => model.identity().architecture_version,
+            LoadedModel::Osaval02(model) => model.identity().format_version,
+        })
     }
 
-    fn model_quantization(&self) -> Option<NeuralQuantization> {
-        self.model.as_ref().map(|model| model.quantization())
+    fn model_quantization(&self) -> Option<&'static str> {
+        self.model.as_ref().map(|model| match model {
+            LoadedModel::Osaval01(model) => match model.quantization() {
+                NeuralQuantization::Float32 => "float32",
+                NeuralQuantization::Int8 => "int8",
+            },
+            LoadedModel::Osaval02(model) => match model.quantization() {
+                Osaval02Quantization::Float32 => "float32",
+                Osaval02Quantization::Int8 => "int8",
+            },
+        })
     }
 }
 
@@ -635,11 +654,18 @@ fn resolve_model_identity(name: &str, player: &mut PlayerSpec) -> Result<(), Str
         path,
         u64::try_from(MAX_NEURAL_MODEL_BYTES).unwrap_or(u64::MAX),
     )?;
-    let model = NeuralEvaluator::from_bytes(&artifact.bytes)
-        .map_err(|error| format!("cannot load --{name}-model {}: {error}", path.display()))?;
+    let model = if artifact.bytes.starts_with(b"OSAVAL02") {
+        Osaval02Evaluator::from_bytes(&artifact.bytes)
+            .map(|model| LoadedModel::Osaval02(Arc::new(model)))
+            .map_err(|error| format!("cannot load --{name}-model {}: {error}", path.display()))?
+    } else {
+        NeuralEvaluator::from_bytes(&artifact.bytes)
+            .map(|model| LoadedModel::Osaval01(Arc::new(model)))
+            .map_err(|error| format!("cannot load --{name}-model {}: {error}", path.display()))?
+    };
     player.model_sha256 = Some(artifact.sha256);
     player.model_size = Some(artifact.size);
-    player.model = Some(Arc::new(model));
+    player.model = Some(model);
     Ok(())
 }
 
@@ -936,7 +962,20 @@ impl Player {
                         .model
                         .as_ref()
                         .ok_or_else(|| "model-backed player lacks a loaded model".to_owned())?;
-                    SearchEngine::with_neural_mode(config, Arc::clone(model), mode)
+                    match model {
+                        LoadedModel::Osaval01(model) => {
+                            SearchEngine::with_neural_mode(config, Arc::clone(model), mode)
+                        }
+                        LoadedModel::Osaval02(model) => {
+                            if mode != NeuralEvaluationMode::PureValue {
+                                return Err(
+                                    "OSAVAL02 only supports pure-value semantics; score blending is forbidden"
+                                        .to_owned(),
+                                );
+                            }
+                            SearchEngine::with_osaval02(config, Arc::clone(model))
+                        }
+                    }
                 } else {
                     SearchEngine::new(config)
                 };
@@ -984,7 +1023,11 @@ impl Player {
                 totals.depth_sum = totals.depth_sum.saturating_add(u64::from(result.depth));
                 totals.searches = totals.searches.saturating_add(1);
                 add_stats(totals, result.stats);
-                result.best_move
+                if result.termination == SearchTermination::EvaluationError {
+                    None
+                } else {
+                    result.best_move
+                }
             }
         }
     }
@@ -1641,7 +1684,6 @@ fn arena_signature_player(player: &PlayerSpec) -> ArenaConfigSignaturePlayer {
         architecture_version: player.model_architecture_version().map(u64::from),
         quantization: player
             .model_quantization()
-            .map(quantization_name)
             .map(str::to_owned),
         opening_enabled: player.opening,
     }
@@ -2956,7 +2998,7 @@ fn write_player_identity(output: &mut String, player: &PlayerSpec) {
     output.push_str(",\"architectureVersion\":");
     write_optional_u64(output, player.model_architecture_version().map(u64::from));
     output.push_str(",\"quantization\":");
-    write_optional_json_string(output, player.model_quantization().map(quantization_name));
+    write_optional_json_string(output, player.model_quantization());
     write!(
         output,
         ",\"openingEnabled\":{}}}",
@@ -2995,13 +3037,6 @@ fn write_optional_u64(output: &mut String, value: Option<u64>) {
     match value {
         Some(value) => write!(output, "{value}").expect("writing to String cannot fail"),
         None => output.push_str("null"),
-    }
-}
-
-const fn quantization_name(value: NeuralQuantization) -> &'static str {
-    match value {
-        NeuralQuantization::Float32 => "float32",
-        NeuralQuantization::Int8 => "int8",
     }
 }
 

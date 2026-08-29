@@ -1381,6 +1381,48 @@ def _artifact(
     model.load_state_dict(stage3_payload["model_state"], strict=True)
     model.eval()
     reference = f"phase10r-1m-{variant}-teacher-bound-v1"
+
+    def validate_existing(existing: Any) -> dict[str, Any]:
+        if (
+            existing.variant_id != variant
+            or existing.quantization != "float32"
+            or existing.dataset_manifest_sha256 != manifest_sha256
+            or existing.training_run_reference != reference
+            or existing.calibration_scale != calibration_scale
+            or existing.calibration_bias != calibration_bias
+        ):
+            raise Phase10RTeacherBindingError(
+                "teacher-bound OSAVAL02 metadata is not exact"
+            )
+        _assert_exported_weights(stage3_payload, existing)
+        return {
+            "status": "passed",
+            "path": output,
+            "sha256": _sha256_file(output),
+            "bytes": output.stat().st_size,
+            "variant_id": variant,
+            "quantization": "float32",
+            "dataset_manifest_sha256": manifest_sha256,
+            "training_run_reference": reference,
+            "calibration_scale": calibration_scale,
+            "calibration_bias": calibration_bias,
+            "git_commit": existing.git_commit,
+            "reused_immutable_artifact": True,
+        }
+
+    if output.exists() or output.is_symlink():
+        if output.is_symlink() or not output.is_file():
+            raise Phase10RTeacherBindingError(
+                "teacher-bound OSAVAL02 artifact is not a regular immutable file"
+            )
+        try:
+            inspected = parse_osaval02(output.read_bytes())
+        except (OSError, TypeError, ValueError) as error:
+            raise Phase10RTeacherBindingError(
+                "existing teacher-bound OSAVAL02 artifact failed strict parsing"
+            ) from error
+        return validate_existing(inspected)
+
     try:
         encoded = serialize_osaval02(
             model.export_tensors(),
@@ -1401,28 +1443,9 @@ def _artifact(
         raise Phase10RTeacherBindingError(
             "teacher-bound OSAVAL02 artifact failed strict parsing"
         ) from error
-    if (
-        inspected.variant_id != variant
-        or inspected.quantization != "float32"
-        or inspected.dataset_manifest_sha256 != manifest_sha256
-        or inspected.training_run_reference != reference
-        or inspected.calibration_scale != calibration_scale
-        or inspected.calibration_bias != calibration_bias
-    ):
-        raise Phase10RTeacherBindingError("teacher-bound OSAVAL02 metadata is not exact")
-    _assert_exported_weights(stage3_payload, inspected)
-    return {
-        "status": "passed",
-        "path": output,
-        "sha256": _sha256_file(output),
-        "bytes": output.stat().st_size,
-        "variant_id": variant,
-        "quantization": "float32",
-        "dataset_manifest_sha256": manifest_sha256,
-        "training_run_reference": reference,
-        "calibration_scale": calibration_scale,
-        "calibration_bias": calibration_bias,
-    }
+    result = validate_existing(inspected)
+    result["reused_immutable_artifact"] = False
+    return result
 
 
 def _read_process_line(process: subprocess.Popen[bytes], buffer: bytearray, deadline: float) -> str:
@@ -1491,7 +1514,7 @@ def _usi_query(
         until("usiok")
         send(f"setoption name USI_Hash value {hash_mib}")
         send(f"setoption name MaxDepth value {max_depth}")
-        send("setoption name ModelKind value neural-float")
+        send("setoption name ModelKind value osaval02-float")
         send("setoption name ModelSemantics value pure-value")
         send(f"setoption name ModelPath value {artifact}")
         send("isready")

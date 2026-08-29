@@ -57,6 +57,18 @@ def test_export_is_deterministic_exact_size_and_inspectable(
     assert len(inspected["tensors"]) == len(tensor_specs(variant))
 
 
+def test_training_run_reference_may_consume_the_full_fixed_width() -> None:
+    reference = "r" * 64
+    artifact = serialize_osaval02(
+        deterministic_test_tensors(VARIANT_PAIR),
+        variant_id=VARIANT_PAIR,
+        quantization="float32",
+        training_run_reference=reference,
+        git_commit=GIT_COMMIT,
+    )
+    assert parse_osaval02(artifact).training_run_reference == reference
+
+
 def test_export_rejects_wrong_tensor_set_shape_and_nonfinite_values() -> None:
     tensors = deterministic_test_tensors(VARIANT_PAIR)
     tensors.pop("trunk.0.bias")

@@ -13,9 +13,10 @@ use open_shogi_core::{
     CancellationToken, EngineIdentity, EnteringKingDeclaration, Game, GameEnd, HandPiece,
     ImpasseOutcome, Move, NeuralActivation, NeuralEvaluationMode, NeuralEvaluator,
     NeuralQuantization, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile,
-    Osaval02Evaluator, Osaval02History, PieceKind, Position, RepetitionOutcome, SearchConfig,
-    SearchEngine, SearchLimits, SearchResult, SearchStats, SearchTermination, Side, Square,
-    TimeControl, TimeControlMode, TimeManager, parse_sfen, parse_usi_move, to_sfen, to_usi_move,
+    Osaval02Evaluator, Osaval02History, Osaval02Identity, PieceKind, Position, RepetitionOutcome,
+    SearchConfig, SearchEngine, SearchLimits, SearchResult, SearchStats, SearchTermination, Side,
+    Square, TimeControl, TimeControlMode, TimeManager, parse_sfen, parse_usi_move, to_sfen,
+    to_usi_move,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -214,8 +215,20 @@ impl EvaluatorChoice {
 }
 
 struct LoadedModel {
-    evaluator: Arc<NeuralEvaluator>,
-    summary: ModelSummary,
+    evaluator: LoadedEvaluator,
+    summary: LoadedModelSummary,
+}
+
+enum LoadedEvaluator {
+    Osaval01(Arc<NeuralEvaluator>),
+    Osaval02(Arc<Osaval02Evaluator>),
+}
+
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+enum LoadedModelSummary {
+    Osaval01(ModelSummary),
+    Osaval02(Osaval02ModelSummary),
 }
 
 /// Stateful rules, model, and search adapter owned by exactly one browser worker.
@@ -336,13 +349,24 @@ impl BrowserEngine {
             }
         }
 
-        let evaluator = NeuralEvaluator::from_bytes(bytes)
-            .map_err(|error| format!("model validation failed: {error}"))?;
-        let summary = ModelSummary::from_evaluator(&evaluator, artifact_sha256, bytes.len());
-        self.model = Some(LoadedModel {
-            evaluator: Arc::new(evaluator),
-            summary,
-        });
+        let (evaluator, summary) = if bytes.starts_with(b"OSAVAL02") {
+            let evaluator = Osaval02Evaluator::from_bytes(bytes)
+                .map_err(|error| format!("OSAVAL02 model validation failed: {error}"))?;
+            let summary = Osaval02ModelSummary::from_identity(evaluator.identity());
+            (
+                LoadedEvaluator::Osaval02(Arc::new(evaluator)),
+                LoadedModelSummary::Osaval02(summary),
+            )
+        } else {
+            let evaluator = NeuralEvaluator::from_bytes(bytes)
+                .map_err(|error| format!("model validation failed: {error}"))?;
+            let summary = ModelSummary::from_evaluator(&evaluator, artifact_sha256, bytes.len());
+            (
+                LoadedEvaluator::Osaval01(Arc::new(evaluator)),
+                LoadedModelSummary::Osaval01(summary),
+            )
+        };
+        self.model = Some(LoadedModel { evaluator, summary });
         self.analysis = None;
         self.analysis_identity = None;
         serde_json::to_string(&self.model.as_ref().map(|model| &model.summary))
@@ -760,11 +784,22 @@ impl BrowserEngine {
                     EvaluatorChoice::ModelComposite => NeuralEvaluationMode::Composite,
                     EvaluatorChoice::OverallChampion => unreachable!(),
                 };
-                Ok(SearchEngine::with_neural_mode(
-                    config,
-                    Arc::clone(&model.evaluator),
-                    mode,
-                ))
+                match &model.evaluator {
+                    LoadedEvaluator::Osaval01(neural) => Ok(SearchEngine::with_neural_mode(
+                        config,
+                        Arc::clone(neural),
+                        mode,
+                    )),
+                    LoadedEvaluator::Osaval02(osaval02) => {
+                        if mode != NeuralEvaluationMode::PureValue {
+                            return Err(
+                                "OSAVAL02 only supports pure-value semantics; score blending is forbidden"
+                                    .to_owned(),
+                            );
+                        }
+                        Ok(SearchEngine::with_osaval02(config, Arc::clone(osaval02)))
+                    }
+                }
             }
         }
     }
@@ -1013,7 +1048,7 @@ impl TerminalSummary {
 #[derive(Serialize)]
 struct EvaluatorSummary {
     kind: &'static str,
-    model: Option<ModelSummary>,
+    model: Option<LoadedModelSummary>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1083,6 +1118,52 @@ impl ModelSummary {
             },
             layer_count: identity.layer_count,
             output_scale_cp: identity.output_scale_cp,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Osaval02ModelSummary {
+    schema: &'static str,
+    artifact_sha256: String,
+    weight_payload_sha256: String,
+    artifact_size: usize,
+    format_version: u32,
+    variant_id: &'static str,
+    quantization: &'static str,
+    parameter_count: usize,
+    feature_schema_sha256: &'static str,
+    architecture_config_sha256: &'static str,
+    target_semantics_sha256: &'static str,
+    input_normalization_sha256: &'static str,
+    dataset_manifest_sha256: String,
+    move_index_sha256: &'static str,
+    exporter_version: String,
+    git_commit: String,
+    training_run_reference: String,
+}
+
+impl Osaval02ModelSummary {
+    fn from_identity(identity: &Osaval02Identity) -> Self {
+        Self {
+            schema: "open_shogi_browser_osaval02_model/v1",
+            artifact_sha256: identity.artifact_sha256.clone(),
+            weight_payload_sha256: identity.weight_payload_sha256.clone(),
+            artifact_size: identity.artifact_bytes,
+            format_version: identity.format_version,
+            variant_id: identity.variant_id,
+            quantization: identity.quantization,
+            parameter_count: identity.parameter_count,
+            feature_schema_sha256: identity.feature_schema_sha256,
+            architecture_config_sha256: identity.architecture_config_sha256,
+            target_semantics_sha256: identity.target_semantics_sha256,
+            input_normalization_sha256: identity.input_normalization_sha256,
+            dataset_manifest_sha256: identity.dataset_manifest_sha256.clone(),
+            move_index_sha256: identity.move_index_sha256,
+            exporter_version: identity.exporter_version.clone(),
+            git_commit: identity.git_commit.clone(),
+            training_run_reference: identity.training_run_reference.clone(),
         }
     }
 }
@@ -1391,6 +1472,7 @@ struct SearchStatsSummary {
     qnodes: u64,
     neural_inference_calls: u64,
     neural_inference_time_ns: u64,
+    osaval02_inference_errors: u64,
 }
 
 impl From<SearchStats> for SearchStatsSummary {
@@ -1405,6 +1487,7 @@ impl From<SearchStats> for SearchStatsSummary {
             qnodes: stats.qnodes,
             neural_inference_calls: stats.neural_inference_calls,
             neural_inference_time_ns: duration_ns(stats.neural_inference_time),
+            osaval02_inference_errors: stats.osaval02_inference_errors,
         }
     }
 }
@@ -1503,6 +1586,7 @@ const fn termination_name(termination: SearchTermination) -> &'static str {
         SearchTermination::NodeLimit => "node-limit",
         SearchTermination::TimeLimit => "time-limit",
         SearchTermination::Cancelled => "cancelled",
+        SearchTermination::EvaluationError => "evaluation-error",
     }
 }
 
