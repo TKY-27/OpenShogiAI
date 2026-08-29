@@ -863,6 +863,14 @@ def _encode_features(
     pieces = [piece for piece in position.board if piece is not None]
     us = position.side_to_move
     kings = (_king_square(position, us), _king_square(position, 1 - us))
+    attack_masks = {
+        piece: _piece_attack_mask(position, piece)
+        for piece in pieces
+    }
+    side_attack_masks = (
+        _side_attack_mask(pieces, attack_masks, 0),
+        _side_attack_mask(pieces, attack_masks, 1),
+    )
     king_piece: list[tuple[int, int]] = []
     for piece in pieces:
         owner = int(piece.side != us)
@@ -885,7 +893,7 @@ def _encode_features(
     pair: list[tuple[int, int]] = []
     for left_index, left in enumerate(pieces):
         for right in pieces[left_index + 1 :]:
-            flags = _pair_flags(position, left, right, kings, pinned)
+            flags = _pair_flags(left, right, kings, pinned, attack_masks, us)
             key = bytearray(
                 (
                     1,
@@ -913,8 +921,8 @@ def _encode_features(
         key = bytearray((2, 0, hand_piece, count, target))
         for king in kings:
             key.extend(_signed_offsets(target, king))
-        flags = int(_square_attacked(position, target, us))
-        flags |= int(_square_attacked(position, target, 1 - us)) << 1
+        flags = int(bool(side_attack_masks[us] & (1 << target)))
+        flags |= int(bool(side_attack_masks[1 - us] & (1 << target))) << 1
         flags |= int(any(_chebyshev(target, king) <= 2 for king in kings)) << 2
         key.append(flags)
         pair.append(_signed_bucket(bytes(key), 65_536))
@@ -927,7 +935,7 @@ def _encode_features(
             for second in range(first + 1, len(pieces)):
                 for third in range(second + 1, len(pieces)):
                     group = (pieces[first], pieces[second], pieces[third])
-                    category = _triple_category(position, group, kings, pinned)
+                    category = _triple_category(group, kings, pinned, attack_masks)
                     if category is None:
                         continue
                     squares = tuple(piece.square for piece in group)
@@ -948,7 +956,16 @@ def _encode_features(
                 break
 
     scalars = _scalar_features(
-        position, move_rows, history, pieces, kings, pinned, len(pair), len(triple), drop_count
+        position,
+        move_rows,
+        history,
+        pieces,
+        kings,
+        pinned,
+        side_attack_masks,
+        len(pair),
+        len(triple),
+        drop_count,
     )
     digest = hashlib.sha256()
     for tag, rows in ((1, king_piece), (2, king_hand), (3, pair), (4, triple)):
@@ -973,6 +990,7 @@ def _scalar_features(
     pieces: Sequence[Piece],
     kings: tuple[int, int],
     pinned: Mapping[int, bool],
+    side_attack_masks: tuple[int, int],
     pair_count: int,
     triple_count: int,
     drop_count: int,
@@ -989,18 +1007,19 @@ def _scalar_features(
         values.extend(
             position.hands[relative_side][index] / _HAND_MAXIMA[index] for index in range(7)
         )
-    attacked_us = sum(_square_attacked(position, square, us) for square in range(81))
-    attacked_them = sum(_square_attacked(position, square, 1 - us) for square in range(81))
+    attacked_us = side_attack_masks[us].bit_count()
+    attacked_them = side_attack_masks[1 - us].bit_count()
     values.extend((attacked_us / 81.0, attacked_them / 81.0))
     values.append(
-        sum(_square_attacked(position, square, 1 - us) for square in _king_zone(kings[0])) / 25.0
+        sum(bool(side_attack_masks[1 - us] & (1 << square)) for square in _king_zone(kings[0]))
+        / 25.0
     )
     values.append(
-        sum(_square_attacked(position, square, us) for square in _king_zone(kings[1])) / 25.0
+        sum(bool(side_attack_masks[us] & (1 << square)) for square in _king_zone(kings[1])) / 25.0
     )
     values.append(len(move_rows) / 600.0)
-    values.append(float(_square_attacked(position, kings[0], 1 - us)))
-    values.append(float(_square_attacked(position, kings[1], us)))
+    values.append(float(bool(side_attack_masks[1 - us] & (1 << kings[0]))))
+    values.append(float(bool(side_attack_masks[us] & (1 << kings[1]))))
     values.append(sum(pinned[piece.square] and piece.side == us for piece in pieces) / 20.0)
     values.append(sum(pinned[piece.square] and piece.side != us for piece in pieces) / 20.0)
     values.append(sum(piece.side == us and piece.kind >= 8 for piece in pieces) / 10.0)
@@ -1022,10 +1041,10 @@ def _scalar_features(
 
 
 def _triple_category(
-    position: ParsedPosition,
     pieces: tuple[Piece, Piece, Piece],
     kings: tuple[int, int],
     pinned: Mapping[int, bool],
+    attack_masks: Mapping[Piece, int],
 ) -> int | None:
     for king in kings:
         if any(piece.square == king for piece in pieces) and all(
@@ -1033,20 +1052,20 @@ def _triple_category(
         ):
             return 0
     for king in kings:
-        king_piece = position.board[king]
-        if king_piece is None or not any(piece.square == king for piece in pieces):
+        king_piece = next((piece for piece in pieces if piece.square == king), None)
+        if king_piece is None:
             continue
         for pinned_piece in pieces:
             if not pinned.get(pinned_piece.square, False) or pinned_piece.side != king_piece.side:
                 continue
             if any(
                 other.side != king_piece.side
-                and _piece_attacks(position, other, pinned_piece.square)
+                and bool(attack_masks[other] & (1 << pinned_piece.square))
                 for other in pieces
             ):
                 return 1
         if any(
-            piece.side != king_piece.side and _piece_attacks(position, piece, king)
+            piece.side != king_piece.side and bool(attack_masks[piece] & (1 << king))
             for piece in pieces
         ):
             return 2
@@ -1054,7 +1073,7 @@ def _triple_category(
         attackers = [
             piece
             for piece in pieces
-            if piece != target and _piece_attacks(position, piece, target.square)
+            if piece != target and bool(attack_masks[piece] & (1 << target.square))
         ]
         if len(attackers) == 2:
             return 3
@@ -1066,29 +1085,47 @@ def _triple_category(
 
 
 def _pair_flags(
-    position: ParsedPosition,
     left: Piece,
     right: Piece,
     kings: tuple[int, int],
     pinned: Mapping[int, bool],
+    attack_masks: Mapping[Piece, int],
+    us: int,
 ) -> int:
-    left_attacks = _piece_attacks(position, left, right.square)
-    right_attacks = _piece_attacks(position, right, left.square)
+    left_mask = attack_masks[left]
+    right_mask = attack_masks[right]
+    left_attacks = bool(left_mask & (1 << right.square))
+    right_attacks = bool(right_mask & (1 << left.square))
     flags = int(left_attacks)
     flags |= int(right_attacks) << 1
     flags |= int(left.side == right.side and (left_attacks or right_attacks)) << 2
     flags |= int(pinned[left.square]) << 3
     flags |= int(pinned[right.square]) << 4
-    flags |= int(_piece_attacks(position, left, _king_square(position, 1 - left.side))) << 5
-    flags |= int(_piece_attacks(position, right, _king_square(position, 1 - right.side))) << 6
-    common = any(
-        _piece_attacks(position, left, square) and _piece_attacks(position, right, square)
-        for square in range(81)
-    )
+    flags |= int(bool(left_mask & (1 << kings[1 if left.side == us else 0]))) << 5
+    flags |= int(bool(right_mask & (1 << kings[1 if right.side == us else 0]))) << 6
+    common = bool(left_mask & right_mask)
     flags |= int(common) << 7
     flags |= int(any(_chebyshev(left.square, king) <= 2 for king in kings)) << 8
     flags |= int(any(_chebyshev(right.square, king) <= 2 for king in kings)) << 9
     return flags
+
+
+def _piece_attack_mask(position: ParsedPosition, piece: Piece) -> int:
+    mask = 0
+    for target in range(81):
+        if _piece_attacks(position, piece, target):
+            mask |= 1 << target
+    return mask
+
+
+def _side_attack_mask(
+    pieces: Sequence[Piece], attack_masks: Mapping[Piece, int], side: int
+) -> int:
+    mask = 0
+    for piece in pieces:
+        if piece.side == side:
+            mask |= attack_masks[piece]
+    return mask
 
 
 def _piece_attacks(position: ParsedPosition, piece: Piece, target: int) -> bool:
