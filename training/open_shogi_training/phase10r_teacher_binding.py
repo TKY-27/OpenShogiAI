@@ -328,14 +328,18 @@ def _validate_label_teacher(label: Mapping[str, Any], control: Mapping[str, Any]
         raise Phase10RTeacherBindingError("label score perspective differs from the frozen target")
 
 
-def _score_mapping(score: object, context: str) -> tuple[str, int]:
+def _score_mapping(
+    score: object, context: str, *, enforce_runtime_bound: bool = True
+) -> tuple[str, int]:
     if not isinstance(score, Mapping) or set(score) != {"kind", "value"}:
         raise Phase10RTeacherBindingError(f"{context} is malformed")
     kind = score.get("kind")
     value = score.get("value")
     if kind not in {"cp", "mate"} or isinstance(value, bool) or not isinstance(value, int):
         raise Phase10RTeacherBindingError(f"{context} is malformed")
-    if kind == "cp" and abs(value) > MAX_NON_MATE_CP:
+    if not -(2**31) <= value <= 2**31 - 1:
+        raise Phase10RTeacherBindingError(f"{context} leaves the signed score domain")
+    if kind == "cp" and enforce_runtime_bound and abs(value) > MAX_NON_MATE_CP:
         raise Phase10RTeacherBindingError(f"{context} leaves the non-mate namespace")
     if kind == "mate" and value == 0:
         raise Phase10RTeacherBindingError(f"{context} has zero mate distance")
@@ -383,7 +387,11 @@ def _validate_label_row(
         if not isinstance(pv, list) or not pv or not isinstance(pv[0], str):
             raise Phase10RTeacherBindingError("label MultiPV root is invalid")
         roots.append(pv[0])
-        _score_mapping(candidate.get("score"), f"label candidate {index} score")
+        _score_mapping(
+            candidate.get("score"),
+            f"label candidate {index} score",
+            enforce_runtime_bound=False,
+        )
     if multipv != list(range(1, len(candidates) + 1)) or len(set(roots)) != len(roots):
         raise Phase10RTeacherBindingError("label MultiPV prefix is not contiguous")
     if label.get("bestmove") != roots[0] or label.get("score") != candidates[0].get("score"):
