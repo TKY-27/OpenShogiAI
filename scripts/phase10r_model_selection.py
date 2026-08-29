@@ -708,7 +708,7 @@ def run_arena_pair(
         report = read_json(report_path)
         resumed = True
     else:
-        output.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
         log_path = output / "arena.log"
         a_model = model_paths_by_variant[spec["a"]]
         b_model = (
@@ -720,10 +720,19 @@ def run_arena_pair(
         resume = output.joinpath("arena.state").exists() or output.joinpath("games").exists()
         if resume:
             command.append("--resume")
-        with log_path.open("a", encoding="utf-8") as log:
-            completed = subprocess.run(
-                command, cwd=root, stdout=log, stderr=subprocess.STDOUT, text=True, check=False
-            )
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if log_path.exists():
+            log_path = output / "arena-resume.log"
+        write_immutable_text(
+            log_path,
+            (completed.stdout or "") + (completed.stderr or ""),
+        )
         if completed.returncode != 0:
             raise RuntimeError(
                 f"Arena pair failed ({spec['id']} pair {pair_index}); see {log_path}"
