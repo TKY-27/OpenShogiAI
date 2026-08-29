@@ -68,6 +68,27 @@ STAGE_TWO: Final = "source_specific_wdl_value_pretraining"
 TRAINING_SPLIT: Final = "train"
 EVALUATION_SPLITS: Final = ("validation", "source_held_out")
 PARITY_CORPUS: Final = Path("tests/fixtures/osaval02/parity-corpus.json")
+OSAVAL02_PARITY_SCHEMA: Final = "open_shogiai_osaval02_parity/v1"
+OSAVAL02_IDENTITY_FIELDS: Final = frozenset(
+    {
+        "formatVersion",
+        "variantId",
+        "quantization",
+        "parameterCount",
+        "artifactBytes",
+        "artifactSha256",
+        "weightPayloadSha256",
+        "featureSchemaSha256",
+        "architectureConfigSha256",
+        "targetSemanticsSha256",
+        "inputNormalizationSha256",
+        "datasetManifestSha256",
+        "moveIndexSha256",
+        "exporterVersion",
+        "gitCommit",
+        "trainingRunReference",
+    }
+)
 TEACHER_EXPECTED_SHA256: Final = "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403"
 
 
@@ -758,6 +779,25 @@ def _run_json_command(root: Path, command: Sequence[str], timeout: int) -> dict[
     return value
 
 
+def _validate_candidate_parity_document(document: Mapping[str, Any], runtime: str) -> None:
+    if "schema" not in document:
+        raise Phase10RCampaignError(f"{runtime} candidate parity schema is missing")
+    schema = document["schema"]
+    if not isinstance(schema, str) or schema != OSAVAL02_PARITY_SCHEMA:
+        raise Phase10RCampaignError(
+            f"{runtime} candidate parity schema is incompatible: {schema!r}"
+        )
+    if set(document) != {"schema", "modelIdentity", "fixtures"}:
+        raise Phase10RCampaignError(f"{runtime} candidate parity envelope is incompatible")
+    identity = document["modelIdentity"]
+    if not isinstance(identity, dict) or set(identity) != OSAVAL02_IDENTITY_FIELDS:
+        raise Phase10RCampaignError(f"{runtime} candidate model identity is incompatible")
+    if identity.get("formatVersion") != 2:
+        raise Phase10RCampaignError(f"{runtime} candidate format version is unsupported")
+    if not isinstance(document["fixtures"], list):
+        raise Phase10RCampaignError(f"{runtime} candidate parity fixtures are incompatible")
+
+
 def _candidate_parity(root: Path, artifact_path: Path, model_path: Path) -> dict[str, Any]:
     if artifact_path.is_symlink() or not artifact_path.is_file():
         raise Phase10RCampaignError(f"candidate artifact is not a regular file: {artifact_path}")
@@ -793,6 +833,8 @@ def _candidate_parity(root: Path, artifact_path: Path, model_path: Path) -> dict
         ],
         300,
     )
+    _validate_candidate_parity_document(native, "native")
+    _validate_candidate_parity_document(wasm, "Wasm")
     native_wasm_delta, native_wasm_mismatches = _compare_json(native, wasm)
     if native_wasm_mismatches:
         raise Phase10RCampaignError(

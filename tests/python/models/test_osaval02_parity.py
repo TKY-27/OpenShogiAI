@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from open_shogi_training.phase10r_campaign import (
+    OSAVAL02_PARITY_SCHEMA,
+    Phase10RCampaignError,
+    _compare_json,
+    _validate_candidate_parity_document,
+)
 from open_shogi_training.phase10r_model import (
     DESCRIPTOR_OFFSET,
     HEADER_BYTES,
@@ -120,10 +126,11 @@ def test_python_native_and_actual_wasm_parity(
     native = _run_native(model_path)
     wasm = _run_wasm(model_path)
 
-    assert native["schema"] == "open_shogiai_osaval02_native_parity/v1"
-    assert wasm["schema"] == "open_shogiai_osaval02_wasm_parity/v1"
+    _validate_candidate_parity_document(native, "native")
+    _validate_candidate_parity_document(wasm, "Wasm")
+    assert native["schema"] == wasm["schema"] == OSAVAL02_PARITY_SCHEMA
     assert native["modelIdentity"] == wasm["modelIdentity"]
-    _assert_close(native["fixtures"], wasm["fixtures"], "native-wasm")
+    _assert_close(native, wasm, "native-wasm")
     assert len(native["fixtures"]) == len(corpus["fixtures"]) == 12
 
     fixtures = {fixture["fixtureId"]: fixture for fixture in corpus["fixtures"]}
@@ -144,6 +151,88 @@ def test_python_native_and_actual_wasm_parity(
         legal_moves = [row["move"] for row in observed["legalMoves"]]
         reference = infer_osaval02(model, fixture["sfen"], legal_moves, history)
         _assert_close(observed, reference, result["fixtureId"])
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        "open_shogiai_osaval02_native_parity/v1",
+        "open_shogiai_osaval02_wasm_parity/v1",
+    ],
+)
+def test_candidate_parity_rejects_stale_runtime_specific_schema(schema: str) -> None:
+    with pytest.raises(Phase10RCampaignError, match="schema is incompatible"):
+        _validate_candidate_parity_document(
+            {"schema": schema, "modelIdentity": {}, "fixtures": []}, "test"
+        )
+
+
+def test_candidate_parity_rejects_missing_schema() -> None:
+    with pytest.raises(Phase10RCampaignError, match="schema is missing"):
+        _validate_candidate_parity_document({"modelIdentity": {}, "fixtures": []}, "test")
+
+
+def test_candidate_parity_rejects_unsupported_schema_version() -> None:
+    with pytest.raises(Phase10RCampaignError, match="schema is incompatible"):
+        _validate_candidate_parity_document(
+            {
+                "schema": "open_shogiai_osaval02_parity/v2",
+                "modelIdentity": {},
+                "fixtures": [],
+            },
+            "test",
+        )
+
+
+def test_candidate_comparison_reports_a_real_schema_mismatch() -> None:
+    _, mismatches = _compare_json(
+        {"schema": OSAVAL02_PARITY_SCHEMA},
+        {"schema": "open_shogiai_osaval02_parity/v2"},
+    )
+    assert mismatches == ["root.schema"]
+
+
+@pytest.mark.parametrize("variant", [VARIANT_PAIR, VARIANT_PRIMARY])
+def test_completed_1m_candidate_native_wasm_schema_identity_and_numerical_parity(
+    variant: str,
+) -> None:
+    candidate_dir = ROOT / "local/phase10r-data/checkpoints/phase10r/1m" / variant
+    model_path = candidate_dir / f"{variant}.osaval02"
+    summary_path = candidate_dir / "training-summary.json"
+    if not model_path.is_file() or not summary_path.is_file():
+        pytest.skip("completed local Phase 10R 1M candidate is not present")
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    expected_sha256 = summary["artifact"]["sha256"]
+    assert hashlib.sha256(model_path.read_bytes()).hexdigest() == expected_sha256
+
+    native = _run_native(model_path)
+    wasm = _run_wasm(model_path)
+    _validate_candidate_parity_document(native, "native")
+    _validate_candidate_parity_document(wasm, "Wasm")
+    _assert_close(native, wasm, f"completed-1m-{variant}")
+    identity = native["modelIdentity"]
+    assert identity == wasm["modelIdentity"]
+    assert identity["formatVersion"] == 2
+    assert identity["variantId"] == variant
+    assert identity["artifactSha256"] == expected_sha256
+    assert identity["datasetManifestSha256"] == summary["manifest_sha256"]
+
+
+def test_generated_wasm_bindings_regenerate_deterministically() -> None:
+    bindings = sorted((ROOT / "bindings/wasm").glob("open_shogi_wasm*"))
+    before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in bindings}
+    for _ in range(2):
+        subprocess.run(
+            ["./scripts/build_wasm_web.sh", "check"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    after = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in bindings}
+    assert after == before
 
 
 def test_native_and_wasm_loaders_fail_closed_on_corruption(tmp_path: Path) -> None:

@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 
 import { WasmOsaval02Model, initSync } from "../bindings/wasm/open_shogi_wasm.js";
 
+const PARITY_SCHEMA = "open_shogiai_osaval02_parity/v1";
+
 const [modelArgument, corpusArgument] = process.argv.slice(2);
 if (!modelArgument || !corpusArgument || process.argv.length !== 4) {
   throw new Error("usage: osaval02_wasm_infer.mjs MODEL CORPUS");
@@ -51,7 +53,7 @@ try {
   });
   process.stdout.write(
     `${JSON.stringify({
-      schema: "open_shogiai_osaval02_wasm_parity/v1",
+      schema: PARITY_SCHEMA,
       modelIdentity: JSON.parse(model.identity()),
       fixtures,
     })}\n`,

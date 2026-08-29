@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 const MAX_CORPUS_BYTES: u64 = 1024 * 1024;
 const MAX_FIXTURES: usize = 128;
+const PARITY_SCHEMA: &str = "open_shogiai_osaval02_parity/v1";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -140,7 +141,7 @@ fn run() -> Result<(), String> {
         });
     }
     let output = ParityOutput {
-        schema: "open_shogiai_osaval02_native_parity/v1",
+        schema: PARITY_SCHEMA,
         model_identity: evaluator.identity(),
         fixtures: results,
     };

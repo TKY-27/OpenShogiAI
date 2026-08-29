@@ -162,6 +162,12 @@ truncation, size overflow, checksum mismatch, invalid scales, and non-finite ten
 Native path loading additionally requires one stable regular nonsymlink file read under the
 repository's anchored-file boundary. Browser loading accepts one bounded immutable byte array.
 
+The native and generated-Wasm parity report envelope uses the exact shared schema identifier
+`open_shogiai_osaval02_parity/v1`. The envelope has exactly `schema`, `modelIdentity`, and
+`fixtures` at its root. A missing schema, either legacy runtime-specific schema, any other version,
+or an incomplete model identity is incompatible and must be rejected before comparing inference
+values.
+
 The committed source-safe parity corpus contains synthetic rule states only and explicitly denies
 game records, evaluations, labels, and training examples. Each fixture binds the canonical
 three-field position SHA-256 and category/provenance metadata. Python, native Rust, and actual
