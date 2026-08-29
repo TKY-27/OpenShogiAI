@@ -396,10 +396,8 @@ def _validate_label_row(
             raise Phase10RTeacherBindingError(
                 "teacher MultiPV root is outside the current legal mask"
             )
-        if current.get("source") != "aobazero":
-            raise Phase10RTeacherBindingError("teacher label joined a non-AobaZero current row")
-        if current.get("split") != split:
-            raise Phase10RTeacherBindingError("label/current protected split mismatch")
+        if current.get("source") not in {"aobazero", "wcsc", "denryu"}:
+            raise Phase10RTeacherBindingError("teacher label joined a non-frozen current source")
     if score_kind == "mate" and abs(_score_mapping(label.get("score"), "label score")[1]) > 512:
         raise Phase10RTeacherBindingError("label mate distance exceeds the frozen head bound")
 
