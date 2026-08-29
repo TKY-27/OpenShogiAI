@@ -59,6 +59,10 @@ from open_shogi_training.phase10r_model import (
     expected_parameter_count,
     parse_osaval02,
 )
+from open_shogi_training.phase10r_teacher_binding import (
+    calibrate_teacher,
+    prepare_teacher_binding,
+)
 from open_shogi_training.phase10r_training import (
     Phase10RExample,
     Phase10RModel,
@@ -729,11 +733,19 @@ def _parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--root", type=Path, default=Path("."))
     prepare.add_argument("--scale", type=_parse_scale, required=True)
+    prepare_binding = subparsers.add_parser("prepare-teacher-binding")
+    prepare_binding.add_argument("--root", type=Path, default=Path("."))
+    prepare_binding.add_argument("--scale", type=_parse_scale, required=True)
     train = subparsers.add_parser("train")
     train.add_argument("--root", type=Path, default=Path("."))
     train.add_argument("--scale", type=_parse_scale, required=True)
     train.add_argument("--variant", choices=TRAIN_VARIANTS, required=True)
     train.add_argument("--resume", action="store_true")
+    calibrate = subparsers.add_parser("calibrate-teacher")
+    calibrate.add_argument("--root", type=Path, default=Path("."))
+    calibrate.add_argument("--scale", type=_parse_scale, required=True)
+    calibrate.add_argument("--variant", choices=TRAIN_VARIANTS, required=True)
+    calibrate.add_argument("--resume", action="store_true")
     evaluate = subparsers.add_parser("evaluate")
     evaluate.add_argument("--root", type=Path, default=Path("."))
     evaluate.add_argument("--scale", type=_parse_scale, required=True)
@@ -783,12 +795,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _write_receipt_and_return(root, command, command_argv, receipt)
     if command == "prepare":
         return _prepare(root, command_argv, args.scale)
+    if command == "prepare-teacher-binding":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: prepare_teacher_binding(root, args.scale),
+        )
     if command == "train":
         return _campaign_operation(
             root,
             command,
             command_argv,
             lambda: train_variant(
+                root,
+                args.scale,
+                args.variant,
+                resume=args.resume,
+                git_commit=_git(root, "rev-parse", "HEAD"),
+            ),
+        )
+    if command == "calibrate-teacher":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: calibrate_teacher(
                 root,
                 args.scale,
                 args.variant,
