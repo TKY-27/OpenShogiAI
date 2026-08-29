@@ -1,6 +1,6 @@
 # Phase 10R progress
 
-Updated: 2026-08-27 (Asia/Tokyo)
+Updated: 2026-08-29 (Asia/Tokyo)
 
 ## Current state
 
@@ -15,8 +15,14 @@ now `35%/45%/20%`; the invalid legacy preparation is preserved and marked
 1,000,000 examples with validated counts, hashes, repetition pressure, leakage, determinism, disk,
 and RSS evidence.
 
-Production training has not started. No teacher labeling, Arena, cross-play, self-play, final
-holdout evaluation, promotion, push, release, or deployment was performed.
+Both exact 1M training rungs completed from `1m-mixture-v2`. Candidate evaluation originally
+stopped fail-closed because the native and Wasm report wrappers exposed different `root.schema`
+identities. The wrapper contract now has one canonical versioned identity,
+`open_shogiai_osaval02_parity/v1`, and both existing candidates pass the unchanged OSAVAL02
+numerical tolerances across Python, native, and actual Wasm execution.
+
+No retraining, teacher labeling, hard-position selection, Arena, cross-play, self-play, final
+holdout inspection, promotion, push, release, or deployment was performed while closing this gate.
 
 ## Preparation evidence
 
@@ -45,6 +51,27 @@ holdout evaluation, promotion, push, release, or deployment was performed.
 - Local immutable preparation receipt:
   `local/phase10r-runs/20260827T100448.829117Z-prepare.json`
 
+## Candidate evaluation evidence
+
+- Evaluation receipt: `local/phase10r-runs/20260829T092040.933643Z-evaluate.json`
+- Receipt SHA-256: `81cadb096d6f4bc36635d29689391a538ef7c167381c0932a5cf98e7ebec66e4`
+- Evaluation output: `local/phase10r-data/evaluations/1m/evaluation.json`
+- Evaluation output SHA-256:
+  `91eb25990541165c1408c18f44cd18b57c457e056eba1040422cf58650e8d995`
+- Preparation manifest body SHA-256:
+  `3e36bf596ddb25356abad276745c3b2b2cae2bf01a38894f65d1a362b6481ecf`
+- `sparse-pair-policy-wdl` artifact SHA-256:
+  `6b7f2f4dc0bb013992460cf475f5e2e1f220da7fb09542175be367821f296f63`
+- `sparse-pair-policy-wdl` native/Wasm maximum absolute delta:
+  `2.220446049250313e-16` (`12` fixtures; passed).
+- `factorized-pair-triple-policy-score` artifact SHA-256:
+  `d2c9af492cb67be35433662b75673efa2c6fece3f0ba2457e281185469364453`
+- `factorized-pair-triple-policy-score` native/Wasm maximum absolute delta:
+  `4.547473508864641e-13` (`12` fixtures; passed).
+- Incremental native/Wasm parity suite: passed.
+- Candidate evaluation status: passed.
+- Expansion gate: `blocked_until_teacher_stages_and_arena`.
+
 ## Verification state
 
 - Focused mixture/execution/freeze/runner tests: passed (`26` tests).
@@ -52,14 +79,19 @@ holdout evaluation, promotion, push, release, or deployment was performed.
 - Versioned preparation self-validation: passed.
 - Frozen-hash validation: passed (`62` paths).
 - Leakage validation: passed (`528,570` effective records; zero effective cross-split groups).
-- Full `make check`: passed (`545` Python tests, `344` Rust tests, lint, boundary, license,
+- Full `make check`: passed (`556` Python tests, `344` Rust tests, lint, boundary, license,
   provenance, build, and deterministic Wasm binding check).
 - Exact Phase 10R preflight: passed; no failures; preparation control, same-seed proof, leakage,
   OSAVAL02 bounded backend probe, disk, memory, and thermal controls all passed.
+- Focused OSAVAL02 schema/parity suite: passed, including both completed 1M candidates, identical
+  identity fields, missing/stale/unsupported schema rejection, real mismatch detection, and
+  deterministic Wasm regeneration.
+- Exact existing-candidate evaluation with all-source-held-out, cross-runtime, and incremental
+  parity gates: passed.
 
 ## Next boundary
 
-Once final validation and local commits are complete, production training is technically unblocked
-at the preparation boundary. Training remains intentionally stopped until the existing Luna Goal is
-explicitly resumed. The first resumed action must re-run exact preflight against the committed clean
-tree before invoking any `train` command.
+The existing 1M candidates have passed the candidate evaluation gate. Execution stops here. Teacher
+dependent stages are `not_started`, and the broader expansion gate remains fail-closed until those
+stages and Arena are completed under a separately resumed goal. Do not re-run training or candidate
+evaluation when resuming from this boundary.
