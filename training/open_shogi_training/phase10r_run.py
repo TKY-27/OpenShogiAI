@@ -49,6 +49,10 @@ from open_shogi_training.phase10r_execution import (
     prepare_scale,
     validate_preparation,
 )
+from open_shogi_training.phase10r_lineage import (
+    completed_teacher_bound_candidates,
+    load_teacher_binding_control,
+)
 from open_shogi_training.phase10r_model import (
     VARIANT_PAIR,
     VARIANT_PRIMARY,
@@ -703,6 +707,20 @@ def _parse_scale(value: str) -> str:
     return value
 
 
+def _validate_teacher_binding(root: Path, scale: str) -> dict[str, Any]:
+    control = load_teacher_binding_control(root)
+    candidates = completed_teacher_bound_candidates(root, scale)
+    if not candidates:
+        raise Phase10RRunError("no completed teacher-bound candidate lineage exists")
+    return {
+        "schema": "open_shogiai_phase10r_teacher_binding_validation/v1",
+        "status": "passed",
+        "binding_version": control["binding_version"],
+        "scale": scale,
+        "candidates": candidates,
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -729,6 +747,9 @@ def _parser() -> argparse.ArgumentParser:
     label_hard.add_argument("--root", type=Path, default=Path("."))
     label_hard.add_argument("--scale", type=_parse_scale, required=True)
     label_hard.add_argument("--resume", action="store_true")
+    validate_binding = subparsers.add_parser("validate-teacher-binding")
+    validate_binding.add_argument("--root", type=Path, default=Path("."))
+    validate_binding.add_argument("--scale", type=_parse_scale, required=True)
     report = subparsers.add_parser("report")
     report.add_argument("--root", type=Path, default=Path("."))
     report.add_argument("--scale", type=_parse_scale, required=True)
@@ -807,6 +828,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resume=args.resume,
                 git_commit=_git(root, "rev-parse", "HEAD"),
             ),
+        )
+    if command == "validate-teacher-binding":
+        return _campaign_operation(
+            root,
+            command,
+            command_argv,
+            lambda: _validate_teacher_binding(root, args.scale),
         )
     if command == "report":
         return _report(root, command_argv, args.scale)

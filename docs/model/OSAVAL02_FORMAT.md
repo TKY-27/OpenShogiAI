@@ -186,3 +186,20 @@ OSAVAL01 remains a historical supported format for its existing consumers. It is
 fallback, migration source, or valid substitute for OSAVAL02. OSAVAL02 does not silently load an
 OSAVAL01 artifact, and this phase does not promote either Phase 10R candidate to default runtime
 champion.
+
+## 6. Teacher-bound candidate lineage
+
+The container's dataset/training-manifest hash and training-run reference identify an export, but
+they are not independently sufficient evidence that a candidate used the frozen teacher. A Phase
+10R artifact is teacher-bound only when a completed sibling
+`open_shogiai_phase10r_candidate_lineage/v1` manifest validates against
+`docs/model/phase10r-candidate-lineage.schema.json` and the live fail-closed validator. That
+manifest binds the immutable pretraining parent, teacher binary and evaluation files, options and
+search budget, score semantics, exact label manifest and rows, stage-3 checkpoint, stage-4 affine
+calibration, candidate artifact, and Python/native/Wasm plus incremental parity receipts.
+
+For a teacher-bound export, offset 224 contains the calibration-input-manifest file SHA-256 and
+offset 424 contains `phase10r-1m-{variant}-teacher-bound-v1`. The original stage-2 artifacts retain
+their existing preparation-manifest identity and remain pretraining-only. Missing, partial,
+unknown, drifted, or failed lineage cannot be inferred from weights or repaired by metadata-only
+mutation; it is rejected before select-hard authorization.

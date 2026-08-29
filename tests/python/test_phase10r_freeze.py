@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_frozen_phase10r_controls_and_hashes_validate() -> None:
     result = validate_phase10r(ROOT)
     assert result["status"] == "valid"
-    assert result["configs"] == 10
+    assert result["configs"] == 11
     assert result["approved_external_artifacts"] == 33
     assert result["public_weight_sources"] == 0
 

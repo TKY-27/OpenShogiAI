@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-shogi.ai/schemas/phase10r-candidate-lineage-v1.json",
+  "title": "OpenShogiAI Phase 10R teacher-bound candidate lineage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "binding_version",
+    "scale",
+    "variant_id",
+    "created_at_utc",
+    "git_commit",
+    "parent",
+    "teacher_binding",
+    "stages",
+    "candidate",
+    "acceptance"
+  ],
+  "properties": {
+    "schema": {"const": "open_shogiai_phase10r_candidate_lineage/v1"},
+    "status": {"const": "completed"},
+    "binding_version": {"const": "teacher-bound-v1"},
+    "scale": {"const": "1m"},
+    "variant_id": {
+      "enum": [
+        "sparse-pair-policy-wdl",
+        "factorized-pair-triple-policy-score"
+      ]
+    },
+    "created_at_utc": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$",
+      "type": "string"
+    },
+    "git_commit": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+    "parent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preparation_manifest",
+        "training_receipt",
+        "stage2_checkpoint",
+        "stage2_artifact"
+      ],
+      "properties": {
+        "preparation_manifest": {"$ref": "#/$defs/artifactRef"},
+        "training_receipt": {"$ref": "#/$defs/artifactRef"},
+        "stage2_checkpoint": {"$ref": "#/$defs/artifactRef"},
+        "stage2_artifact": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "teacher_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity_sha256",
+        "control",
+        "label_manifest",
+        "labels",
+        "benchmark",
+        "calibration_input_manifest"
+      ],
+      "properties": {
+        "identity_sha256": {"$ref": "#/$defs/sha256"},
+        "control": {"$ref": "#/$defs/artifactRef"},
+        "label_manifest": {"$ref": "#/$defs/artifactRef"},
+        "labels": {"$ref": "#/$defs/artifactRef"},
+        "benchmark": {"$ref": "#/$defs/artifactRef"},
+        "calibration_input_manifest": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/stage"},
+            {
+              "properties": {
+                "order": {"const": 3},
+                "stage_id": {"const": "packed_sfen_value_and_ranking"}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/stage"},
+            {
+              "properties": {
+                "order": {"const": 4},
+                "stage_id": {"const": "approved_teacher_calibration"}
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "osaval02", "parity_receipt"],
+      "properties": {
+        "artifact": {"$ref": "#/$defs/artifactRef"},
+        "osaval02": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "variant_id",
+            "dataset_manifest_sha256",
+            "training_run_reference"
+          ],
+          "properties": {
+            "variant_id": {"type": "string", "minLength": 1},
+            "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+            "training_run_reference": {
+              "pattern": "^phase10r-1m-[a-z0-9-]+-teacher-bound-v1$",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        },
+        "parity_receipt": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "parent_immutable",
+        "new_teacher_calls",
+        "forbidden_split_rows",
+        "calibration_scale",
+        "calibration_bias",
+        "python_native_wasm_parity",
+        "incremental_parity",
+        "source_held_out_regression_maximum",
+        "calibration_ece_regression",
+        "new_tactical_failures",
+        "throughput_floor_passed"
+      ],
+      "properties": {
+        "status": {"const": "passed"},
+        "parent_immutable": {"const": true},
+        "new_teacher_calls": {"const": 0},
+        "forbidden_split_rows": {"const": 0},
+        "calibration_scale": {"exclusiveMinimum": 0, "type": "number"},
+        "calibration_bias": {"type": "number"},
+        "python_native_wasm_parity": {"const": "passed"},
+        "incremental_parity": {"const": "passed"},
+        "source_held_out_regression_maximum": {
+          "maximum": 0.01,
+          "minimum": 0,
+          "type": "number"
+        },
+        "calibration_ece_regression": {
+          "maximum": 0.01,
+          "minimum": -1,
+          "type": "number"
+        },
+        "new_tactical_failures": {"const": 0},
+        "throughput_floor_passed": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\\\]+$",
+          "type": "string"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"minimum": 1, "type": "integer"}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "stage_id", "status", "input_manifest", "output"],
+      "properties": {
+        "order": {"enum": [3, 4]},
+        "stage_id": {
+          "enum": [
+            "packed_sfen_value_and_ranking",
+            "approved_teacher_calibration"
+          ]
+        },
+        "status": {"const": "passed"},
+        "input_manifest": {"$ref": "#/$defs/artifactRef"},
+        "output": {"$ref": "#/$defs/artifactRef"}
+      }
+    }
+  }
+}

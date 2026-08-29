@@ -46,3 +46,26 @@ test proves both behaviors with a temporary repository. This changes neither
 the teacher identity or options nor any Phase 10R data, model, split, target,
 resource, offline, Arena, self-play, or promotion control; it only makes the
 existing ignored installation contract executable under `make check`.
+
+## 2026-08-29 teacher-binding sequence repair
+
+The restored Apery environment exposed a second, separate execution gap. Both completed 1M runs
+were intentionally stage-2-only pretraining checkpoints, and their receipts explicitly record
+that teacher-dependent stages were not started. The frozen curriculum already requires ranking
+and approved-teacher calibration, but the execution CLI had no command between evaluation and
+select-hard to create their versioned teacher-bound children. The select-hard identity gate was
+therefore correct; the sequence was incomplete.
+
+`configs/phase10r/teacher-binding.yaml` now pins the exact pretraining parents, Apery binary/KKP/
+KPP/options/search identity, score semantics, labels-v2 artifacts, same-split calibration rows,
+zero-new-label budget, one-epoch stage-3 configuration, monotonic stage-4 calibration, versioned
+outputs, and acceptance gates. A new closed lineage schema and live validator reject metadata-only
+rebinding, parent/label/teacher drift, forbidden split use, unchanged pretraining weights, missing
+parity, or failed gates. The original weights remain untouched. No architecture, model matrix,
+source approval, protected split, target, threshold, resource, Arena/self-play, or promotion
+control changes.
+
+The frozen-control and implementation hash registries are refreshed because the new config,
+schema, validator, tests, report, prompt, and narrow runner/gate integration are now part of the
+reviewed boundary. `PHASE_10R_TEACHER_BINDING_REPAIR.md` records the per-file rationale and the
+exact next Luna execution; no calibration or select-hard execution occurred in this repair.

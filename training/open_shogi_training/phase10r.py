@@ -31,6 +31,7 @@ CONFIG_SCHEMAS: Final = {
     "configs/phase10r/resource-budget.yaml": "open_shogiai_phase10r_resource_budget/v1",
     "configs/phase10r/holdout-policy.yaml": "open_shogiai_phase10r_holdout_policy/v2",
     "configs/phase10r/identity.yaml": "open_shogiai_phase10r_identity/v2",
+    "configs/phase10r/teacher-binding.yaml": "open_shogiai_phase10r_teacher_binding/v1",
 }
 FROZEN_PATHS: Final = frozenset(
     {
@@ -40,6 +41,7 @@ FROZEN_PATHS: Final = frozenset(
         "docs/model/PHASE10R_ABLATION_PLAN.md",
         "docs/model/OSAVAL02_FORMAT.md",
         "docs/model/osaval02-parity-corpus.schema.json",
+        "docs/model/phase10r-candidate-lineage.schema.json",
         *CONFIG_SCHEMAS,
         "configs/phase10r/source-registry.yaml",
         "configs/phase10r/normalization.yaml",
@@ -52,11 +54,13 @@ FROZEN_PATHS: Final = frozenset(
         "training/open_shogi_training/phase10r_run.py",
         "training/open_shogi_training/phase10r_execution.py",
         "training/open_shogi_training/phase10r_campaign.py",
+        "training/open_shogi_training/phase10r_lineage.py",
         "training/open_shogi_training/data/phase10r_scan.py",
         "training/open_shogi_training/data/phase10r_scan_v2.py",
         "tests/python/test_phase10r_freeze.py",
         "tests/python/test_phase10r_run.py",
         "tests/python/test_phase10r_execution.py",
+        "tests/python/test_phase10r_lineage.py",
         "tests/python/models/test_osaval02.py",
         "tests/python/models/test_osaval02_parity.py",
         "tests/fixtures/osaval02/parity-corpus.json",
@@ -84,9 +88,11 @@ FROZEN_PATHS: Final = frozenset(
         "PHASE_10R_WCSC_REPLAY_REPORT.md",
         "PHASE_10R_COLLISION_RESOLUTION.md",
         "prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md",
+        "prompts/LUNA_PHASE10R_TEACHER_BINDING_EXECUTION.md",
         "training/open_shogi_training/data/phase10r_identity.py",
         "tests/python/data/test_phase10r_identity.py",
         "scripts/build_phase10r_collision_resolution.py",
+        "PHASE_10R_TEACHER_BINDING_REPAIR.md",
     }
 )
 EXPECTED_SCALES: Final = (
@@ -141,6 +147,7 @@ def validate_phase10r(root: Path, *, verify_hashes: bool = True) -> dict[str, An
     _validate_targets(configs["configs/phase10r/target-semantics.yaml"])
     _validate_models(configs["configs/phase10r/model-matrix.yaml"])
     _validate_curriculum(configs["configs/phase10r/curriculum.yaml"])
+    _validate_teacher_binding(configs["configs/phase10r/teacher-binding.yaml"])
     _validate_arena(configs["configs/phase10r/arena-gates.yaml"])
     _validate_resources(configs["configs/phase10r/resource-budget.yaml"])
     _validate_holdout(configs["configs/phase10r/holdout-policy.yaml"], registry)
@@ -391,6 +398,78 @@ def _validate_curriculum(curriculum: Mapping[str, Any]) -> None:
         or expansion.get("time_alone_is_stopping_condition") is not False
     ):
         raise Phase10RValidationError("time cannot be a stopping condition")
+
+
+def _validate_teacher_binding(binding: Mapping[str, Any]) -> None:
+    if (
+        binding.get("repair_case") != "execution_sequence_skipped_existing_teacher_binding_stage"
+        or binding.get("binding_version") != "teacher-bound-v1"
+        or binding.get("scale") != "1m"
+    ):
+        raise Phase10RValidationError("teacher-binding repair case or version changed")
+    pretraining = binding.get("pretraining")
+    identity = binding.get("teacher_binding_identity")
+    calibration = binding.get("calibration")
+    acceptance = binding.get("acceptance")
+    if not all(
+        isinstance(value, Mapping) for value in (pretraining, identity, calibration, acceptance)
+    ):
+        raise Phase10RValidationError("teacher-binding control is incomplete")
+    preparation = pretraining.get("preparation_manifest")
+    variants = pretraining.get("variants")
+    if (
+        not isinstance(preparation, Mapping)
+        or preparation.get("manifest_sha256")
+        != "3e36bf596ddb25356abad276745c3b2b2cae2bf01a38894f65d1a362b6481ecf"
+        or not isinstance(variants, list)
+        or [item.get("variant_id") for item in variants if isinstance(item, Mapping)]
+        != ["sparse-pair-policy-wdl", "factorized-pair-triple-policy-score"]
+    ):
+        raise Phase10RValidationError("teacher-binding pretraining parents changed")
+    if (
+        not isinstance(identity.get("identity_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", identity["identity_sha256"]) is None
+    ):
+        raise Phase10RValidationError("teacher-binding identity hash is invalid")
+    teacher = identity.get("teacher")
+    semantics = identity.get("score_semantics")
+    labels = identity.get("labels")
+    if not all(isinstance(value, Mapping) for value in (teacher, semantics, labels)):
+        raise Phase10RValidationError("teacher-binding identity is incomplete")
+    if (
+        teacher.get("name") != "Apery"
+        or teacher.get("version") != "2.0.0"
+        or teacher.get("binary", {}).get("sha256")
+        != "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403"
+        or [item.get("sha256") for item in teacher.get("eval_files", [])]
+        != [
+            "422b23bced817ecb3430adf1d2621f5a7934263b4e46673ab80cf34633537fa5",
+            "4906c48c201a102ec02217216929c20f73ab364e79be26e6213a02c04e454805",
+        ]
+        or teacher.get("search")
+        != {
+            "nodes": 25_000,
+            "multipv": 3,
+            "threads": 4,
+            "hash_mib": 1024,
+            "concurrency": 1,
+        }
+        or semantics.get("perspective") != "current_side_to_move_at_root"
+        or labels.get("rows", {}).get("sha256")
+        != "195850b3ae7b1dce8a98185f2ba17f794a0200c92eafc672e11674d17d8cd3f4"
+    ):
+        raise Phase10RValidationError("canonical teacher-binding identity changed")
+    if (
+        calibration.get("expected_rows")
+        != {"train": 6570, "validation": 1880, "validation_cp_for_affine_fit": 1831}
+        or calibration.get("label_budget")
+        != {"rung_cap": 10_000, "existing_labels": 10_000, "new_teacher_calls": 0}
+        or [stage.get("stage_id") for stage in calibration.get("stages", [])]
+        != ["packed_sfen_value_and_ranking", "approved_teacher_calibration"]
+        or acceptance.get("select_hard_requires_completed_lineage") is not True
+        or acceptance.get("require_python_native_wasm_osaval02_parity") is not True
+    ):
+        raise Phase10RValidationError("teacher calibration stages or acceptance gates changed")
 
 
 def _validate_arena(arena: Mapping[str, Any]) -> None:

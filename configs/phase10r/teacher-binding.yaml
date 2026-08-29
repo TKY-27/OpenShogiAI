@@ -1,0 +1,142 @@
+schema: open_shogiai_phase10r_teacher_binding/v1
+frozen_as_of: "2026-08-29"
+repair_case: execution_sequence_skipped_existing_teacher_binding_stage
+binding_version: teacher-bound-v1
+scale: 1m
+pretraining:
+  preparation_manifest:
+    path: local/phase10r-data/phase10r-prepared/1m-mixture-v2/preparation-manifest.json
+    manifest_sha256: 3e36bf596ddb25356abad276745c3b2b2cae2bf01a38894f65d1a362b6481ecf
+    file_sha256: 9dddab33fa50ec070f267f43ea12ebab1c1931e16c8826219eb50b85d8061d2b
+  variants:
+    - variant_id: sparse-pair-policy-wdl
+      training_receipt:
+        path: local/phase10r-runs/20260827T204646.198384Z-train.json
+        sha256: 9c5e4a7040526a4b1b0756694eeab32679c6f790b21afa7d56cb9fb63f241e35
+      stage2_checkpoint:
+        path: local/phase10r-data/checkpoints/phase10r/1m/sparse-pair-policy-wdl/source_specific_wdl_value_pretraining/last.pt
+        sha256: 6a5048ae1e7d230dbb073d701fad6ac7acab6d9dc9637480282c5e0bc8ece48f
+      stage2_artifact:
+        path: local/phase10r-data/checkpoints/phase10r/1m/sparse-pair-policy-wdl/sparse-pair-policy-wdl.osaval02
+        sha256: 6b7f2f4dc0bb013992460cf475f5e2e1f220da7fb09542175be367821f296f63
+    - variant_id: factorized-pair-triple-policy-score
+      training_receipt:
+        path: local/phase10r-runs/20260828T193210.394295Z-train.json
+        sha256: a1b0bd31150f5e27883c3cb3a1565d6dfc85870bc3a3879023fce4991e23352e
+      stage2_checkpoint:
+        path: local/phase10r-data/checkpoints/phase10r/1m/factorized-pair-triple-policy-score/source_specific_wdl_value_pretraining/last.pt
+        sha256: 47c43cd44f6258973d3262931d96d46e4e36f55b456249647fe086c4253c5ed8
+      stage2_artifact:
+        path: local/phase10r-data/checkpoints/phase10r/1m/factorized-pair-triple-policy-score/factorized-pair-triple-policy-score.osaval02
+        sha256: d2c9af492cb67be35433662b75673efa2c6fece3f0ba2457e281185469364453
+teacher_binding_identity:
+  identity_sha256: 781a45570ce6c88e29e4c9f7f3acb96e3981bb74d7da6fb10ff80cdd76f51cbf
+  teacher:
+    name: Apery
+    version: 2.0.0
+    config_path: configs/teacher/apery-v2.0.0.yaml
+    config_file_sha256: b04b4ab4ec5c434a3521a2840dfb6569900be18b6cf3116bb43186d2e6f15e5d
+    config_semantic_sha256: 50ecf1b0a3395c0c00208b2d4bad12bb5d16c1f2ec49b8f66fa234a8ab847ba3
+    install_manifest:
+      path: local/teacher/build/apery-v2.0.0/install-manifest.json
+      sha256: 778a38468712296ed968a1fccf2d923779d8345657fe70b783874a1ea9a3cc6f
+    binary:
+      path: local/teacher/build/apery-v2.0.0/apery_2.0.0/target/release/apery
+      sha256: 8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403
+      size: 2364896
+    eval_files:
+      - path: local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617/KKP.bin
+        sha256: 422b23bced817ecb3430adf1d2621f5a7934263b4e46673ab80cf34633537fa5
+        size: 40625712
+      - path: local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617/KPP.bin
+        sha256: 4906c48c201a102ec02217216929c20f73ab364e79be26e6213a02c04e454805
+        size: 776402496
+    options:
+      Book_Enable: false
+      Eval_Dir: eval/20190617
+      Eval_Hash: 256
+      MultiPV: 3
+      Threads: 4
+      USI_Hash: 1024
+      USI_Ponder: false
+    search:
+      nodes: 25000
+      multipv: 3
+      threads: 4
+      hash_mib: 1024
+      concurrency: 1
+  score_semantics:
+    perspective: current_side_to_move_at_root
+    cp_unit: openshogiai_centipawn
+    mate_namespace_owned_by_search: true
+    score_transform: signed_log1p_cp_div_log1p_3000
+    target_semantics_path: configs/phase10r/target-semantics.yaml
+    target_semantics_sha256: bafe7ba97319fa12d0c7a8ef3e3634fe033926fa77fcb781b67cd8ab12dda3bb
+  labels:
+    manifest:
+      path: artifacts/phase4/teacher/labels-v2/manifest.json
+      sha256: edeab652bd825410f46bab3010d3e8a017f33cd281cd0f28329d8eaab2a2cb54
+    rows:
+      path: artifacts/phase4/teacher/labels-v2/labels.jsonl
+      sha256: 195850b3ae7b1dce8a98185f2ba17f794a0200c92eafc672e11674d17d8cd3f4
+      records: 10000
+    benchmark:
+      path: artifacts/phase4/teacher/benchmark-v3.json
+      sha256: 0da0d79cc7bdff3902a9dc5b882dcda4248efa0837328f6dfbe8577d10722223
+calibration:
+  source_lane: openshogiai_apery_teacher
+  join_key: canonical_sfen
+  approved_current_splits: [train, validation]
+  split_rule: label_split_must_equal_current_phase10r_split
+  forbidden_splits: [public_test, internal_test, source_held_out, final_holdout]
+  expected_rows:
+    train: 6570
+    validation: 1880
+    validation_cp_for_affine_fit: 1831
+  exclusions:
+    phase4_test: 1064
+    absent_from_current_preparation: 467
+    split_mismatch: 19
+  label_budget:
+    rung_cap: 10000
+    existing_labels: 10000
+    new_teacher_calls: 0
+  stages:
+    - order: 3
+      stage_id: packed_sfen_value_and_ranking
+      input_split: train
+      epochs: 1
+      batch_size: 128
+      learning_rate: 0.0001
+      weight_decay: 0.0001
+      seed: 20260729
+      packed_sfen_value_lane: disabled_no_approved_source
+      heads: [candidate_ranking, score_when_available, mate_kind_when_available, mate_distance_when_available]
+      ranking_semantics: pairwise_or_listwise_over_teacher_returned_contiguous_multipv_prefix
+    - order: 4
+      stage_id: approved_teacher_calibration
+      input_split: validation
+      method: positive_monotonic_affine
+      fit_inputs:
+        sparse-pair-policy-wdl: wdl_log_odds
+        factorized-pair-triple-policy-score: direct_inverse_transformed_score_cp
+      fit_target: apery_cp_current_side_to_move
+      refit_after_selection_or_arena: false
+  output:
+    directory_template: local/phase10r-data/checkpoints/phase10r/{scale}/{variant}/teacher-bound-v1
+    lineage_filename: candidate-lineage.json
+    pretraining_artifacts_are_immutable: true
+acceptance:
+  require_completed_stage3_checkpoint: true
+  require_completed_stage4_calibration: true
+  require_positive_finite_calibration_scale: true
+  require_zero_new_teacher_calls: true
+  require_exact_parent_and_label_hashes: true
+  require_no_forbidden_split_rows: true
+  require_python_native_wasm_osaval02_parity: true
+  require_incremental_full_recompute_unmake_parity: true
+  require_source_held_out_absolute_regression_at_most: 0.01
+  require_calibration_ece_absolute_regression_at_most: 0.01
+  require_zero_new_tactical_failures: true
+  require_variant_throughput_floor: true
+  select_hard_requires_completed_lineage: true

@@ -1139,9 +1139,23 @@ def _teacher_identity(root: Path) -> dict[str, Any]:
 def select_hard(root: Path, scale: str, *, git_commit: str) -> dict[str, Any]:
     _manifest_identity(root, scale)
     teacher = _teacher_identity(root)
+    from open_shogi_training.phase10r_lineage import (
+        Phase10RLineageError,
+        completed_teacher_bound_candidates,
+    )
+
+    try:
+        candidates = completed_teacher_bound_candidates(root, scale)
+    except Phase10RLineageError as error:
+        raise _failure("teacher-bound candidate lineage is invalid", error) from error
+    if not candidates:
+        raise Phase10RCampaignError(
+            "hard-example selection is not authorized without a completed teacher-bound candidate"
+            f" ({teacher['name']} {teacher['version']})"
+        )
     raise Phase10RCampaignError(
-        "hard-example selection is not authorized without a completed teacher-bound candidate"
-        f" ({teacher['name']} {teacher['version']})"
+        "teacher-bound candidate gate passed, but hard-example selection execution is outside "
+        "the bounded teacher-binding repair"
     )
 
 
