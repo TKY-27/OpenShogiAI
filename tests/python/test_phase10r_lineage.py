@@ -14,7 +14,7 @@ from open_shogi_training.phase10r_lineage import (
     load_teacher_binding_control,
     validate_candidate_lineage,
 )
-from open_shogi_training.phase10r_model import VARIANT_PAIR
+from open_shogi_training.phase10r_model import VARIANT_PAIR, VARIANT_PRIMARY
 from open_shogi_training.phase10r_training import (
     CHECKPOINT_SCHEMA,
     Phase10RModel,
@@ -61,7 +61,16 @@ def test_live_teacher_binding_control_proves_case3_and_exact_parents() -> None:
         "validation_cp_for_affine_fit": 1831,
     }
     assert control["calibration"]["label_budget"]["new_teacher_calls"] == 0
-    assert completed_teacher_bound_candidates(ROOT, "1m") == []
+    candidates = completed_teacher_bound_candidates(ROOT, "1m")
+    assert {candidate["variant_id"] for candidate in candidates} == {
+        VARIANT_PAIR,
+        VARIANT_PRIMARY,
+    }
+    assert all(
+        candidate["teacher_binding"]["identity_sha256"]
+        == control["teacher_binding_identity"]["identity_sha256"]
+        for candidate in candidates
+    )
 
 
 def test_candidate_lineage_json_schema_is_closed_and_requires_teacher_evidence() -> None:
