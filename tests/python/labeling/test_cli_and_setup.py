@@ -123,6 +123,42 @@ def test_apery_setup_is_pinned_local_and_never_uses_privilege_or_extractall() ->
     assert "map(Path, sys.argv[1:])" not in script
 
 
+def test_repository_boundary_allows_ignored_teacher_storage_but_not_tracking(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    for relative in (
+        "bindings/wasm/open_shogi_wasm.d.ts",
+        "bindings/wasm/open_shogi_wasm.js",
+        "bindings/wasm/open_shogi_wasm_bg.wasm",
+        "bindings/wasm/open_shogi_wasm_bg.wasm.d.ts",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"placeholder")
+    teacher_payload = root / "local/teacher/evidence.ckpt"
+    teacher_payload.parent.mkdir(parents=True)
+    teacher_payload.write_bytes(b"ignored local teacher payload")
+
+    boundary = PROJECT_ROOT / "scripts/check_repository_boundaries.sh"
+    accepted = subprocess.run(
+        [str(boundary), str(root)], capture_output=True, text=True, check=False
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    subprocess.run(
+        ["git", "-C", str(root), "add", "-f", "local/teacher/evidence.ckpt"],
+        check=True,
+    )
+    rejected = subprocess.run(
+        [str(boundary), str(root)], capture_output=True, text=True, check=False
+    )
+    assert rejected.returncode != 0
+    assert "tracked teacher artifact" in rejected.stderr
+
+
 def test_every_embedded_setup_python_program_compiles() -> None:
     script = (PROJECT_ROOT / "scripts/setup_teacher_apery.sh").read_text(encoding="utf-8")
     programs = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", script, flags=re.DOTALL)

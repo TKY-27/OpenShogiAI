@@ -2,7 +2,24 @@
 
 set -eu
 
-project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+case "$#" in
+    0)
+        project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+        ;;
+    1)
+        project_root=$(CDPATH= cd -- "$1" && pwd)
+        ;;
+    *)
+        echo "usage: $0 [project-root]" >&2
+        exit 2
+        ;;
+esac
+
+tracked_teacher=$(git -C "$project_root" ls-files -- 'local/teacher' 'local/teacher/**')
+if [ -n "$tracked_teacher" ]; then
+    echo "FAIL tracked teacher artifact under local/teacher" >&2
+    exit 1
+fi
 
 python3.12 - "$project_root" <<'PY'
 from __future__ import annotations
@@ -24,6 +41,7 @@ ignored_parts = {
 ignored_local_artifact_roots = {
     ("local", "phase10r-data"),
     ("local", "phase10r-runs"),
+    ("local", "teacher"),
 }
 forbidden_roots = {"node_modules", "package-lock.json", "package.json", "web"}
 ui_suffixes = {".css", ".html", ".tsx"}

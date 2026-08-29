@@ -34,3 +34,15 @@ uses deterministic largest-remainder allocation over normalized target shares an
 records realized quotas and repetition pressure in its immutable manifest. The run stops before any
 teacher-dependent hard-example labeling until the rights-gated Apery binary
 and evaluation-file identities are present.
+
+## 2026-08-29 ignored teacher-storage boundary repair
+
+Restoring the exact rights-gated Apery install exposed an implementation-only
+boundary mismatch: the frozen teacher configuration and setup procedure require
+the ignored `local/teacher` root, while the repository boundary audit treated
+that root as forbidden. The audit now explicitly skips that local payload root
+and independently rejects any tracked path beneath it. The added regression
+test proves both behaviors with a temporary repository. This changes neither
+the teacher identity or options nor any Phase 10R data, model, split, target,
+resource, offline, Arena, self-play, or promotion control; it only makes the
+existing ignored installation contract executable under `make check`.
