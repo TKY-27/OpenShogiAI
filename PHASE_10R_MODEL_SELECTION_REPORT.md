@@ -20,14 +20,14 @@ Decision order: mandatory correctness/tactical gates, aggregate equal-wall-clock
 - Repository: OpenShogiAI; branch: codex/phase10r-execution.
 - Expected initial HEAD: b9514593ce2bf9f30626853d4572f70e32684100; initial worktree was verified clean.
 - Runtime measurement HEAD: b8fa5c2ca26bb7ab2ad6789468585bb7f0764cb8.
-- Frozen controls manifest: configs/phase10r/frozen-controls.sha256 (SHA-256 001965b51818d5ee3d5fa29d98306b280c68965b451cb591926b00fbd9cbc10c, 7116 bytes); all 68 entries match.
-- Implementation hash manifest: configs/phase10r/phase10r-implementation.sha256 (SHA-256 464e3ae7079bf22f652d18af69c28c04664e6b8a03ce9c2dd87f19bc9191504a, 7126 bytes); all entries match.
+- Frozen controls manifest: configs/phase10r/frozen-controls.sha256 (SHA-256 6231465fdb8feb1355d64710732570d594f5ed5a8079ef7de1f62aa6f5734200, 7116 bytes); all 68 entries match after the gate repair.
+- Implementation hash manifest: configs/phase10r/phase10r-implementation.sha256 (SHA-256 976fed970046bcc79a7490af8432f3ca664db8f8419efc068ddb59e36a8146ad, 7126 bytes); all entries match after the gate repair.
 - Implementation commits after the expected HEAD: d0e1b8502f9c6306fcce6fcfd4ccebcfd6b42203, bff7ae18d51a4d48215b0c5845bfcd6f2fc95005, b7bfc7419cdb892152b482b00f1df2cbbd1096a7, 714e07b56c9bff4f3b54b9fc06ce5bbf69fbfb8e, 222aa63dd518330ddec1c2efe70a9d1746f5396a, 101662232299558230595a340565410ba1d71445, 8a7b601c308742e87044b1dbdfd1ef5e1b8f2cb3, and b8fa5c2ca26bb7ab2ad6789468585bb7f0764cb8.
 
 The production OSAVAL02 search/tactical adapter is shared across native Rust, CLI/USI, and Wasm. It strictly loads OSAVAL02, supports both frozen candidate variants, preserves current-side-to-move score/mate semantics, and has no OSAVAL01 fallback.
 - CLI: target/release/open-shogi-cli (SHA-256 54a8aeae7a1148c6cadc64fe72cb6d43a7d5da651901297ee61cfba5d7e581fc, 4069056 bytes).
-- Generated Wasm: bindings/wasm/open_shogi_wasm_bg.wasm (SHA-256 0d5c38eb55ae47ce371c119d6f9730ddebd36f200f870609a90330a41d019982, 714258 bytes).
-- Frozen OSAVAL02 core source SHA-256: 4bdd5c42969410ec8996c571e6dfc0357ba3396d50a57385f34299aea33ede9b.
+- Generated Wasm: bindings/wasm/open_shogi_wasm_bg.wasm (SHA-256 1e4291d611fa029d1414d88b434fb80b1fbc73407d2c019a99f76861adc1fb0c, 714258 bytes).
+- Frozen OSAVAL02 core source SHA-256: b23219a7481aa5d72ec887e89fd7e724588b56159ebbc65d82e4b29a164000cc.
 - Frozen Wasm source binding SHA-256: e525a5800b3def8cfbc9026cd24ca9822a235fb2ec35b6970a11c118dfdbcf4d.
 
 ## Data and teacher identity
@@ -171,7 +171,7 @@ Raw Arena aggregate: local/phase10r-selection/arena-results.json (SHA-256 89f4f3
 ## Receipts and durable evidence
 
 - Machine-readable manifest: PHASE_10R_MODEL_SELECTION_MANIFEST.json, SHA-256 b6b373329718755aa7ad569b195ea261c8968a9a8ea0380f815490b88bcfebcf.
-- Selected configuration: PHASE_10R_SELECTED_ARCHITECTURE.yaml, SHA-256 9b495b141000de5a6a97ca7cb4b703226639fe9f5ba63850867bbd43767ef977.
+- Selected configuration: PHASE_10R_SELECTED_ARCHITECTURE.yaml, SHA-256 b2923df5addeb247d4c8969bb0295a7af42309a125067ac4504eb115156ce8d4.
 - Existing run-receipt inventory: 50 JSON receipts under local/phase10r-runs (19 passed, 31 blocked), all individually hashed in the machine-readable manifest. Blocked receipts are preserved history and are not selection evidence.
 - The first Arena attempt had transient report-flush/partial capped-pair failures; those reports were recoverably quarantined. The final current Arena result is the only counted campaign and was independently validated.
 

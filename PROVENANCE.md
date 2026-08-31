@@ -28,14 +28,16 @@ commits in this clean history.
 
 The versioned Wasm module was subsequently regenerated from the repository's own Rust source with
 the locked Cargo graph and `wasm-bindgen 0.2.127`. Its current SHA-256 is
-`f5a973474b1de3eea89578bbaa75ff4a6ad0f64fc23b4e150eb4f823ea18de3a`; `make wasm-web-check`
+`1e4291d611fa029d1414d88b434fb80b1fbc73407d2c019a99f76861adc1fb0c`; `make wasm-web-check`
 reproduces and verifies the complete binding set.
 
 The 2026-08-22 regeneration changed only because the project-owned adapter gained OSAVAL02 model
-construction, identity inspection, and inference. The four binding hashes are d.ts
+construction, identity inspection, and inference. The 2026-09-01 release-gate repair then
+regenerated the same bindings through the canonical deterministic process after minimal lint,
+boundary, and YAML gate corrections. The four current binding hashes are d.ts
 `8b899de7246585f5c7ccafe0b5b2dde012eec0af12a8032d5d4e5741be9cf063`, JavaScript
 `8d36745850bb91e90f93436a9c40d833686cca6c1232ab2c7c9346a59e109023`, Wasm
-`f5a973474b1de3eea89578bbaa75ff4a6ad0f64fc23b4e150eb4f823ea18de3a`, and Wasm d.ts
+`1e4291d611fa029d1414d88b434fb80b1fbc73407d2c019a99f76861adc1fb0c`, and Wasm d.ts
 `efb20b72f02808e77a8baed92fc80fa2f3e1c9b8ce0709f2cd49ed7259933068`. No external code, model
 weight, dataset, or private-history object was introduced.
 

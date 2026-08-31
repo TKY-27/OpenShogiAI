@@ -26,8 +26,8 @@ frozen_runtime:
   feature_schema_sha256: fb5d69c96ae45ed308ee18ab7fd16d4fbefe0f5778e0b0ee2144879bcc7881df
   input_normalization_sha256: b19dea246a17e059010418f2ac04b5a75fb1e21a30ba050159e539a9f5f69185
   move_index_sha256: 096b227cadae6e585977b688495f261b163ebd7d3b4d2cc7276555a1b297de2a
-  phase10r_frozen_controls_sha256: 001965b51818d5ee3d5fa29d98306b280c68965b451cb591926b00fbd9cbc10c
-  phase10r_implementation_manifest_sha256: 464e3ae7079bf22f652d18af69c28c04664e6b8a03ce9c2dd87f19bc9191504a
+  phase10r_frozen_controls_sha256: 6231465fdb8feb1355d64710732570d594f5ed5a8079ef7de1f62aa6f5734200
+  phase10r_implementation_manifest_sha256: 976fed970046bcc79a7490af8432f3ca664db8f8419efc068ddb59e36a8146ad
 
 teacher_binding:
   binding_config: configs/phase10r/teacher-binding.yaml
@@ -55,7 +55,7 @@ selected_artifact:
 selection_evidence:
   mandatory_gates: passed
   aggregate_equal_wall_clock_vs_handcrafted: sparse score_rate 0.05785714285714286 over 1400 games; factorized score_rate 0.055714285714285716 over 1400 games
-  direct_head_to_head: sparse 293-5-92 over 400 games; 10 max_plies terminations excluded from WDL denominator; paired_bootstrap_95_ci: [0.7173913043478261, 0.7971576227390181]
+  direct_head_to_head: "sparse 293-5-92 over 400 games; 10 max_plies terminations excluded from WDL denominator; paired_bootstrap_95_ci: [0.7173913043478261, 0.7971576227390181]"
   extra_seed_escalation: not_triggered
   sol_review: not_used
 
