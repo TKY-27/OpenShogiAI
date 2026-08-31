@@ -816,9 +816,10 @@ def validate_arena_report(
             raise RuntimeError("Arena player B is not handcrafted-experimental")
     elif player_b.get("evaluatorKind") != "neural":
         raise RuntimeError("Arena player B is not neural")
+    capped_games = sum(game.get("result") == "max_plies" for game in games)
     if (
         metrics.get("games") != 2
-        or metrics.get("finishedGames") != 2
+        or metrics.get("finishedGames") != 2 - capped_games
         or metrics.get("illegalMoves") != 0
         or len(games) != 2
     ):

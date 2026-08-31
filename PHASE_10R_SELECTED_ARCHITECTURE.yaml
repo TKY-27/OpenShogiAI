@@ -1,0 +1,69 @@
+schema: open_shogiai_phase10r_selected_architecture/v1
+selection_status: formally_selected
+selected_at: "2026-09-01"
+
+architecture:
+  variant_id: sparse-pair-policy-wdl
+  role: pair_ablation_and_candidate
+  model_matrix: configs/phase10r/model-matrix.yaml
+  model_matrix_sha256: 50a6873b521f389c766010a0ed83fa5d2399d18a05a860fec78ef35f523dfb6b
+  feature_families:
+    - king_relative_board_and_hand
+    - hashed_two_piece_relations
+    - attack_defence_pin_check_flags
+    - attack_maps_mobility_king_zone_material_phase_history
+  parameter_count: 2413321
+  float32_size_bytes: 9657380
+  int8_size_bytes: 2417417
+  expected_cpu_operations: 36000
+  incremental_update: reversible accumulator; recompute moved/captured/drop tokens and affected attack rays
+  minimum_search_context_evaluations_per_second: 3500
+
+frozen_runtime:
+  evaluator: OSAVAL02
+  no_osaval01_fallback: true
+  target_semantics_sha256: bafe7ba97319fa12d0c7a8ef3e3634fe033926fa77fcb781b67cd8ab12dda3bb
+  feature_schema_sha256: fb5d69c96ae45ed308ee18ab7fd16d4fbefe0f5778e0b0ee2144879bcc7881df
+  input_normalization_sha256: b19dea246a17e059010418f2ac04b5a75fb1e21a30ba050159e539a9f5f69185
+  move_index_sha256: 096b227cadae6e585977b688495f261b163ebd7d3b4d2cc7276555a1b297de2a
+  phase10r_frozen_controls_sha256: 001965b51818d5ee3d5fa29d98306b280c68965b451cb591926b00fbd9cbc10c
+  phase10r_implementation_manifest_sha256: 464e3ae7079bf22f652d18af69c28c04664e6b8a03ce9c2dd87f19bc9191504a
+
+teacher_binding:
+  binding_config: configs/phase10r/teacher-binding.yaml
+  binding_config_sha256: d587e8d06d86af6dc10cd1a844532f29912e4f11da53f7e659e2a8a0f131d9ff
+  identity_sha256: 781a45570ce6c88e29e4c9f7f3acb96e3981bb74d7da6fb10ff80cdd76f51cbf
+  teacher: Apery 2.0.0
+  binary_sha256: 8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403
+  eval: 20190617
+  book_enabled: false
+  multipv: 3
+  threads: 4
+  hash_mib: 1024
+  baseline_nodes: 25000
+  new_teacher_calls: 0
+
+selected_artifact:
+  path: local/phase10r-data/checkpoints/phase10r/1m/sparse-pair-policy-wdl/teacher-bound-v1/teacher-bound-v1.osaval02
+  sha256: 41ce44a93219b0bcee0270677104c379029999050524fe99c1a560bb5cc05060
+  bytes: 9657380
+  quantization: float32
+  training_run_reference: phase10r-1m-sparse-pair-policy-wdl-teacher-bound-v1
+  lineage_sha256: 90742d2ea1b2a7932a52e9de60d1dee617fc48565938ea0d1c8c6b31a10518c9
+  parity_sha256: fc34e19c6936946654a0c705514ece2c87cb8b60019a001a900ace60d940ac7a
+
+selection_evidence:
+  mandatory_gates: passed
+  aggregate_equal_wall_clock_vs_handcrafted: sparse score_rate 0.05785714285714286 over 1400 games; factorized score_rate 0.055714285714285716 over 1400 games
+  direct_head_to_head: sparse 293-5-92 over 400 games; 10 max_plies terminations excluded from WDL denominator; paired_bootstrap_95_ci: [0.7173913043478261, 0.7971576227390181]
+  extra_seed_escalation: not_triggered
+  sol_review: not_used
+
+next_large_scale_execution:
+  do_not_execute_in_phase_10r_model_selection_goal: true
+  commands:
+    - PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run prepare --root . --scale 10m
+    - PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10r_run train --root . --scale 10m --variant sparse-pair-policy-wdl --resume
+
+evidence_manifest: PHASE_10R_MODEL_SELECTION_MANIFEST.json
+evidence_manifest_sha256: b6b373329718755aa7ad569b195ea261c8968a9a8ea0380f815490b88bcfebcf
