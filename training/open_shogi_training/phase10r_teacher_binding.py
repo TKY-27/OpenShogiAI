@@ -1391,9 +1391,7 @@ def _artifact(
             or existing.calibration_scale != calibration_scale
             or existing.calibration_bias != calibration_bias
         ):
-            raise Phase10RTeacherBindingError(
-                "teacher-bound OSAVAL02 metadata is not exact"
-            )
+            raise Phase10RTeacherBindingError("teacher-bound OSAVAL02 metadata is not exact")
         _assert_exported_weights(stage3_payload, existing)
         return {
             "status": "passed",

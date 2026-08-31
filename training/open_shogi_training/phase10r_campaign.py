@@ -14,9 +14,9 @@ import os
 import random
 import subprocess
 import time
-from concurrent.futures import ProcessPoolExecutor
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
@@ -1013,7 +1013,9 @@ def _evaluate_rows(
     for offset, line in enumerate(lines):
         line_number = first_row + offset
         if not line.strip():
-            raise Phase10RCampaignError(f"evaluation file contains a blank row: {path}:{line_number}")
+            raise Phase10RCampaignError(
+                f"evaluation file contains a blank row: {path}:{line_number}"
+            )
         row = _row_from_line(line, None)
         split = row.get("split")
         if split not in EVALUATION_SPLITS:

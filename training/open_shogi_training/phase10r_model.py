@@ -863,10 +863,7 @@ def _encode_features(
     pieces = [piece for piece in position.board if piece is not None]
     us = position.side_to_move
     kings = (_king_square(position, us), _king_square(position, 1 - us))
-    attack_masks = {
-        piece: _piece_attack_mask(position, piece)
-        for piece in pieces
-    }
+    attack_masks = {piece: _piece_attack_mask(position, piece) for piece in pieces}
     side_attack_masks = (
         _side_attack_mask(pieces, attack_masks, 0),
         _side_attack_mask(pieces, attack_masks, 1),
@@ -1093,17 +1090,14 @@ def _triple_category(
             ):
                 return 1
         if any(
-            pieces[index].side != king_side
-            and bool(attack_masks[pieces[index]] & (1 << king))
+            pieces[index].side != king_side and bool(attack_masks[pieces[index]] & (1 << king))
             for index in indexes
         ):
             return 2
     for target_index in indexes:
         target = pieces[target_index]
         other_indexes = tuple(index for index in indexes if index != target_index)
-        if all(
-            bool(attack_masks[pieces[index]] & (1 << target.square)) for index in other_indexes
-        ):
+        if all(bool(attack_masks[pieces[index]] & (1 << target.square)) for index in other_indexes):
             return 3
     edges = sum(
         bool(edge_masks[left] & (1 << right))
@@ -1150,9 +1144,7 @@ def _piece_attack_mask(position: ParsedPosition, piece: Piece) -> int:
     return mask
 
 
-def _side_attack_mask(
-    pieces: Sequence[Piece], attack_masks: Mapping[Piece, int], side: int
-) -> int:
+def _side_attack_mask(pieces: Sequence[Piece], attack_masks: Mapping[Piece, int], side: int) -> int:
     mask = 0
     for piece in pieces:
         if piece.side == side:
