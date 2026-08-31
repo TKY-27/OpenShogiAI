@@ -159,6 +159,53 @@ def test_repository_boundary_allows_ignored_teacher_storage_but_not_tracking(
     assert "tracked teacher artifact" in rejected.stderr
 
 
+def test_repository_boundary_ignores_untracked_selection_artifacts_but_rejects_tracked_files(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    (root / ".gitignore").write_text("/local/phase10r-selection/\n", encoding="utf-8")
+    for relative in (
+        "bindings/wasm/open_shogi_wasm.d.ts",
+        "bindings/wasm/open_shogi_wasm.js",
+        "bindings/wasm/open_shogi_wasm_bg.wasm",
+        "bindings/wasm/open_shogi_wasm_bg.wasm.d.ts",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"placeholder")
+
+    ignored = root / "local/phase10r-selection/offline-results.json"
+    ignored.parent.mkdir(parents=True, exist_ok=True)
+    ignored.write_text("/" + "Users" + "/ignored-selection-artifact\n", encoding="utf-8")
+    assert (
+        subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "-q", str(ignored.relative_to(root))],
+            check=False,
+        ).returncode
+        == 0
+    )
+
+    boundary = PROJECT_ROOT / "scripts/check_repository_boundaries.sh"
+    accepted = subprocess.run(
+        [str(boundary), str(root)], capture_output=True, text=True, check=False
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    tracked = root / "local/phase10r-selection/forbidden.txt"
+    tracked.write_text("tracked local artifact\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(root), "add", "-f", "local/phase10r-selection/forbidden.txt"],
+        check=True,
+    )
+    rejected = subprocess.run(
+        [str(boundary), str(root)], capture_output=True, text=True, check=False
+    )
+    assert rejected.returncode != 0
+    assert "tracked forbidden local path" in rejected.stderr
+
+
 def test_every_embedded_setup_python_program_compiles() -> None:
     script = (PROJECT_ROOT / "scripts/setup_teacher_apery.sh").read_text(encoding="utf-8")
     programs = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", script, flags=re.DOTALL)

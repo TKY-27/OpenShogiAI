@@ -15,41 +15,66 @@ case "$#" in
         ;;
 esac
 
-tracked_teacher=$(git -C "$project_root" ls-files -- 'local/teacher' 'local/teacher/**')
-if [ -n "$tracked_teacher" ]; then
-    echo "FAIL tracked teacher artifact under local/teacher" >&2
-    exit 1
-fi
-
 python3.12 - "$project_root" <<'PY'
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 
 root = Path(sys.argv[1]).resolve()
-ignored_parts = {
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".uv-cache",
-    ".venv",
-    "target",
-}
-ignored_local_artifact_roots = {
-    ("local", "phase10r-data"),
-    ("local", "phase10r-runs"),
-    ("local", "teacher"),
+forbidden_local_roots = {
+    "data/raw",
+    "data/processed",
+    "training/data/raw",
+    "training/data/processed",
+    "local/phase10r-selection",
+    "local/phase10r-data",
+    "local/phase10r-runs",
+    "local/teacher",
 }
 forbidden_roots = {"node_modules", "package-lock.json", "package.json", "web"}
 ui_suffixes = {".css", ".html", ".tsx"}
 artifact_suffixes = {".ckpt", ".nnue", ".onnx", ".pt", ".pth", ".safetensors"}
 failures: list[str] = []
 
+
+def tracked_files() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "-z"],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"FAIL cannot enumerate Git-tracked files: {error}") from error
+    try:
+        output = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise SystemExit("FAIL Git-tracked file inventory is not valid UTF-8") from error
+    if output and not output.endswith("\0"):
+        raise SystemExit("FAIL Git-tracked file inventory is not NUL terminated")
+    return [relative for relative in output.rstrip("\0").split("\0") if relative]
+
+
+tracked = tracked_files()
+
+
+def is_under(relative: str, parent: str) -> bool:
+    return relative == parent or relative.startswith(f"{parent}/")
+
+
+# Keep this check separate from the source-text scan: ignored local artifacts must never enter
+# the inventory, while a forced/tracked artifact must fail explicitly.
+for relative in tracked:
+    if is_under(relative, "local/teacher"):
+        failures.append(f"tracked teacher artifact under local/teacher: {relative}")
+    elif any(is_under(relative, parent) for parent in forbidden_local_roots):
+        failures.append(f"tracked forbidden local path: {relative}")
+
 for name in sorted(forbidden_roots):
-    if (root / name).exists():
+    if any(is_under(relative, name) for relative in tracked):
         failures.append(f"forbidden AI-root path: {name}")
 
 required_bindings = {
@@ -62,16 +87,9 @@ for relative in sorted(required_bindings):
     if not (root / relative).is_file():
         failures.append(f"missing versioned Wasm interface: {relative}")
 
-for path in root.rglob("*"):
-    relative = path.relative_to(root)
-    if any(part in ignored_parts for part in relative.parts):
-        continue
-    if relative.parts[:2] in ignored_local_artifact_roots:
-        continue
-    if path.is_dir():
-        if relative.parts[:2] in {("data", "raw"), ("data", "processed"), ("local", "teacher")}:
-            failures.append(f"forbidden local payload directory: {relative}")
-        continue
+for relative_name in tracked:
+    relative = Path(relative_name)
+    path = root / relative
     if path.suffix.lower() in ui_suffixes:
         failures.append(f"browser-UI source is outside the AI boundary: {relative}")
     if path.suffix.lower() in artifact_suffixes:
