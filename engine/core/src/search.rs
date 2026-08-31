@@ -1131,14 +1131,13 @@ impl SearchEngine {
                 .stats
                 .neural_inference_time
                 .saturating_add(self.clock.now().saturating_sub(started));
-            return match result {
-                Ok(score) => Ok(score),
-                Err(_) => {
-                    context.stats.osaval02_inference_errors =
-                        context.stats.osaval02_inference_errors.saturating_add(1);
-                    context.termination = Some(SearchTermination::EvaluationError);
-                    Err(())
-                }
+            return if let Ok(score) = result {
+                Ok(score)
+            } else {
+                context.stats.osaval02_inference_errors =
+                    context.stats.osaval02_inference_errors.saturating_add(1);
+                context.termination = Some(SearchTermination::EvaluationError);
+                Err(())
             };
         }
         let Some(neural) = &self.neural else {

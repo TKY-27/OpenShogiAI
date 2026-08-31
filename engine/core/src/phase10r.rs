@@ -753,6 +753,14 @@ impl Osaval02Evaluator {
         clippy::too_many_lines,
         reason = "all output heads share one auditable deterministic inference order"
     )]
+    /// # Errors
+    ///
+    /// Returns an error when the validated artifact cannot produce finite outputs for the
+    /// requested position and history.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a validated artifact violates the fixed OSAVAL02 output-head dimensions.
     pub fn infer(
         &self,
         position: &Position,
@@ -891,7 +899,7 @@ impl Osaval02Evaluator {
         &self,
         position: &Position,
         history: Osaval02History,
-    ) -> Result<(Vec<Move>, FeatureSet, Vec<f64>, Vec<f64>), Osaval02Error> {
+    ) -> Result<ForwardValues, Osaval02Error> {
         history.validate()?;
         let legal_moves = position.legal_moves();
         let features = encode_features(position, &legal_moves, history, self.variant)?;
@@ -1023,11 +1031,19 @@ impl Osaval02SearchAdapter {
     }
 
     /// Run the strict OSAVAL02 inference and return its calibrated current-side search score.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when strict OSAVAL02 inference fails for the requested position.
     pub fn evaluate(&self, position: &Position) -> Result<i32, Osaval02Error> {
         self.evaluator.evaluate_score(position, self.history)
     }
 
     /// Run the strict OSAVAL02 inference and return the legal policy logit for one move.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when strict OSAVAL02 inference fails for the requested position.
     pub fn policy_logit(
         &self,
         position: &Position,
@@ -1041,6 +1057,10 @@ impl Osaval02SearchAdapter {
 
     /// Run one root inference for policy-guided move ordering without changing search score
     /// semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when strict OSAVAL02 inference fails for the requested position.
     pub fn infer(&self, position: &Position) -> Result<Osaval02Inference, Osaval02Error> {
         self.evaluator.infer(position, self.history)
     }
@@ -1183,6 +1203,8 @@ struct FeatureSet {
     scalars: Vec<f64>,
     checksum: String,
 }
+
+type ForwardValues = (Vec<Move>, FeatureSet, Vec<f64>, Vec<f64>);
 
 fn tensor_specs(variant: Osaval02Variant) -> Vec<TensorSpec> {
     let mut specs = vec![
@@ -1611,6 +1633,10 @@ fn triple_category(
     (edges >= 2).then_some(4)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pair relation flags keep the frozen feature inputs explicit and auditable"
+)]
 fn pair_flags(
     left_index: usize,
     right_index: usize,

@@ -9,8 +9,9 @@ use std::{
 use open_shogi_core::{
     CancellationToken, EvaluationConfig, MATE_SCORE, NeuralEvaluationMode, NeuralEvaluator,
     NeuralQuantization, OpeningBookV2, OpeningPolicy, OpeningProfile, Osaval02Evaluator,
-    Osaval02Quantization, Position, SearchConfig, SearchEngine, SearchInfo, SearchTermination,
-    TimeControl, TimeManager, is_mate_score, parse_sfen, parse_usi_move, to_usi_move,
+    Osaval02Quantization, Position, SearchConfig, SearchEngine, SearchInfo, SearchResult,
+    SearchTermination, TimeControl, TimeManager, is_mate_score, parse_sfen, parse_usi_move,
+    to_usi_move,
 };
 
 use crate::{GoParameters, UsiCommand, engine_id_line, parse_command, parser::MAX_GO_DEPTH};
@@ -65,10 +66,9 @@ impl ModelKind {
 
     const fn required_quantization(self) -> Option<NeuralQuantization> {
         match self {
-            Self::Handcrafted => None,
             Self::NeuralFloat => Some(NeuralQuantization::Float32),
             Self::NeuralQuantized => Some(NeuralQuantization::Int8),
-            Self::Osaval02Float | Self::Osaval02Quantized => None,
+            Self::Handcrafted | Self::Osaval02Float | Self::Osaval02Quantized => None,
         }
     }
 
@@ -87,7 +87,7 @@ impl ModelKind {
 
 enum LoadedModel {
     Neural(NeuralEvaluator),
-    Osaval02(Osaval02Evaluator),
+    Osaval02(Box<Osaval02Evaluator>),
 }
 
 impl LoadedModel {
@@ -569,28 +569,13 @@ impl UsiSession {
                     });
                 },
             );
-            if let Some(gate) = worker_gate
-                && !gate.wait()
-            {
-                return;
-            }
-            if result.termination == SearchTermination::EvaluationError {
-                output_authority.send_if_current(generation, sink.as_ref(), || {
-                    format!(
-                        "info string error OSAVAL02 strict inference failed after {} calls",
-                        result.stats.neural_inference_calls
-                    )
-                });
-            }
-            let bestmove = if result.termination == SearchTermination::EvaluationError {
-                "resign".to_owned()
-            } else {
-                result
-                    .best_move
-                    .map_or_else(|| "resign".to_owned(), to_usi_move)
-            };
-            output_authority
-                .send_if_current(generation, sink.as_ref(), || format!("bestmove {bestmove}"));
+            complete_search(
+                &result,
+                worker_gate,
+                output_authority.as_ref(),
+                sink.as_ref(),
+                generation,
+            );
         });
         self.active = Some(ActiveSearch {
             cancellation,
@@ -692,7 +677,7 @@ impl UsiSession {
             }
             LoadedModel::Osaval02(model) => {
                 self.neural_evaluator = None;
-                self.osaval02_evaluator = Some(Arc::new(model));
+                self.osaval02_evaluator = Some(Arc::from(model));
             }
         }
     }
@@ -725,7 +710,7 @@ impl UsiSession {
                     evaluator.quantization()
                 ));
             }
-            return Ok(LoadedModel::Osaval02(evaluator));
+            return Ok(LoadedModel::Osaval02(Box::new(evaluator)));
         }
         Err("handcrafted evaluation does not load a model".to_owned())
     }
@@ -757,6 +742,36 @@ impl UsiSession {
             .collect::<String>();
         self.sink.send(&format!("info string error {sanitized}"));
     }
+}
+
+fn complete_search(
+    result: &SearchResult,
+    worker_gate: Option<Arc<CompletionGate>>,
+    output_authority: &OutputAuthority,
+    sink: &dyn ProtocolSink,
+    generation: u64,
+) {
+    if let Some(gate) = worker_gate
+        && !gate.wait()
+    {
+        return;
+    }
+    if result.termination == SearchTermination::EvaluationError {
+        output_authority.send_if_current(generation, sink, || {
+            format!(
+                "info string error OSAVAL02 strict inference failed after {} calls",
+                result.stats.neural_inference_calls
+            )
+        });
+    }
+    let bestmove = if result.termination == SearchTermination::EvaluationError {
+        "resign".to_owned()
+    } else {
+        result
+            .best_move
+            .map_or_else(|| "resign".to_owned(), to_usi_move)
+    };
+    output_authority.send_if_current(generation, sink, || format!("bestmove {bestmove}"));
 }
 
 impl Drop for UsiSession {

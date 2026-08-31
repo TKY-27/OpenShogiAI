@@ -104,7 +104,7 @@ struct Osaval02InferenceRecord {
 
 enum LoadedModel {
     Osaval01(NeuralEvaluator),
-    Osaval02(Osaval02Evaluator),
+    Osaval02(Box<Osaval02Evaluator>),
 }
 
 impl LoadedModel {
@@ -420,7 +420,7 @@ fn load_model_artifact(path: &Path) -> Result<(LoadedModel, String, u64), String
     )?;
     let model = if artifact.bytes.starts_with(b"OSAVAL02") {
         Osaval02Evaluator::from_bytes(&artifact.bytes)
-            .map(LoadedModel::Osaval02)
+            .map(|model| LoadedModel::Osaval02(Box::new(model)))
             .map_err(|error| format!("cannot load OSAVAL02 model {}: {error}", path.display()))?
     } else {
         NeuralEvaluator::from_bytes(&artifact.bytes)
