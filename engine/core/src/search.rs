@@ -38,6 +38,7 @@ pub const fn is_mate_score(score: i32) -> bool {
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    external_probe: Option<fn() -> bool>,
 }
 
 /// Monotonic clock used by search deadlines and measured inference time.
@@ -74,6 +75,17 @@ impl CancellationToken {
         Self::default()
     }
 
+    /// Polls a host-owned cancellation flag as well as the thread-safe native flag.
+    /// The Wasm host uses an atomic shared JS buffer; queued Worker messages alone cannot
+    /// interrupt synchronous Wasm. The probe must be bounded and side-effect free.
+    #[must_use]
+    pub fn with_external_probe(probe: fn() -> bool) -> Self {
+        Self {
+            cancelled: Arc::default(),
+            external_probe: Some(probe),
+        }
+    }
+
     /// Requests cancellation. The flag remains set for the lifetime of this token.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
@@ -81,7 +93,7 @@ impl CancellationToken {
 
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Acquire) || self.external_probe.is_some_and(|probe| probe())
     }
 }
 
@@ -354,6 +366,7 @@ pub struct SearchEngine {
     computation: Option<Arc<crate::ComputationModel>>,
     computation_enabled: bool,
     compute_summary: Option<crate::ComputeControlSummary>,
+    managed_target_ms: Option<f64>,
     computation_order: Vec<Move>,
     phase10v: Option<Arc<crate::Phase10VEvaluator>>,
     v3_state: Option<crate::Phase10VAccumulator>,
@@ -443,6 +456,12 @@ impl SearchEngine {
         self.compute_summary.as_ref()
     }
 
+    /// Last adaptive spending target; absent for unmanaged diagnostic searches.
+    #[must_use]
+    pub fn managed_target_ms(&self) -> Option<f64> {
+        self.managed_target_ms
+    }
+
     fn update_computation(
         &mut self,
         position: &Position,
@@ -508,6 +527,7 @@ impl SearchEngine {
             computation: None,
             computation_enabled: false,
             compute_summary: None,
+            managed_target_ms: None,
             computation_order: Vec::new(),
             phase10v: None,
             v3_state: None,
@@ -987,7 +1007,7 @@ impl SearchEngine {
         limits: SearchLimits,
         cancellation: &CancellationToken,
     ) -> SearchResult {
-        self.search_internal(position, limits, cancellation, None, true, |_| {})
+        self.search_internal(position, limits, cancellation, None, true, |_, _| {})
     }
 
     /// Searches and reports each fully completed iterative-deepening iteration.
@@ -996,9 +1016,11 @@ impl SearchEngine {
         position: &Position,
         limits: SearchLimits,
         cancellation: &CancellationToken,
-        callback: impl FnMut(&SearchInfo),
+        mut callback: impl FnMut(&SearchInfo),
     ) -> SearchResult {
-        self.search_internal(position, limits, cancellation, None, true, callback)
+        self.search_internal(position, limits, cancellation, None, true, |info, _| {
+            callback(info);
+        })
     }
 
     /// Searches using a time-manager plan and reports completed iterations.
@@ -1007,7 +1029,18 @@ impl SearchEngine {
         position: &Position,
         plan: TimePlan,
         cancellation: &CancellationToken,
-        callback: impl FnMut(&SearchInfo),
+        mut callback: impl FnMut(&SearchInfo),
+    ) -> SearchResult {
+        self.search_managed_observed(position, plan, cancellation, |info, _| callback(info))
+    }
+
+    /// Reports completed-depth evidence and read-only runtime counters to an adapter.
+    pub fn search_managed_observed(
+        &mut self,
+        position: &Position,
+        plan: TimePlan,
+        cancellation: &CancellationToken,
+        callback: impl FnMut(&SearchInfo, &Self),
     ) -> SearchResult {
         let limits = SearchLimits {
             max_depth: plan.max_depth,
@@ -1034,14 +1067,21 @@ impl SearchEngine {
         position: &Position,
         plan: TimePlan,
         cancellation: &CancellationToken,
-        callback: impl FnMut(&SearchInfo),
+        mut callback: impl FnMut(&SearchInfo),
     ) -> SearchResult {
         let limits = SearchLimits {
             max_depth: plan.max_depth,
             max_nodes: plan.max_nodes,
             movetime: plan.hard_limit,
         };
-        self.search_internal(position, limits, cancellation, Some(plan), false, callback)
+        self.search_internal(
+            position,
+            limits,
+            cancellation,
+            Some(plan),
+            false,
+            |info, _| callback(info),
+        )
     }
 
     #[expect(
@@ -1055,8 +1095,10 @@ impl SearchEngine {
         cancellation: &CancellationToken,
         managed: Option<TimePlan>,
         clear_transpositions: bool,
-        mut callback: impl FnMut(&SearchInfo),
+        mut callback: impl FnMut(&SearchInfo, &Self),
     ) -> SearchResult {
+        let clock = Arc::clone(&self.clock);
+        let started = clock.now();
         self.reset_for_search(clear_transpositions);
         self.computation_order.clear();
         self.compute_summary =
@@ -1067,6 +1109,10 @@ impl SearchEngine {
                     enabled: self.computation_enabled,
                     ..crate::ComputeControlSummary::default()
                 });
+        self.managed_target_ms = managed
+            .and_then(|plan| plan.soft_limit)
+            .map(|soft| soft.as_secs_f64() * 1_000.0);
+        let mut adaptive_budget = crate::time_control::AdaptiveTimeBudget::default();
         let mut computation_previous: Option<SearchInfo> = None;
         let mut previous_iteration_ms = 0.0;
         self.v3_updates = 0;
@@ -1109,8 +1155,6 @@ impl SearchEngine {
                 self.a1_checks.clear();
             }
         }
-        let clock = Arc::clone(&self.clock);
-        let started = clock.now();
         let root_repetition = self.a1_repetition(position, 0);
         let legal_moves = if root_repetition.is_some() {
             Vec::new()
@@ -1251,17 +1295,28 @@ impl SearchEngine {
                 context.complete_root_iteration(depth);
                 let elapsed = context.elapsed();
                 let info = make_info(&completed, completed_depth, &context, elapsed);
-                callback(&info);
-                if is_mate_score(completed.score) {
-                    break;
-                }
-                if self.update_computation(
+                let controller_stop = self.update_computation(
                     position,
                     &info,
                     computation_previous.as_ref(),
                     managed,
                     previous_iteration_ms,
-                ) {
+                );
+                let adaptive_stop =
+                    managed.is_some_and(|plan| adaptive_budget.observe(&info, plan));
+                if let Some(target) = adaptive_budget.target_ms() {
+                    self.managed_target_ms = Some(target);
+                }
+                callback(&info, self);
+                if context.check_termination().is_err() {
+                    break;
+                }
+                if is_mate_score(completed.score) {
+                    break;
+                }
+                // The learned change predictor may save work, but cannot bypass the common
+                // adaptive policy or the recursively checked absolute deadline.
+                if adaptive_stop || controller_stop {
                     context.termination = Some(SearchTermination::Stable);
                     break;
                 }

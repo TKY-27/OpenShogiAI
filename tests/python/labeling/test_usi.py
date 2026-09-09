@@ -586,3 +586,67 @@ def _process_exists(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+@pytest.mark.parametrize("isolate", [True, False])
+def test_teacher_group_isolation_is_explicit_and_default_remains_private(tmp_path, isolate):
+    config, _, _ = make_fake_project(tmp_path)
+    engine = (
+        USIEngine(config, tmp_path)
+        if isolate
+        else USIEngine(config, tmp_path, isolate_process_group=False)
+    )
+    try:
+        engine.start()
+        assert os.getpgid(engine.pid) == (engine.pid if isolate else os.getpgid(0))
+        assert engine.analyze_with_retry("state b - 1").bestmove == "7g7f"
+    finally:
+        engine.close()
+
+
+def test_inherited_teacher_close_never_signals_the_stage_group(tmp_path, monkeypatch):
+    config, _, _ = make_fake_project(tmp_path)
+    engine = USIEngine(config, tmp_path, isolate_process_group=False)
+    engine.start()
+    pid = engine.pid
+    monkeypatch.setattr(usi_module.os, "killpg", lambda *_args: pytest.fail("parent group killed"))
+    monkeypatch.setattr(engine, "_send", lambda _line: None)  # Force the close escalation path.
+    engine.close()
+    assert engine.pid is None and not _process_exists(pid)
+
+
+def test_inherited_teacher_rss_stop_signals_only_the_verified_teacher(tmp_path, monkeypatch):
+    config, _, _ = make_fake_project(tmp_path)
+    engine = USIEngine(config, tmp_path, isolate_process_group=False)
+    engine.start()
+    process = engine._process
+    identity = engine._process_start_identity
+    monitor = engine._rss_monitor
+    # Stop just its monitor thread so this test invokes the hard-limit path deterministically.
+    monitor.close()
+    sent = []
+    real_kill = os.kill
+
+    def kill(pid, sig):
+        sent.append(pid)
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(usi_module.os, "kill", kill)
+    monkeypatch.setattr(usi_module.os, "killpg", lambda *_args: pytest.fail("parent group killed"))
+    try:
+        monitor._fail("forced RSS limit", {process.pid: identity, os.getpid(): "parent"})
+        process.wait(timeout=3)
+        with pytest.raises(USIResourceError, match="forced RSS"):
+            monitor.check()
+        assert sent == [process.pid]
+    finally:
+        engine.close()
+
+
+def test_inherited_teacher_signal_refuses_a_reused_pid(monkeypatch):
+    monkeypatch.setattr(usi_module, "_read_process_start_identity", lambda _pid: "replacement")
+    monkeypatch.setattr(usi_module.os, "kill", lambda *_args: pytest.fail("reused PID killed"))
+    monkeypatch.setattr(usi_module.os, "killpg", lambda *_args: pytest.fail("group killed"))
+    usi_module._signal_teacher_process(
+        43210, signal.SIGKILL, expected_start_identity="original", isolate_process_group=False
+    )

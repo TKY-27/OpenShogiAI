@@ -1,0 +1,70 @@
+{
+  "schema": "open_shogiai_evaluator_run/v1",
+  "run_id": "evaluator-20260910-main",
+  "output": "local/runs/evaluator-20260910/main",
+  "seed": 20260915,
+  "generation": {
+    "first_game": 22,
+    "games": 2048,
+    "workers": 2,
+    "max_plies": 192,
+    "sample_stride": 2,
+    "deviation_stride": 8,
+    "teacher_nodes": 25000,
+    "leaf_path": "local/frozen/baseline/model.osaval03",
+    "leaf_sha256": "859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480",
+    "teacher_config_path": "local/frozen/metadata/teacher-config.yaml",
+    "teacher_binary_sha256": "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403",
+    "split_guard_path": "local/frozen/metadata/split-guard.json",
+    "development_exclusions_path": "local/runs/evaluator-20260910/diagnosis/preflight-exclusions.json",
+    "development_exclusions_sha256": "02805b6f13f30b28abfad02d7459ca1f5c13a942137118424bcdc64eaf274b0e"
+  },
+  "training": {
+    "device": "cpu",
+    "threads": 4,
+    "batch_size": 256,
+    "max_steps": 8192,
+    "max_epochs": 8,
+    "validation_every": 512,
+    "patience": 5,
+    "minimum_relative_improvement": 0.002,
+    "learning_rate": 0.0002,
+    "minimum_learning_rate": 1e-05,
+    "warmup_steps": 100,
+    "gradient_norm_limit": 5.0
+  },
+  "resources": {
+    "maximum_wall_seconds": 86400,
+    "free_space_floor_gib": 80,
+    "maximum_process_rss_gib": 16,
+    "maximum_swap_growth_gib": 4,
+    "stalled_seconds": 900,
+    "maximum_retries": 1,
+    "monitor_interval_seconds": 15
+  },
+  "evaluation": {
+    "depth": 64,
+    "max_plies": 256,
+    "paired_3minute_games": 24,
+    "paired_10minute_games": 8,
+    "startpos_demonstration_games": 8,
+    "criterion": "all planned games valid; score above 0.5 in both clocks and paired-start bootstrap one-sided 95% lower bound above 0.5; no human-dan claim"
+  },
+  "unique_data_goal": {
+    "expected_unique_positions": [
+      250000,
+      700000
+    ],
+    "report_actual_counts": true,
+    "no_small_sample_strength_gate": true
+  },
+  "controller": "off; old controller labels remain bound only to frozen W256",
+  "excluded_development_sfens": [
+    "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
+    "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
+    "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL b - 3",
+    "lnsgkgsnl/1r5b1/p1ppppppp/1p7/7P1/9/PPPPPPP1P/1B5R1/LNSGKGSNL w - 4",
+    "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/9/PPPPPPPPP/1B3K1R1/LNSG1GSNL b - 3",
+    "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PPNPPPPPP/1B5R1/L1SGKGSNL w - 4"
+  ]
+}

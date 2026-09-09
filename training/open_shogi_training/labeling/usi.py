@@ -263,9 +263,11 @@ class _RssMonitor:
         process_start_identity: str,
         limit_bytes: int,
         poll_ms: int,
+        isolate_process_group: bool = True,
     ) -> None:
         self._process = process
         self._process_start_identity = process_start_identity
+        self._isolate_process_group = isolate_process_group
         self._limit_bytes = limit_bytes
         self._poll_seconds = poll_ms / 1_000
         self._stop = threading.Event()
@@ -330,11 +332,14 @@ class _RssMonitor:
             if self._failure is None:
                 self._failure = message
         if self._process.poll() is None:
-            _signal_process_group(
+            _signal_teacher_process(
                 self._process.pid,
                 signal.SIGKILL,
                 expected_start_identity=self._process_start_identity,
+                isolate_process_group=self._isolate_process_group,
             )
+        if not self._isolate_process_group:
+            return  # The evaluator supervisor owns the rest of the shared stage group.
         for process_id, expected_identity in process_identities.items():
             if process_id in {self._process.pid, os.getpid()}:
                 continue
@@ -345,6 +350,8 @@ class _RssMonitor:
                     os.kill(process_id, signal.SIGKILL)
 
     def _kill_observed_descendants(self) -> None:
+        if not self._isolate_process_group:
+            return
         for process_id, expected_identity in tuple(self._observed_identities.items()):
             if process_id in {self._process.pid, os.getpid()} or process_id <= 1:
                 continue
@@ -357,7 +364,14 @@ class _RssMonitor:
 class USIEngine:
     """One persistent USI process with strict protocol and process-group cleanup."""
 
-    def __init__(self, config: TeacherConfig, project_root: Path) -> None:
+    def __init__(
+        self, config: TeacherConfig, project_root: Path, *, isolate_process_group: bool = True
+    ) -> None:
+        # Only the finite evaluator runner opts into its already isolated stage group.
+        # Every other teacher caller retains the historical private-session default.
+        if type(isolate_process_group) is not bool:
+            raise ValueError("isolate_process_group must be boolean")
+        self._isolate_process_group = isolate_process_group
         self.config = config
         self.project_root = project_root.resolve(strict=True)
         self.executable = resolve_config_path(
@@ -430,7 +444,7 @@ class USIEngine:
                 stderr=subprocess.PIPE,
                 bufsize=0,
                 pass_fds=snapshot.pass_fds(),
-                start_new_session=True,
+                start_new_session=self._isolate_process_group,
             )
         except BaseException as error:
             runtime.unseal()
@@ -440,14 +454,14 @@ class USIEngine:
                 raise USIProcessError(f"cannot start teacher: {error}") from error
             raise
         if process.stdin is None or process.stdout is None or process.stderr is None:
-            _terminate_unowned_process(process)
+            _terminate_unowned_process(process, isolate_process_group=self._isolate_process_group)
             runtime.unseal()
             snapshot.close()
             runtime.close()
             raise USIProcessError("teacher pipes were not created")
         process_start_identity = _read_process_start_identity(process.pid)
         if process_start_identity is None:
-            _terminate_unowned_process(process)
+            _terminate_unowned_process(process, isolate_process_group=self._isolate_process_group)
             runtime.unseal()
             snapshot.close()
             runtime.close()
@@ -457,7 +471,7 @@ class USIEngine:
             snapshot.assert_source_unchanged()
             runtime.assert_unchanged()
         except (ExecutableSnapshotError, RuntimeTreeSnapshotError) as error:
-            _terminate_unowned_process(process)
+            _terminate_unowned_process(process, isolate_process_group=self._isolate_process_group)
             runtime.unseal()
             snapshot.close()
             runtime.close()
@@ -485,6 +499,7 @@ class USIEngine:
             process_start_identity=process_start_identity,
             limit_bytes=self.config.benchmark.max_peak_rss_mib * 1024 * 1024,
             poll_ms=self.config.benchmark.rss_poll_ms,
+            isolate_process_group=self._isolate_process_group,
         )
         self._rss_monitor.start()
         try:
@@ -630,18 +645,20 @@ class USIEngine:
                 except (BrokenPipeError, OSError, subprocess.TimeoutExpired, USIError):
                     pass
             if process_group is not None and process.poll() is None:
-                _signal_process_group(
+                _signal_teacher_process(
                     process_group,
                     signal.SIGTERM,
                     expected_start_identity=process_start_identity,
+                    isolate_process_group=self._isolate_process_group,
                 )
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=min(1.0, self.config.timeouts.quit_ms / 1_000))
             if process_group is not None and process.poll() is None:
-                _signal_process_group(
+                _signal_teacher_process(
                     process_group,
                     signal.SIGKILL,
                     expected_start_identity=process_start_identity,
+                    isolate_process_group=self._isolate_process_group,
                 )
             try:
                 process.wait(timeout=1.0)
@@ -1008,16 +1025,19 @@ def _validate_sfen_command(sfen: str) -> None:
         raise ValueError("sfen must contain four fields and a valid side")
 
 
-def _terminate_unowned_process(process: subprocess.Popen[bytes]) -> None:
+def _terminate_unowned_process(
+    process: subprocess.Popen[bytes], *, isolate_process_group: bool = True
+) -> None:
     """Reap a process that failed before it became owned by ``USIEngine``."""
 
     if process.poll() is None:
         start_identity = _read_process_start_identity(process.pid)
         if start_identity is not None:
-            _signal_process_group(
+            _signal_teacher_process(
                 process.pid,
                 signal.SIGKILL,
                 expected_start_identity=start_identity,
+                isolate_process_group=isolate_process_group,
             )
         else:
             # Popen still owns this unreaped child, while its process-group ID
@@ -1035,6 +1055,27 @@ def _terminate_unowned_process(process: subprocess.Popen[bytes]) -> None:
         if stream is not None:
             with contextlib.suppress(OSError):
                 stream.close()
+
+
+def _signal_teacher_process(
+    process_id: int,
+    requested_signal: signal.Signals,
+    *,
+    expected_start_identity: str,
+    isolate_process_group: bool,
+) -> None:
+    if isolate_process_group:
+        _signal_process_group(
+            process_id, requested_signal, expected_start_identity=expected_start_identity
+        )
+    elif (
+        process_id > 1
+        and process_id != os.getpid()
+        and _read_process_start_identity(process_id) == expected_start_identity
+    ):
+        # Never signal the containing stage group from one teacher's close/RSS path.
+        with contextlib.suppress(PermissionError, ProcessLookupError):
+            os.kill(process_id, requested_signal)
 
 
 def _signal_process_group(

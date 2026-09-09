@@ -135,9 +135,10 @@ fn probe(
         iterations.push(info_value(game.position(), info, previous.as_ref()));
         previous = Some(info.clone());
     };
+    let mut time_hard_limit_ms = None;
     let result = if request.black_time_ms.is_some() || request.white_time_ms.is_some() {
-        let plan = TimeManager::default().plan(
-            game.position().side_to_move(),
+        let plan = TimeManager::default().plan_for_position(
+            game.position(),
             TimeControl {
                 black_time_ms: request.black_time_ms,
                 white_time_ms: request.white_time_ms,
@@ -152,6 +153,7 @@ fn probe(
             },
             64,
         )?;
+        time_hard_limit_ms = plan.hard_limit.map(|limit| limit.as_secs_f64() * 1000.0);
         search.search_managed_with_callback(
             game.position(),
             plan,
@@ -175,8 +177,10 @@ fn probe(
         json!({"schema":"open_shogiai_core_probe/v1","sfen":to_sfen(game.position()),
         "perspective":format!("{:?}",game.position().side_to_move()),
         "leaf_sha256":model.identity().artifact_sha256,"best_move":result.best_move.map(to_usi_move),
-        "score":result.score,"depth":result.depth,"nodes":result.nodes,
+        "score":result.score,"depth":result.depth,"seldepth":result.seldepth,"nodes":result.nodes,
+        "outcome":result.outcome,"time_hard_limit_ms":time_hard_limit_ms,
         "elapsed_ms":result.elapsed.as_secs_f64()*1000.0,"termination":format!("{:?}",result.termination),
+        "time_target_ms":search.managed_target_ms(),
         "legal":result.best_move.is_some_and(|m|game.position().legal_moves().contains(&m)),
         "proof":proof,"iterations":iterations,"compute_control":search.compute_control_summary(),
         "game_end":format!("{:?}",game.end()),"scores_are_alpha_beta_observations":true}),

@@ -3,10 +3,10 @@
 use open_shogi_core::{
     ANALYSIS_SCHEMA, AnalysisCacheKey, AnalysisService, AnalysisUpdate, AnalysisUpdateSource,
     CancellationToken, EngineIdentity, EnteringKingDeclaration, Game, GameEnd, HandPiece,
-    ImpasseOutcome, Move, PieceKind, Position, PurePlayingEvaluator, RepetitionOutcome,
-    RuntimeProofCounters, SearchConfig, SearchEngine, SearchLimits, SearchResult, SearchStats,
-    SearchTermination, Side, Square, TimeControl, TimeControlMode, TimeManager, parse_sfen,
-    parse_usi_move, to_sfen, to_usi_move,
+    ImpasseOutcome, MonotonicClock, Move, PieceKind, Position, PurePlayingEvaluator,
+    RepetitionOutcome, RuntimeProofCounters, SearchConfig, SearchEngine, SearchInfo, SearchLimits,
+    SearchResult, SearchStats, SearchTermination, Side, Square, SystemMonotonicClock, TimeControl,
+    TimeControlMode, TimeManager, TimePlan, parse_sfen, parse_usi_move, to_sfen, to_usi_move,
 };
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
@@ -184,6 +184,97 @@ impl EvaluatorChoice {
         }
     }
 }
+
+struct PlaySession {
+    engine: SearchEngine,
+    position: Position,
+    plan: TimePlan,
+    profile: BrowserSearchProfile,
+    evaluator: EvaluatorChoice,
+    multi_pv: u8,
+    clock: SystemMonotonicClock,
+    target_ms: f64,
+    result: SearchResult,
+    proof: RuntimeProofCounters,
+    search_ms: f64,
+    updates: u64,
+    done: bool,
+}
+impl PlaySession {
+    fn envelope(&self) -> Result<String, String> {
+        play_envelope(PlayEnvelopeInput {
+            profile: self.profile,
+            evaluator: self.evaluator,
+            side: self.position.side_to_move(),
+            multi_pv: self.multi_pv,
+            plan: self.plan,
+            result: &self.result,
+            proof: &self.proof,
+            computation: self.engine.compute_control_summary().cloned(),
+            done: self.done,
+            target_ms: self.target_ms,
+            elapsed_ms: milliseconds(self.clock.now()),
+            search_ms: self.search_ms,
+            updates: self.updates,
+        })
+    }
+}
+struct PlayEnvelopeInput<'a> {
+    profile: BrowserSearchProfile,
+    evaluator: EvaluatorChoice,
+    side: Side,
+    multi_pv: u8,
+    plan: TimePlan,
+    result: &'a SearchResult,
+    proof: &'a RuntimeProofCounters,
+    computation: Option<open_shogi_core::ComputeControlSummary>,
+    done: bool,
+    target_ms: f64,
+    elapsed_ms: f64,
+    search_ms: f64,
+    updates: u64,
+}
+fn play_envelope(input: PlayEnvelopeInput<'_>) -> Result<String, String> {
+    let lines = BrowserEngine::multi_pv_lines(input.result, input.multi_pv);
+    let mut response = SearchResponse::new(
+        input.profile,
+        input.evaluator,
+        input.side,
+        input.result.clone(),
+        lines,
+        time_control_mode_name(input.plan.mode),
+        Some(input.proof.clone()),
+    );
+    response.compute_control = input.computation;
+    serde_json::to_string(&serde_json::json!({
+        "schema": "open_shogi_play_session/v1", "done": input.done, "result": response,
+        "timing": { "targetMs": input.target_ms,
+            "hardLimitMs": input.plan.hard_limit.map_or(0.0, milliseconds),
+            "elapsedMs": input.elapsed_ms, "searchMs": input.search_ms,
+            "updates": input.updates, "interruption": "shared-atomic-per-node" }
+    }))
+    .map_err(|e| e.to_string())
+}
+fn milliseconds(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
+}
+fn result_from_info(info: &SearchInfo) -> SearchResult {
+    SearchResult {
+        best_move: info.best_move,
+        score: info.score,
+        depth: info.depth,
+        seldepth: info.seldepth,
+        nodes: info.nodes,
+        elapsed: info.elapsed,
+        nps: info.nps,
+        pv: info.pv.clone(),
+        root_moves: info.root_moves.clone(),
+        stats: info.stats,
+        termination: SearchTermination::Completed,
+        outcome: open_shogi_core::SearchOutcome::Evaluated,
+    }
+}
+
 /// Browser state may be inspected before model loading; all evaluation fails closed until loading.
 pub struct BrowserEngine {
     initial_sfen: String,
@@ -191,6 +282,7 @@ pub struct BrowserEngine {
     model: Option<PurePlayingEvaluator>,
     computation: Option<Arc<open_shogi_core::ComputationModel>>,
     computation_enabled: bool,
+    play: Option<PlaySession>,
     analysis: Option<AnalysisService>,
     analysis_identity: Option<(String, String)>,
     analysis_side: Option<Side>,
@@ -213,6 +305,7 @@ impl BrowserEngine {
             model: None,
             computation: None,
             computation_enabled: false,
+            play: None,
             analysis: None,
             analysis_identity: None,
             analysis_side: None,
@@ -282,7 +375,7 @@ impl BrowserEngine {
         bytes: &[u8],
         expected_artifact_sha256: Option<&str>,
     ) -> Result<String, String> {
-        // An unsuccessful replacement must not leave old weights available for accidental play.
+        // An unsuccessful replacement must not leave old weights available for accidental session.
         self.model = None;
         self.computation = None;
         self.computation_enabled = false;
@@ -465,14 +558,18 @@ impl BrowserEngine {
         let request: BrowserTimeControl =
             serde_json::from_str(time_control_json).map_err(|error| error.to_string())?;
         let request = request.into_core()?;
-        let plan = browser_time_plan(self.game.position().side_to_move(), request, profile)?;
+        let plan = browser_time_plan(self.game.position(), request, profile)?;
         let mode = time_control_mode_name(plan.mode);
 
         let config = SearchConfig {
             transposition_entries: SearchEngine::transposition_entries_for_megabytes(
                 profile.transposition_megabytes(),
             ),
-            quiescence_depth: profile.quiescence_depth(),
+            quiescence_depth: if plan.mode == TimeControlMode::Clock {
+                4
+            } else {
+                profile.quiescence_depth()
+            },
             ..SearchConfig::default()
         };
         let mut engine = self.search_engine(config, evaluator)?;
@@ -491,6 +588,160 @@ impl BrowserEngine {
         );
         response.compute_control = engine.compute_control_summary().cloned();
         serde_json::to_string(&response).map_err(|error| error.to_string())
+    }
+
+    /// Prepares a bounded game-clock search and immediately returns a verified legal fallback.
+    /// The host must supply atomic shared cancellation and completed-depth progress callbacks
+    /// before calling `playRun`; Worker messages cannot interrupt that synchronous call.
+    /// # Errors
+    /// Rejects missing models, invalid clock requests and duplicate active sessions.
+    pub fn play_start_json(
+        &mut self,
+        profile: &str,
+        evaluator: &str,
+        multi_pv: u8,
+        time_control_json: &str,
+    ) -> Result<String, String> {
+        if self.play.as_ref().is_some_and(|session| !session.done) {
+            return Err("a play session is already active".into());
+        }
+        if !(1..=3).contains(&multi_pv) || time_control_json.len() > 4_096 {
+            return Err("invalid play multi-PV or oversized time-control request".into());
+        }
+        let clock = SystemMonotonicClock::default();
+        let profile = BrowserSearchProfile::parse(profile)?;
+        let evaluator = EvaluatorChoice::parse(evaluator)?;
+        let request: BrowserTimeControl =
+            serde_json::from_str(time_control_json).map_err(|e| e.to_string())?;
+        let request = request.into_core()?;
+        let plan = browser_time_plan(self.game.position(), request, profile)?;
+        if plan.mode != TimeControlMode::Clock {
+            return Err("cooperative play requires the remaining game clock".into());
+        }
+        let mut engine = self.search_engine(
+            SearchConfig {
+                transposition_entries: SearchEngine::transposition_entries_for_megabytes(
+                    profile.transposition_megabytes(),
+                ),
+                quiescence_depth: 4,
+                ..SearchConfig::default()
+            },
+            evaluator,
+        )?;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let initial = engine.search_managed(self.game.position(), plan, &cancellation);
+        let proof = self
+            .runtime_proof(&engine, &initial)?
+            .ok_or("missing pure proof")?;
+        let terminal = initial.outcome.is_terminal();
+        let session = PlaySession {
+            engine,
+            position: self.game.position().clone(),
+            plan,
+            profile,
+            evaluator,
+            multi_pv,
+            clock,
+            target_ms: plan.soft_limit.map_or(0.0, milliseconds),
+            result: initial,
+            proof,
+            search_ms: 0.0,
+            updates: 0,
+            done: terminal,
+        };
+        let response = session.envelope()?;
+        self.play = Some(session);
+        Ok(response)
+    }
+
+    /// Executes the prepared search with native cancellation and progress callbacks.
+    /// Wasm calls this through `playRun`, polling a host-owned atomic flag at each node.
+    /// # Errors
+    /// Rejects missing sessions, failed inference and invalid pure runtime evidence.
+    pub fn play_run_observed(
+        &mut self,
+        cancellation: &CancellationToken,
+        mut progress: impl FnMut(&str),
+    ) -> Result<String, String> {
+        let mut session = self.play.take().ok_or("play has not been prepared")?;
+        if session.done {
+            let response = session.envelope();
+            self.play = Some(session);
+            return response;
+        }
+        let setup = session.clock.now();
+        let mut plan = session.plan;
+        plan.hard_limit = plan.hard_limit.map(|hard| hard.saturating_sub(setup));
+        plan.soft_limit = plan.soft_limit.map(|soft| soft.saturating_sub(setup));
+        let mut updates = 0_u64;
+        let mut progress_error = None;
+        let result = session.engine.search_managed_observed(
+            &session.position,
+            plan,
+            cancellation,
+            |info, engine| {
+                updates += 1;
+                let result = result_from_info(info);
+                let proof = engine.runtime_proof(result.stats, "");
+                if !proof.valid_pure_search(&result) {
+                    progress_error = Some("pure progress proof failed".to_owned());
+                    cancellation.cancel();
+                    return;
+                }
+                let envelope = play_envelope(PlayEnvelopeInput {
+                    profile: session.profile,
+                    evaluator: session.evaluator,
+                    side: session.position.side_to_move(),
+                    multi_pv: session.multi_pv,
+                    plan: session.plan,
+                    result: &result,
+                    proof: &proof,
+                    computation: engine.compute_control_summary().cloned(),
+                    done: false,
+                    target_ms: engine.managed_target_ms().unwrap_or(session.target_ms),
+                    elapsed_ms: milliseconds(session.clock.now()),
+                    search_ms: milliseconds(result.elapsed),
+                    updates,
+                });
+                match envelope {
+                    Ok(value) => progress(&value),
+                    Err(error) => {
+                        progress_error = Some(error);
+                        cancellation.cancel();
+                    }
+                }
+            },
+        );
+        ensure_search_success(&result)?;
+        if let Some(error) = progress_error {
+            return Err(error);
+        }
+        session.target_ms = session
+            .engine
+            .managed_target_ms()
+            .unwrap_or(session.target_ms);
+        session.proof = session.engine.runtime_proof(result.stats, "");
+        if !session.proof.valid_pure_search(&result) {
+            return Err("pure play proof failed".into());
+        }
+        session.search_ms = milliseconds(result.elapsed);
+        session.result = result;
+        session.updates = updates;
+        session.done = true;
+        let response = session.envelope();
+        self.play = Some(session);
+        response
+    }
+
+    /// Cancels before execution or returns the last completed, verified search result.
+    /// During `playRun` the page must signal its shared atomic flag instead.
+    /// # Errors
+    /// Returns an error when no compatible session exists or serialization fails.
+    pub fn play_stop_json(&mut self) -> Result<String, String> {
+        let session = self.play.as_mut().ok_or("play has not been prepared")?;
+        session.done = true;
+        session.envelope()
     }
 
     /// Starts infinite logical analysis for a canonical root.
@@ -686,6 +937,7 @@ impl BrowserEngine {
         Ok(Some(proof))
     }
     fn clear_analysis(&mut self) {
+        self.play = None;
         self.analysis = None;
         self.analysis_identity = None;
         self.analysis_side = None;
@@ -1318,7 +1570,7 @@ fn duration_ns(duration: Duration) -> u64 {
 }
 
 fn browser_time_plan(
-    side: Side,
+    position: &Position,
     request: TimeControl,
     profile: BrowserSearchProfile,
 ) -> Result<open_shogi_core::TimePlan, String> {
@@ -1340,7 +1592,12 @@ fn browser_time_plan(
             profile.max_depth()
         ));
     }
-    let mut plan = TimeManager::default().plan(side, request, profile.max_depth())?;
+    let mut plan =
+        TimeManager::default().plan_for_position(position, request, profile.max_depth())?;
+    if plan.mode == TimeControlMode::Clock && request.depth.is_none() {
+        // A quality preset is a resource choice, not a minimum/maximum thinking duration.
+        plan.max_depth = open_shogi_core::MAX_TIME_CONTROL_DEPTH;
+    }
     // Depth-only requests otherwise have neither a deadline nor a node ceiling.
     if plan.hard_limit.is_none() && plan.max_nodes.is_none() {
         plan.max_nodes = Some(profile.max_nodes());
@@ -1355,6 +1612,15 @@ fn ensure_search_success(result: &SearchResult) -> Result<(), String> {
         Ok(())
     }
 }
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = globalThis, js_name = __openShogiPlayCancelled)]
+    fn host_play_cancelled() -> bool;
+    #[wasm_bindgen(js_namespace = globalThis, js_name = __openShogiPlayProgress)]
+    fn host_play_progress(value: &str);
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 #[derive(Default)]
@@ -1526,6 +1792,41 @@ impl WasmBrowserEngine {
             .map_err(|error| JsError::new(&error))
     }
 
+    /// Prepares a game-clock search and publishes its legal pre-evaluation fallback.
+    /// # Errors
+    /// Returns model, clock, session or serialization errors.
+    #[wasm_bindgen(js_name = playStart)]
+    pub fn play_start(
+        &mut self,
+        profile: &str,
+        evaluator: &str,
+        multi_pv: u8,
+        request: &str,
+    ) -> Result<String, JsError> {
+        self.inner
+            .play_start_json(profile, evaluator, multi_pv, request)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Runs with a host-owned shared atomic cancellation flag and completed-depth callbacks.
+    /// # Errors
+    /// Returns state, pure-inference or proof errors.
+    #[wasm_bindgen(js_name = playRun)]
+    pub fn play_run(&mut self) -> Result<String, JsError> {
+        let cancellation = CancellationToken::with_external_probe(host_play_cancelled);
+        self.inner
+            .play_run_observed(&cancellation, host_play_progress)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Stops a prepared search; active synchronous work uses the shared flag instead.
+    /// # Errors
+    /// Returns a missing-session or serialization error.
+    #[wasm_bindgen(js_name = playStop)]
+    pub fn play_stop(&mut self) -> Result<String, JsError> {
+        self.inner.play_stop_json().map_err(|e| JsError::new(&e))
+    }
+
     #[wasm_bindgen(js_name = analysisStart)]
     /// Forwards to the validated browser-state boundary.
     /// # Errors
@@ -1624,7 +1925,8 @@ mod tests {
             casual: false,
             ..TimeControl::casual()
         };
-        let plan = browser_time_plan(Side::Black, request, BrowserSearchProfile::Eco).unwrap();
+        let plan =
+            browser_time_plan(&Position::startpos(), request, BrowserSearchProfile::Eco).unwrap();
         assert_eq!(plan.max_nodes, Some(1_500));
         assert_eq!(plan.max_depth, 5);
         assert!(plan.hard_limit.is_none());
@@ -1632,7 +1934,126 @@ mod tests {
             depth: Some(64),
             ..request
         };
-        assert!(browser_time_plan(Side::Black, excessive, BrowserSearchProfile::Eco).is_err());
+        assert!(
+            browser_time_plan(&Position::startpos(), excessive, BrowserSearchProfile::Eco).is_err()
+        );
+    }
+
+    fn game_clock(remaining: u64) -> String {
+        json!({"schema": "open_shogi_time_control/v1", "blackTimeMs": remaining,
+            "whiteTimeMs": remaining, "casual": false})
+        .to_string()
+    }
+
+    #[test]
+    fn cooperative_start_and_stop_keep_legal_zero_evaluation_proof() {
+        let mut browser = loaded();
+        let start: Value = serde_json::from_str(
+            &browser
+                .play_start_json("quality", "pure_learned", 1, &game_clock(600_000))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(start["done"], false);
+        assert_eq!(start["result"]["outcome"], "cancelled_before_evaluation");
+        assert_eq!(start["result"]["runtimeProof"]["learned_eval_calls"], 0);
+        assert_eq!(start["timing"]["targetMs"], 6_000.0);
+        assert_eq!(start["timing"]["hardLimitMs"], 17_950.0);
+        let cancelled: Value = serde_json::from_str(&browser.play_stop_json().unwrap()).unwrap();
+        assert_eq!(cancelled["done"], true);
+        assert_eq!(cancelled["result"]["bestMove"], start["result"]["bestMove"]);
+        assert!(
+            browser
+                .play
+                .as_ref()
+                .unwrap()
+                .proof
+                .valid_pure_search(&browser.play.as_ref().unwrap().result)
+        );
+        browser.reset(None).unwrap();
+        assert!(browser.play_stop_json().is_err());
+    }
+
+    #[test]
+    fn cooperative_progress_cancellation_retains_completed_legal_move_and_actual_proof() {
+        let mut browser = loaded();
+        browser
+            .play_start_json("balanced", "pure_learned", 1, &game_clock(600_000))
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let mut updates: Vec<Value> = Vec::new();
+        let final_json = browser
+            .play_run_observed(&cancel, |json| {
+                updates.push(serde_json::from_str(json).unwrap());
+                cancel.cancel();
+            })
+            .unwrap();
+        let result: Value = serde_json::from_str(&final_json).unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(result["done"], true);
+        assert_eq!(result["result"]["termination"], "cancelled");
+        assert_eq!(
+            result["result"]["bestMove"],
+            updates[0]["result"]["bestMove"]
+        );
+        assert!(
+            result["result"]["runtimeProof"]["learned_eval_calls"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        let session = browser.play.as_ref().unwrap();
+        assert!(
+            session
+                .position
+                .is_legal_move(session.result.best_move.unwrap())
+        );
+        assert!(session.proof.valid_pure_search(&session.result));
+    }
+
+    #[test]
+    fn both_quality_modes_use_one_clock_depth_and_quiescence_contract() {
+        let mut browser = loaded();
+        for remaining in [180_000, 600_000] {
+            for white in [false, true] {
+                for profile in ["balanced", "quality"] {
+                    browser.reset(None).unwrap();
+                    if white {
+                        browser.play_move("7g7f").unwrap();
+                    }
+                    browser
+                        .play_start_json(profile, "pure_learned", 1, &game_clock(remaining))
+                        .unwrap();
+                    let session = browser.play.as_ref().unwrap();
+                    assert_eq!(
+                        session.plan.soft_limit,
+                        Some(Duration::from_millis(remaining / 100))
+                    );
+                    assert_eq!(session.plan.max_depth, 64);
+                    assert_eq!(session.engine.config().quiescence_depth, 4);
+                    browser.play_stop_json().unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_clock_run_returns_time_limit_before_evaluation_without_waiting() {
+        let mut browser = loaded();
+        browser
+            .play_start_json("quality", "pure_learned", 1, &game_clock(0))
+            .unwrap();
+        let result: Value = serde_json::from_str(
+            &browser
+                .play_run_observed(&CancellationToken::new(), |_| {
+                    panic!("zero clock cannot complete a depth")
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["result"]["outcome"], "time_limit_before_evaluation");
+        assert_eq!(result["result"]["runtimeProof"]["learned_eval_calls"], 0);
+        assert_eq!(result["timing"]["hardLimitMs"], 0.0);
     }
 
     #[test]

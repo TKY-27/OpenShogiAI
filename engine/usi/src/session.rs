@@ -584,8 +584,8 @@ impl UsiSession {
         let runtime_profile = self.options.runtime_profile;
         let expected_model_sha256 = self.options.expected_model_sha256.clone();
         let time_control = time_control(&self.options, parameters);
-        let plan = TimeManager::default().plan(
-            position.side_to_move(),
+        let plan = TimeManager::default().plan_for_position(
+            &position,
             time_control,
             if parameters.infinite {
                 MAX_DEPTH
@@ -1738,11 +1738,8 @@ mod tests {
                 8,
             )
             .unwrap();
-        assert_eq!(
-            zero_clock.allocated_hard_limit,
-            Some(Duration::from_millis(1))
-        );
-        assert_eq!(zero_clock.hard_limit, Some(Duration::from_millis(1)));
+        assert_eq!(zero_clock.allocated_hard_limit, Some(Duration::ZERO));
+        assert_eq!(zero_clock.hard_limit, Some(Duration::ZERO));
     }
 
     #[test]

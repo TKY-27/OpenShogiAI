@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::Side;
+use crate::{Position, SearchInfo, Side};
 
 /// Schema shared by native, USI-mapped, Rust, and Wasm time-control boundaries.
 pub const TIME_CONTROL_SCHEMA: &str = "open_shogi_time_control/v1";
@@ -266,6 +266,11 @@ impl TimeManager {
                 stability: self.config.stability,
             });
         }
+        // A live game clock is authoritative even when an adapter accidentally includes
+        // a preset move time. Diagnostic limits may only further restrict it.
+        if has_clock(request) {
+            return Ok(self.clock_plan(side, request, max_depth, 100));
+        }
         if let Some(movetime) = request.movetime_ms {
             let hard = deadline_after_margin(movetime, request.safety_margin_ms);
             return Ok(TimePlan {
@@ -280,15 +285,37 @@ impl TimeManager {
                 stability: self.config.stability,
             });
         }
-        if has_clock(request) {
-            return Ok(self.clock_plan(side, request, max_depth));
-        }
         let mode = if request.nodes.is_some() {
             TimeControlMode::Nodes
         } else {
             TimeControlMode::Depth
         };
         Ok(self.plan_without_deadline(mode, max_depth, request.nodes))
+    }
+
+    /// Position-aware game-clock allocation. The conservative remaining-move estimate is a
+    /// spending prior, not a position score or a restriction on legal opening moves.
+    ///
+    /// # Errors
+    /// Returns the same validation errors as `plan`.
+    pub fn plan_for_position(
+        self,
+        position: &Position,
+        request: TimeControl,
+        default_max_depth: u8,
+    ) -> Result<TimePlan, String> {
+        let plan = self.plan(position.side_to_move(), request, default_max_depth)?;
+        if plan.mode != TimeControlMode::Clock {
+            return Ok(plan);
+        }
+        let moves_played = u64::from(position.move_number().saturating_sub(1)) / 2;
+        let expected_moves = 100_u64.saturating_sub(moves_played).clamp(24, 100);
+        Ok(self.clock_plan(
+            position.side_to_move(),
+            request,
+            plan.max_depth,
+            expected_moves,
+        ))
     }
 
     fn plan_without_deadline(
@@ -310,7 +337,13 @@ impl TimeManager {
         }
     }
 
-    fn clock_plan(self, side: Side, request: TimeControl, max_depth: u8) -> TimePlan {
+    fn clock_plan(
+        self,
+        side: Side,
+        request: TimeControl,
+        max_depth: u8,
+        expected_moves: u64,
+    ) -> TimePlan {
         let remaining = match side {
             Side::Black => request.black_time_ms,
             Side::White => request.white_time_ms,
@@ -324,11 +357,11 @@ impl TimeManager {
         let byoyomi = request.byoyomi_ms.unwrap_or(0);
         // Increment is earned after the move, so it improves the target share but is not part of
         // the amount that may be consumed before this move is returned.
-        let target = (remaining / 30)
+        let target = (remaining / expected_moves)
             .saturating_add(increment.saturating_mul(3) / 4)
             .saturating_add(byoyomi.saturating_mul(3) / 4)
             .max(1);
-        let available = remaining.saturating_add(byoyomi).max(1);
+        let available = remaining.saturating_add(byoyomi);
         let allocated = target.saturating_mul(3).max(byoyomi).min(available);
         let hard = deadline_after_margin(allocated, request.safety_margin_ms);
         let soft = target.min(hard);
@@ -340,7 +373,7 @@ impl TimeManager {
             hard_limit: Some(Duration::from_millis(hard)),
             allocated_hard_limit: Some(Duration::from_millis(allocated)),
             safety_margin: Duration::from_millis(allocated.saturating_sub(hard)),
-            allow_stable_early_stop: false,
+            allow_stable_early_stop: true,
             stability: self.config.stability,
         }
     }
@@ -375,6 +408,73 @@ const fn deadline_after_margin(allocated_ms: u64, requested_margin_ms: u64) -> u
     } else {
         maximum_margin
     })
+}
+
+/// Controller-independent estimate of whether another completed depth is worth its cost.
+/// Instability is only a spending heuristic, never a calibrated probability of improvement.
+#[derive(Default)]
+pub(crate) struct AdaptiveTimeBudget {
+    previous: Option<SearchInfo>,
+    previous_iteration_ms: f64,
+    stable_iterations: u8,
+    target_ms: Option<f64>,
+}
+
+impl AdaptiveTimeBudget {
+    pub(crate) fn target_ms(&self) -> Option<f64> {
+        self.target_ms
+    }
+
+    pub(crate) fn observe(&mut self, info: &SearchInfo, plan: TimePlan) -> bool {
+        let Some(soft) = plan.soft_limit.filter(|_| plan.allow_stable_early_stop) else {
+            return false;
+        };
+        let elapsed_ms = info.elapsed.as_secs_f64() * 1_000.0;
+        let delta = self
+            .previous
+            .as_ref()
+            .map(|previous| info.score.saturating_sub(previous.score).saturating_abs());
+        let changed = self
+            .previous
+            .as_ref()
+            .is_some_and(|p| p.best_move != info.best_move);
+        if !changed && delta.is_some_and(|delta| delta <= plan.stability.stable_score_cp) {
+            self.stable_iterations = self.stable_iterations.saturating_add(1);
+        } else {
+            self.stable_iterations = 0;
+        }
+        // Several equally reasonable moves are not evidence that a quiet position must
+        // consume its whole allowance. Score swings and changed best moves justify more work.
+        let factor = if changed || delta.is_some_and(|d| d >= plan.stability.volatile_score_cp) {
+            1.5
+        } else if self.stable_iterations >= plan.stability.required_stable_iterations {
+            0.6
+        } else {
+            1.0
+        };
+        let target = (soft.as_secs_f64() * 1_000.0 * factor).min(
+            plan.hard_limit
+                .map_or(f64::MAX, |hard| hard.as_secs_f64() * 1_000.0),
+        );
+        self.target_ms = Some(target);
+        let iteration_ms = elapsed_ms
+            - self
+                .previous
+                .as_ref()
+                .map_or(0.0, |p| p.elapsed.as_secs_f64() * 1_000.0);
+        let growth = if self.previous_iteration_ms > 0.0 {
+            (iteration_ms / self.previous_iteration_ms).clamp(1.5, 8.0)
+        } else {
+            2.0
+        };
+        let stop = elapsed_ms >= target
+            || (info.depth >= 2
+                && elapsed_ms >= target * 0.15
+                && elapsed_ms + iteration_ms * growth >= target);
+        self.previous_iteration_ms = iteration_ms;
+        self.previous = Some(info.clone());
+        stop
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +513,102 @@ mod tests {
         assert_eq!(plan.hard_limit, Some(Duration::from_millis(450)));
     }
 
+    fn clock_request(milliseconds: u64) -> TimeControl {
+        TimeControl {
+            black_time_ms: Some(milliseconds),
+            white_time_ms: Some(milliseconds),
+            casual: false,
+            ..TimeControl::casual()
+        }
+    }
+
+    #[test]
+    fn live_clock_is_authoritative_over_preset_movetime_on_both_sides() {
+        for remaining in [180_000, 600_000] {
+            for side in [Side::Black, Side::White] {
+                let request = clock_request(remaining);
+                let expected = TimeManager::default().plan(side, request, 64).unwrap();
+                let contaminated = TimeManager::default()
+                    .plan(
+                        side,
+                        TimeControl {
+                            movetime_ms: Some(60_000),
+                            ..request
+                        },
+                        64,
+                    )
+                    .unwrap();
+                assert_eq!(expected, contaminated);
+                assert_eq!(expected.mode, TimeControlMode::Clock);
+                assert_eq!(
+                    expected.soft_limit,
+                    Some(Duration::from_millis(remaining / 100))
+                );
+                assert!(expected.allow_stable_early_stop);
+                assert!(expected.hard_limit.unwrap() < Duration::from_secs(18));
+            }
+        }
+    }
+
+    #[test]
+    fn exhausted_clock_does_not_borrow_increment_or_manufacture_time() {
+        let plan = TimeManager::default()
+            .plan(
+                Side::White,
+                TimeControl {
+                    white_time_ms: Some(0),
+                    white_increment_ms: Some(30_000),
+                    casual: false,
+                    ..TimeControl::casual()
+                },
+                64,
+            )
+            .unwrap();
+        assert_eq!(plan.hard_limit, Some(Duration::ZERO));
+        assert_eq!(plan.soft_limit, Some(Duration::ZERO));
+    }
+
+    fn iteration(depth: u8, elapsed_ms: u64, score: i32) -> SearchInfo {
+        SearchInfo {
+            best_move: Position::startpos().legal_moves().first().copied(),
+            score,
+            depth,
+            seldepth: depth,
+            nodes: u64::from(depth) * 100,
+            elapsed: Duration::from_millis(elapsed_ms),
+            nps: 100,
+            pv: Vec::new(),
+            root_moves: Vec::new(),
+            stats: crate::SearchStats::default(),
+        }
+    }
+
+    #[test]
+    fn stable_search_saves_time_without_waiting_for_the_target() {
+        let plan = TimeManager::default()
+            .plan(Side::Black, clock_request(600_000), 64)
+            .unwrap();
+        let mut budget = AdaptiveTimeBudget::default();
+        assert!(!budget.observe(&iteration(1, 100, 10), plan));
+        assert!(!budget.observe(&iteration(2, 400, 15), plan));
+        assert!(budget.observe(&iteration(3, 1_600, 18), plan));
+        assert_eq!(budget.target_ms(), Some(3_600.0));
+        assert!(Duration::from_millis(1_600) < plan.soft_limit.unwrap());
+    }
+
+    #[test]
+    fn volatile_evidence_can_increase_target_but_never_its_absolute_cap() {
+        let mut plan = TimeManager::default()
+            .plan(Side::Black, clock_request(600_000), 64)
+            .unwrap();
+        plan.hard_limit = Some(Duration::from_secs(7));
+        let mut budget = AdaptiveTimeBudget::default();
+        assert!(!budget.observe(&iteration(1, 100, 10), plan));
+        assert!(!budget.observe(&iteration(2, 300, -400), plan));
+        assert_eq!(budget.target_ms(), Some(7_000.0));
+        assert_eq!(plan.hard_limit, Some(Duration::from_secs(7)));
+    }
+
     proptest! {
         #[test]
         fn clock_plans_never_exceed_available_time(
@@ -430,7 +626,7 @@ mod tests {
                 ..TimeControl::casual()
             };
             let plan = TimeManager::default().plan(Side::Black, request, 64).unwrap();
-            let available = remaining.saturating_add(byoyomi).max(1);
+            let available = remaining.saturating_add(byoyomi);
             prop_assert!(plan.allocated_hard_limit.unwrap() <= Duration::from_millis(available));
             prop_assert!(plan.hard_limit.unwrap() <= plan.allocated_hard_limit.unwrap());
             prop_assert!(plan.soft_limit.unwrap() <= plan.hard_limit.unwrap());

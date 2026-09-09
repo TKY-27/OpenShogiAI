@@ -2,7 +2,8 @@
 //!
 //! The public JavaScript boundary accepts only bounded strings, model bytes, and closed profile
 //! names. Search remains synchronous inside a dedicated Web Worker; the page cancels work by
-//! terminating that worker, so this crate does not require shared memory or browser threads.
+//! terminating that worker. The pure development adapter additionally supports atomic
+//! cooperative cancellation, without requiring shared Wasm memory or browser threads.
 
 use std::{fmt::Write as _, sync::Arc, time::Duration};
 
@@ -591,11 +592,14 @@ impl BrowserEngine {
                 profile.max_nodes()
             ));
         }
-        let plan = TimeManager::default().plan(
-            self.game.position().side_to_move(),
+        let mut plan = TimeManager::default().plan_for_position(
+            self.game.position(),
             request,
             profile.max_depth(),
         )?;
+        if plan.mode == TimeControlMode::Clock && request.depth.is_none() {
+            plan.max_depth = open_shogi_core::MAX_TIME_CONTROL_DEPTH;
+        }
         let mode = time_control_mode_name(plan.mode);
         if evaluator != EvaluatorChoice::PureLearned
             && let Some(choice) = self.book_choice()
@@ -613,7 +617,11 @@ impl BrowserEngine {
             transposition_entries: SearchEngine::transposition_entries_for_megabytes(
                 profile.transposition_megabytes(),
             ),
-            quiescence_depth: profile.quiescence_depth(),
+            quiescence_depth: if plan.mode == TimeControlMode::Clock {
+                4
+            } else {
+                profile.quiescence_depth()
+            },
             ..SearchConfig::default()
         };
         let mut engine = self.search_engine(config, evaluator)?;

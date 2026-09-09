@@ -62,8 +62,8 @@ pub fn run_pure_stdio(model: &PurePlayingEvaluator, hash: &str) -> Result<(), St
                 }
                 UsiCommand::Go(parameters) => {
                     finish(&mut worker, true)?;
-                    let plan = TimeManager::default().plan(
-                        position.side_to_move(),
+                    let plan = TimeManager::default().plan_for_position(
+                        &position,
                         TimeControl {
                             black_time_ms: parameters.black_time_ms,
                             white_time_ms: parameters.white_time_ms,
