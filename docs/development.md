@@ -135,6 +135,14 @@ and stage disappear with a residual group, restart fails closed with `needs_astr
 process identity is never permission to kill another process or start a second writer. The
 teacher adapter's usual isolated-process default is unchanged outside this run.
 
+After the r2 host-swap stop, a single r3 resource recovery may reduce teacher workers to one.
+Admission requires at least 60 seconds of normal OS memory pressure and no new swapout/pageout
+pages, plus a fresh pre-start check. Its 4 GiB swap-growth bound is measured from the new
+resource interval, not from the original campaign baseline. Both baselines and their difference
+are retained; the original 24-hour deadline and learning/adoption criteria remain unchanged.
+A second swap-limit stop must not automatically rebaseline or restart. Low owned RSS alone
+does not prove the run did not contribute to earlier memory pressure.
+
 The main candidate retains the independent W256 OSAVAL03 architecture (8.68 MB) and retrains
 all layers on the scalar evaluation path, starting from a copy of the frozen baseline.
 No piece values, king-safety rules or external runtime evaluator enter nonterminal scoring.

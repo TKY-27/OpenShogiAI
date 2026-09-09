@@ -6,7 +6,9 @@
 重みの公開、有料計算資源の契約は今回の範囲外。
 現在は修正・実教師による短い学習/再開/export試験と実行監督の重要レビューを完了した。
 初回runは327trajectory後に安全停止し、契約修正後の別run
-`evaluator-20260910-main-r2` を起動した。全完了データを保持して新規生成を継続中。
+`evaluator-20260910-main-r2` を起動したが、479trajectory後にswap増加上限で安全停止した。
+全完了データとログを保持し、現在はホストのメモリ圧迫回復待ち。
+60秒の再開前測定が不合格のため、新runのseal・再起動は行っていない。
 重み更新・学習後評価はまだ始まっていない。
 凍結W256と未開封最終holdoutを保持し、棋力向上・初段への安定勝ちは認定していない。
 この文書を進捗と次工程の正本とする。詳細は小さな機械可読記録として
@@ -81,11 +83,32 @@
   327→337 trajectoryの正常増加を確認。旧・新runの両lease下で654 raw/receipt
   ファイルをhash一致のhardlinkで引継ぎ、原本の書換え・ラベル再生成はゼロ。
   `main-r2/continuation-import.json` に実行script/入力/出力hashと元の期限を記録。
+- r2の資源停止: 479trajectory保存後、global used swapが5.960GiBへ増加し、
+  初回baseline 1,348,993,024 bytesから4.704GiB増で `swap_limit`。
+  全479 raw/receiptのhash・元game/seed/splitを再照合し不一致0。60,209手、
+  記録root30,229、教師特殊終端0。ユニーク数は重複除去前なので未確定。
+  `diagnosis/resource-stop-preservation.json` に保全検査を保存。
+  supervisor/全子は回収済み、leaseなし、重み更新ゼロ。停止時owned RSS 0.806GiB
+  だけから原因が本run以外と断定しない。通常の学習/protocolエラーは追加されていない。
+  停止後5秒の一時的なnormal/書出しゼロは、60秒の確認では再現しなかった。
+  Luna/maxの60.201秒4点測定はpressure `[2,1,2,2]`、swapout +456,895 pages、
+  pageout +516 pagesで不合格。`diagnosis/resource-recovery-samples.json` に保存。
+  swapoutのbyte換算7,485,767,680は非圧縮ページ換算で、実ディスク書込量とは異なる。
+  他appの内容やprocess帰属は調査せず、停止・メモリ強制解放も行っていない。
+  条件付きr3案は独立Astra/xhighレビュー済み: 60秒以上・4点以上すべてpressure=1、
+  各区間swapout/pageout増加ゼロ、逆行/測定失敗なし、開始直前にも再確認した場合のみ
+  teacher workersを2→1へ減らす一度限りの復旧を認める。4GiB上限はその新資源区間
+  の追加swap上限へ意味を変更するため、旧/新baselineと差を明記する。通算増加上限
+  を維持したとは扱わない。RSS16GiB/空き80GiB/学習条件/採用基準/元24h期限は維持。
+  現時点では条件未達でr3未作成・未起動。r3用継続manifestも未保持なので、
+  条件達成時に元479件を再照合して作る。r3で再度swap停止したら自動再基準化禁止。
 - 検証: Rust392件、Python928件、OSUI210件とnative/Wasmビルドが成功。
   最後の監督/USI修正には関連73件と実process回帰を追補し、Ruffと独立Astra/xhighレビュー済み。
   更新step24の再export照合と凍結pure smokeも成功。全体試験を変更なく反復していない。
 - 継続: 現在taskのheartbeat `openshogiai` を30分間隔でACTIVE登録済み。
-  対象をmain-r2と新code/run hashへ更新済み。旧mainは再起動しない。
+  対象はmain-r2。既知swap停止を再調査・即再起動せず、期限内でメモリ回復条件を確認。
+  圧迫中は変更なしとして静かに終了し、条件達成時だけ上記r3契約を具体化する。
+  旧mainは再起動しない。期限 `1789067056.291158` 到達時は延長せずcampaignを終了保存。
   常時監督は実script、Lunaは固定運用、Astraは重要な失敗・学習後判断と実ブラウザーを担当。
   変更なしでは通知せず、`awaiting_astra_browser` から候補identity/固定40対局を判断し、
   開発候補選択へ載せて8時計条件・18fixture・通常対局を再確認する。
