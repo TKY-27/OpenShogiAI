@@ -5,7 +5,7 @@
 学習開始の再承認は不要。公開既定モデルへの昇格、mainへの試作統合、本番公開、
 重みの公開、有料計算資源の契約は今回の範囲外。
 現在は修正・実教師による短い学習/再開/export試験と実行監督の重要レビューを完了した。
-本学習はまだ開始していない。
+本学習runは起動済みで、新規データを生成中。重み更新・学習後評価はまだ始まっていない。
 凍結W256と未開封最終holdoutを保持し、棋力向上・初段への安定勝ちは認定していない。
 この文書を進捗と次工程の正本とする。詳細は小さな機械可読記録として
 `local/runs/evaluator-20260910/` と既存 `local/core-prototype/` に保持する。
@@ -47,17 +47,32 @@
   25万–70万ユニーク局面を見込み、実数を報告。最大8,192更新/8周、CPU4threads。
   計画・起動/再開/停止・保持・復旧条件は [development.md](development.md) に集約。
   run ID `evaluator-20260910-main`、保存先 `local/runs/evaluator-20260910/main`。
-  まだseal・起動していない。既知診断と全preflight由来の対称局面hashを
+  `d8ca51f27b40ada81df7699b0177c20848712a5a` でseal済み、同commitをpush済み。
+  run SHA-256 `60132bc849be461fcbd261ffe9ac23b0e631059ad5dda567a52cd3a5953c94ce`。
+  既知診断と全preflight由来16,980個の対称局面hashを
   本runから除外する。凍結holdout原本は開いていない。
 - 独立した重要実装/レビューは `gpt-6-astra` / `xhigh`。配布元調査は
-  `gpt-5.6-luna` / `max` で実引受け済み。本runの実行/監視引継ぎはまだ未実施。
+  `gpt-5.6-luna` / `max` で実施。本runも同Lunaへ実引継ぎし、Lunaが起動済み。
+  supervisor PID `96926`、generate stage PID/PGID `96928`、lease・process生存を確認。
+  最初の正常進捗は2→22 trajectory、親の追加確認時40/2,048 trajectory。
+  重複除去後ユニーク数・本runの延べ学習件数はまだ未確定（重み更新未開始）。
+  15秒間隔で監督scriptのprogress/RSS/swap/容量記録が増加している。
   supervisorのcode/config封印、子孫回収、二重起動、データ再照合の指摘は修正済み。
   未観測子を専用PGIDで回収してから親を終了処理し、監督消失後の残留も再起動前に検査。
   実教師2trajectory/16手の追加試験は終了後の残留processゼロ。
 - 検証: Rust392件、Python928件、OSUI210件とnative/Wasmビルドが成功。
   最後の監督/USI修正には関連73件と実process回帰を追補し、Ruffと独立Astra/xhighレビュー済み。
   更新step24の再export照合と凍結pure smokeも成功。全体試験を変更なく反復していない。
-- 容量: 比較証拠と再開側の資産を照合し、重複した連続実行preflight出力84,824,747 bytes
+- 継続: 現在taskのheartbeat `openshogiai` を30分間隔でACTIVE登録済み。
+  常時監督は実script、Lunaは固定運用、Astraは重要な失敗・学習後判断と実ブラウザーを担当。
+  変更なしでは通知せず、`awaiting_astra_browser` から候補identity/固定40対局を判断し、
+  開発候補選択へ載せて8時計条件・18fixture・通常対局を再確認する。
+  ブラウザーfixtureは `diagnosis/browser-clock-fixtures.html` とOSUIのignored
+  `.playwright-mcp/clock-contract.html`、既知旧モデル実測は `diagnosis/browser-clock-baseline.json`。
+  残工程は本学習、export監査、固定対局、Astra判断、候補の実ブラウザー再評価。
+  コード/設定変更・再sealはせず、status/start/stopはdevelopment.mdの実コマンドを使う。
+- 容量: 起動後空き約355GiB、監督対象RSS約1.39GiB、swap増加なし。
+  比較証拠と再開側の資産を照合し、重複した連続実行preflight出力84,824,747 bytes
   を削除。削除前hash/参照/開放確認は `preflight-v2/cleanup-whole-preflight.json`。
 
 以下は前回試作までの履歴。上記の現在runや採用判断と混同しない。
