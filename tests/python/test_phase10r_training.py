@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import open_shogi_training.phase10r_campaign as campaign
 import pytest
 import torch
 from open_shogi_training.phase10r_model import (
@@ -213,6 +214,42 @@ def test_deterministic_repeat_and_exact_checkpoint_resume(tmp_path: Path) -> Non
     resumed_checkpoint = _load_checkpoint(Path(resumed["checkpoint"]))
     uninterrupted_checkpoint = _load_checkpoint(Path(uninterrupted["checkpoint"]))
     _assert_nested_tensors_equal(resumed_checkpoint, uninterrupted_checkpoint)
+
+
+def test_campaign_completed_checkpoint_keeps_stream_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        campaign,
+        "_stream_batches",
+        lambda path, *, expected_rows, start_cursor, batch_size: iter(
+            [([_example()], expected_rows)]
+        ),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_resource_guard",
+        lambda data_root: {"disk_passed": True, "peak_rss_bytes": 0},
+    )
+
+    model = Phase10RModel(VARIANT_PAIR, seed=123)
+    optimizer, scheduler = campaign._new_optimizer(model)
+    result = campaign._run_stage(
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        stage_id=campaign.STAGE_ONE,
+        stage_dir=tmp_path / "stage",
+        train_path=tmp_path / "train.jsonl",
+        expected_rows=1,
+        manifest_sha256=MANIFEST_SHA,
+        data_root=tmp_path,
+        resume=False,
+    )
+
+    checkpoint = _load_checkpoint(Path(result["checkpoint"]))
+    assert checkpoint["completed"] is True
+    assert checkpoint["stream_index"] == 1
 
 
 def test_primary_float_and_int8_exports_parse_without_overwrite(tmp_path: Path) -> None:

@@ -1,0 +1,99 @@
+{
+  "schema": "open_shogiai_phase10t_training/v1",
+  "status": "frozen_not_started",
+  "rungs": [
+    {
+      "id": "micro",
+      "unique_positions": 32,
+      "maximum_steps": 2000,
+      "maximum_seconds": 120,
+      "gate": "semantic_proof_and_memorization"
+    },
+    {
+      "id": "100k",
+      "unique_positions": 100000,
+      "gate": "recovery"
+    },
+    {
+      "id": "1m",
+      "unique_positions": 1000000,
+      "gate": "viable"
+    },
+    {
+      "id": "larger",
+      "maximum_unique_positions": 3000000,
+      "activation": "completed_1m_both_modes_improve_by_at_least_0.02_over_100k_and_viable_gate_passes"
+    }
+  ],
+  "optimizer": "AdamW",
+  "learning_rate": 0.0003,
+  "weight_decay": 0.0001,
+  "batch_size": 128,
+  "gradient_clip": 5,
+  "scheduler": {
+    "type": "linear_warmup_cosine",
+    "warmup_fraction": 0.05,
+    "minimum_lr": 3e-05
+  },
+  "maximum_passes": 2,
+  "joint_heads": true,
+  "sequential_wdl_only_shared_trunk": false,
+  "validation_every_steps": 250,
+  "early_stop_patience": 4,
+  "keep": [
+    "pareto_best_3",
+    "last",
+    "pre_stage"
+  ],
+  "export": "selected_validation_checkpoint_hash",
+  "training_batch_loss_selection": false,
+  "quality_gates": {
+    "reference": "same_architecture_pre_stage_and_selected_1m_on_identical_nonfinal_population",
+    "wdl_nll_max_regression": 0.01,
+    "policy_nll_max_regression_when_enabled": 0.05,
+    "policy_top1_max_drop_when_enabled": 0.005,
+    "brier_max_regression": 0.01,
+    "ece_max_regression": 0.01,
+    "teacher_cp_mae_max": 300,
+    "teacher_sign_agreement_min": 0.7,
+    "teacher_ranking_accuracy_min": 0.6,
+    "report_each_source": true,
+    "quality_only_failure": "hard_relabel_retrain"
+  },
+  "integrity_gates": [
+    "provenance",
+    "leakage",
+    "hashes",
+    "legality",
+    "parity",
+    "pure_runtime",
+    "model_loading",
+    "target_semantics",
+    "build_audit"
+  ],
+  "selfplay": {
+    "entry_gate": "selfplay_entry",
+    "pure_only": true,
+    "max_games_per_generation": 10000,
+    "max_generations": 3,
+    "factual_teacher_anchor_fraction_min": 0.25,
+    "revalidate_each_generation": true,
+    "final_promotion": false,
+    "final_holdout": false
+  },
+  "failure_routes": {
+    "integrity": "STOP_CLOSED",
+    "quality": "HARD_RELABEL_RETRAIN",
+    "retry_exhausted": "REVIEW_REQUIRED",
+    "missing_evidence": "STOP_CLOSED"
+  },
+  "final_actions_forbidden": [
+    "promotion",
+    "final_holdout",
+    "push",
+    "merge",
+    "release",
+    "deploy",
+    "OpenShogiUI"
+  ]
+}

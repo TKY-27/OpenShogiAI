@@ -38,10 +38,6 @@ from open_shogi_training.phase10r import (
 )
 from open_shogi_training.phase10r_campaign import (
     Phase10RCampaignError,
-    evaluate_scale,
-    label_hard,
-    select_hard,
-    train_variant,
 )
 from open_shogi_training.phase10r_execution import (
     Phase10RExecutionError,
@@ -59,10 +55,6 @@ from open_shogi_training.phase10r_model import (
     expected_parameter_count,
     parse_osaval02,
 )
-from open_shogi_training.phase10r_teacher_binding import (
-    calibrate_teacher,
-    prepare_teacher_binding,
-)
 from open_shogi_training.phase10r_training import (
     Phase10RExample,
     Phase10RModel,
@@ -75,10 +67,7 @@ from open_shogi_training.phase10r_training import (
 RUNS_DIRECTORY: Final = Path("local/phase10r-runs")
 FROZEN_BRANCH: Final = "codex/phase10r-curriculum"
 SCALE_VALUES: Final = ("1m", "10m", "50m", "100m", "500m", "1b")
-TRAIN_VARIANTS: Final = (
-    "sparse-pair-policy-wdl",
-    "factorized-pair-triple-policy-score",
-)
+TRAIN_VARIANTS: Final = ("sparse-pair-policy-wdl",)
 BACKEND_GAP: Final = (
     "bounded Phase 10R training backend validation did not pass; no 1M or larger rung may start."
 )
@@ -215,7 +204,7 @@ def _disk_receipt(root: Path) -> dict[str, Any]:
     if not data_root.is_absolute():
         data_root = root / data_root
     usage = shutil.disk_usage(data_root if data_root.exists() else root)
-    minimum = 150 * 1024**3
+    minimum = 100 * 1024**3
     try:
         display_path = str(data_root.relative_to(root))
     except ValueError:
@@ -252,7 +241,7 @@ def _thermal_receipt() -> dict[str, Any]:
 
 def _backend_receipt(root: Path) -> dict[str, Any]:
     runtime = root / "engine/core/src/phase10r.rs"
-    wasm = root / "engine/wasm/src/lib.rs"
+    wasm = root / "engine/wasm/src/full.rs"
     model_module = root / "training/open_shogi_training/phase10r_model.py"
     training_module = root / "training/open_shogi_training/phase10r_training.py"
     scanner_module = root / "training/open_shogi_training/data/phase10r_scan.py"
@@ -376,7 +365,7 @@ def _run_preflight(root: Path, argv: Sequence[str]) -> tuple[dict[str, Any], boo
         failures.append(f"source registry: {error}")
     receipt["disk"] = _disk_receipt(root)
     if not receipt["disk"]["passed"]:
-        failures.append("disk free space is below the frozen 150 GiB floor")
+        failures.append("disk free space is below the 100 GiB 10M campaign floor")
     receipt["thermal"] = _thermal_receipt()
     if not receipt["thermal"]["passed"]:
         failures.append("thermal status could not be observed")
@@ -786,91 +775,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    root = args.root.resolve()
-    command = args.command
-    command_argv = tuple(argv if argv is not None else sys.argv[1:])
-    if command == "preflight":
-        receipt, _ = _run_preflight(root, command_argv)
-        return _write_receipt_and_return(root, command, command_argv, receipt)
-    if command == "prepare":
-        return _prepare(root, command_argv, args.scale)
-    if command == "prepare-teacher-binding":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: prepare_teacher_binding(root, args.scale),
-        )
-    if command == "train":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: train_variant(
-                root,
-                args.scale,
-                args.variant,
-                resume=args.resume,
-                git_commit=_git(root, "rev-parse", "HEAD"),
-            ),
-        )
-    if command == "calibrate-teacher":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: calibrate_teacher(
-                root,
-                args.scale,
-                args.variant,
-                resume=args.resume,
-                git_commit=_git(root, "rev-parse", "HEAD"),
-            ),
-        )
-    if command == "evaluate":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: evaluate_scale(
-                root,
-                args.scale,
-                all_source_held_out=args.all_source_held_out,
-                cross_runtime=args.cross_runtime,
-                incremental_parity=args.incremental_parity,
-                git_commit=_git(root, "rev-parse", "HEAD"),
-            ),
-        )
-    if command == "select-hard":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: select_hard(root, args.scale, git_commit=_git(root, "rev-parse", "HEAD")),
-        )
-    if command == "label-hard":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: label_hard(
-                root,
-                args.scale,
-                resume=args.resume,
-                git_commit=_git(root, "rev-parse", "HEAD"),
-            ),
-        )
-    if command == "validate-teacher-binding":
-        return _campaign_operation(
-            root,
-            command,
-            command_argv,
-            lambda: _validate_teacher_binding(root, args.scale),
-        )
-    if command == "report":
-        return _report(root, command_argv, args.scale)
-    return _blocked_operation(root, command, command_argv, BACKEND_GAP)
+    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
 
 
 if __name__ == "__main__":

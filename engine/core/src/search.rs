@@ -11,9 +11,12 @@ use std::{
 use web_time::Instant;
 
 use crate::{
-    EvaluationConfig, Move, NeuralEvaluator, Osaval02SearchAdapter, PieceKind, Position, Side,
-    TimePlan, evaluate,
+    Move, Osaval02SearchAdapter, PieceKind, Position, RuntimeProfile, RuntimeProofCounters, Side,
+    TimePlan,
 };
+
+#[cfg(feature = "handcrafted")]
+use crate::{EvaluationConfig, NeuralEvaluator, evaluate};
 
 /// Base score used for checkmates. Distance in plies is subtracted from this value.
 pub const MATE_SCORE: i32 = 30_000;
@@ -106,7 +109,9 @@ impl Default for SearchLimits {
 )]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SearchConfig {
+    #[cfg(feature = "handcrafted")]
     pub evaluation: EvaluationConfig,
+    pub runtime_profile: RuntimeProfile,
     pub transposition_entries: usize,
     pub quiescence_depth: u8,
     pub aspiration_window: i32,
@@ -124,7 +129,13 @@ pub struct SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "handcrafted")]
             evaluation: EvaluationConfig::default(),
+            runtime_profile: if cfg!(feature = "pure-only") {
+                RuntimeProfile::PureLearned
+            } else {
+                RuntimeProfile::Standard
+            },
             transposition_entries: 65_536,
             quiescence_depth: 8,
             aspiration_window: 50,
@@ -185,6 +196,17 @@ pub struct SearchStats {
     pub neural_inference_time: Duration,
     /// Number of failed strict OSAVAL02 inferences.
     pub osaval02_inference_errors: u64,
+    /// Static evaluations served by a learned model (strict OSAVAL02 or neural leaf).
+    pub learned_eval_calls: u64,
+    /// Static evaluations served by the handcrafted evaluator, including its residual and
+    /// composite blend roles.
+    pub handcrafted_eval_calls: u64,
+    pub residual_eval_calls: u64,
+    pub composite_eval_calls: u64,
+    /// Root completions that returned a legal move without any valid evaluation, such as a
+    /// failed strict OSAVAL02 inference; deliberate legal timeout move selection and
+    /// terminal-rule scores are not evaluation fallbacks.
+    pub fallback_count: u64,
 }
 
 /// A completed iterative-deepening update.
@@ -295,9 +317,24 @@ impl NodeValue {
 /// Reusable search state with a bounded direct-mapped transposition table.
 pub struct SearchEngine {
     config: SearchConfig,
+    phase10v: Option<Arc<crate::Phase10VEvaluator>>,
+    v3_state: Option<crate::Phase10VAccumulator>,
+    v3_updates: u64,
+    v3_refreshes: u64,
+    leaf_trace: std::cell::RefCell<Vec<serde_json::Value>>,
+    leaf_trace_limit: usize,
+    phase10t: Option<Arc<crate::Phase10TEvaluator>>,
+    a1_state: Option<crate::Phase10TAccumulator>,
+    a1_positions: Vec<Position>,
+    a1_game_positions: Vec<Position>,
+    a1_game_checks: Vec<bool>,
+    pure_history_rejected: bool,
+    a1_checks: Vec<bool>,
+    #[cfg(feature = "handcrafted")]
     neural: Option<Arc<NeuralEvaluator>>,
     osaval02: Option<Osaval02SearchAdapter>,
     root_osaval02_policy: Vec<(Move, i32)>,
+    #[cfg(feature = "handcrafted")]
     neural_mode: NeuralEvaluationMode,
     transposition_table: Vec<Option<TranspositionEntry>>,
     killers: Vec<[Option<Move>; 2]>,
@@ -307,6 +344,7 @@ pub struct SearchEngine {
 
 /// Static-score semantics for an attached neural artifact.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg(feature = "handcrafted")]
 pub enum NeuralEvaluationMode {
     /// The model output is the complete position score.
     #[default]
@@ -317,6 +355,7 @@ pub enum NeuralEvaluationMode {
     Composite,
 }
 
+#[cfg(feature = "handcrafted")]
 impl NeuralEvaluationMode {
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -330,18 +369,39 @@ impl NeuralEvaluationMode {
 
 impl SearchEngine {
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn new(config: SearchConfig) -> Self {
         Self::with_clock(config, Arc::new(SystemMonotonicClock::default()))
     }
 
     /// Builds an engine with an injected monotonic clock.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_clock(config: SearchConfig, clock: Arc<dyn MonotonicClock>) -> Self {
+        Self::empty(config, clock)
+    }
+
+    fn empty(config: SearchConfig, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             config,
+            phase10v: None,
+            v3_state: None,
+            v3_updates: 0,
+            v3_refreshes: 0,
+            leaf_trace: std::cell::RefCell::new(Vec::new()),
+            leaf_trace_limit: 0,
+            phase10t: None,
+            a1_state: None,
+            a1_positions: Vec::new(),
+            a1_game_positions: Vec::new(),
+            a1_game_checks: Vec::new(),
+            pure_history_rejected: false,
+            a1_checks: Vec::new(),
+            #[cfg(feature = "handcrafted")]
             neural: None,
             osaval02: None,
             root_osaval02_policy: Vec::new(),
+            #[cfg(feature = "handcrafted")]
             neural_mode: NeuralEvaluationMode::PureValue,
             transposition_table: vec![None; config.transposition_entries],
             killers: vec![[None; 2]; MAX_SEARCH_PLY],
@@ -354,12 +414,14 @@ impl SearchEngine {
     ///
     /// Mate and stalemate scores continue to be assigned by search and never by the model.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_neural(config: SearchConfig, neural: Arc<NeuralEvaluator>) -> Self {
         Self::with_neural_mode(config, neural, NeuralEvaluationMode::PureValue)
     }
 
     /// Builds an engine with explicit, evidence-visible neural score semantics.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_neural_mode(
         config: SearchConfig,
         neural: Arc<NeuralEvaluator>,
@@ -373,6 +435,7 @@ impl SearchEngine {
 
     /// Builds a neural engine with an injected monotonic clock.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_neural_and_clock(
         config: SearchConfig,
         neural: Arc<NeuralEvaluator>,
@@ -383,16 +446,242 @@ impl SearchEngine {
 
     /// Builds an explicit neural-score mode with an injected monotonic clock.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_neural_mode_and_clock(
         config: SearchConfig,
         neural: Arc<NeuralEvaluator>,
         mode: NeuralEvaluationMode,
         clock: Arc<dyn MonotonicClock>,
     ) -> Self {
-        let mut engine = Self::with_clock(config, clock);
+        let mut engine = Self::empty(config, clock);
         engine.neural = Some(neural);
         engine.neural_mode = mode;
         engine
+    }
+
+    /// Constructs a validated, fail-closed frozen a1 production evaluator.
+    /// # Errors
+    /// Rejects a missing, malformed, or mismatched expected SHA-256 identity.
+    pub fn with_phase10t(
+        mut config: SearchConfig,
+        evaluator: Arc<crate::Phase10TEvaluator>,
+        expected_model_sha256: &str,
+    ) -> Result<Self, String> {
+        if expected_model_sha256.len() != 64
+            || !expected_model_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            || evaluator.identity().artifact_sha256 != expected_model_sha256
+        {
+            return Err(
+                "pure_learned a1 model SHA-256 mismatch or invalid expected identity".to_owned(),
+            );
+        }
+        config.runtime_profile = RuntimeProfile::PureLearned;
+        #[cfg(feature = "handcrafted")]
+        {
+            config.evaluation = EvaluationConfig::disabled();
+        }
+        let mut engine = Self::empty(config, Arc::new(SystemMonotonicClock::default()));
+        engine.phase10t = Some(evaluator);
+        Ok(engine)
+    }
+
+    /// Constructs a validated, fail-closed frozen OSAVAL03 production evaluator.
+    /// # Errors
+    /// Rejects a missing, malformed, or mismatched expected SHA-256 identity.
+    pub fn with_phase10v(
+        mut config: SearchConfig,
+        evaluator: Arc<crate::Phase10VEvaluator>,
+        expected_model_sha256: &str,
+    ) -> Result<Self, String> {
+        if expected_model_sha256.len() != 64
+            || !expected_model_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            || evaluator.identity().artifact_sha256 != expected_model_sha256
+        {
+            return Err(
+                "pure_learned OSAVAL03 model SHA-256 mismatch or invalid expected identity"
+                    .to_owned(),
+            );
+        }
+        config.runtime_profile = RuntimeProfile::PureLearned;
+        #[cfg(feature = "handcrafted")]
+        {
+            config.evaluation = EvaluationConfig::disabled();
+        }
+        let mut engine = Self::empty(config, Arc::new(SystemMonotonicClock::default()));
+        engine.phase10v = Some(evaluator);
+        Ok(engine)
+    }
+
+    /// Enable bounded evidence collection at actual static-evaluation calls. Disabled by default.
+    pub fn set_leaf_trace_limit(&mut self, limit: usize) {
+        self.leaf_trace_limit = limit.min(10_000);
+        self.leaf_trace.borrow_mut().clear();
+    }
+
+    /// Drain actual evaluated leaves, including root-relative ply and complete model identity.
+    pub fn take_leaf_trace(&self) -> Vec<serde_json::Value> {
+        std::mem::take(&mut *self.leaf_trace.borrow_mut())
+    }
+
+    /// Supplies actual game history by validated replay, before searching its current root.
+    /// A standalone SFEN without this call has unknown prior history.
+    /// # Errors
+    /// Rejects use with another evaluator or an illegal history move.
+    pub fn set_phase10t_history(
+        &mut self,
+        initial: &Position,
+        moves: &[Move],
+    ) -> Result<(), String> {
+        if self.phase10t.is_none() {
+            return Err("a1 history requires an a1 evaluator".to_owned());
+        }
+        self.set_pure_history(initial, moves)
+    }
+
+    /// Replay authoritative game history for either pure model format.
+    /// # Errors
+    /// Rejects non-pure engines and illegal histories.
+    pub fn set_pure_history(&mut self, initial: &Position, moves: &[Move]) -> Result<(), String> {
+        if self.config.runtime_profile != RuntimeProfile::PureLearned {
+            return Err("pure history requires a pure evaluator".into());
+        }
+        self.pure_history_rejected = true;
+        self.a1_game_positions.clear();
+        self.a1_game_checks.clear();
+        self.clear_transpositions();
+        let mut game = crate::Game::new(initial.clone());
+        let mut positions = vec![initial.clone()];
+        let mut checks = Vec::new();
+        for movement in moves {
+            game.play(*movement).map_err(|error| error.to_string())?;
+            let position = game.position();
+            checks.push(position.is_in_check(position.side_to_move()));
+            positions.push(position.clone());
+        }
+        self.a1_game_positions = positions;
+        self.a1_game_checks = checks;
+        self.pure_history_rejected = false;
+        self.clear_transpositions();
+        Ok(())
+    }
+
+    fn a1_history(&self) -> crate::Osaval02History {
+        let Some(current) = self.a1_positions.last() else {
+            return crate::Osaval02History::default();
+        };
+        let occurrences: Vec<usize> = self
+            .a1_positions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| current.same_state(p).then_some(i))
+            .collect();
+        let mut checking = [false; 2];
+        if occurrences.len() >= 2 {
+            let start = occurrences[0];
+            for side in [Side::Black, Side::White] {
+                let moves: Vec<usize> = (start..self.a1_checks.len())
+                    .filter(|i| self.a1_positions[*i].side_to_move() == side)
+                    .collect();
+                checking[side.index()] =
+                    !moves.is_empty() && moves.iter().all(|i| self.a1_checks[*i]);
+            }
+        }
+        // Match the exact rule adjudicator's deterministic checking-side precedence.
+        if checking[0] {
+            checking[1] = false;
+        }
+        crate::Osaval02History {
+            available: !self.a1_game_positions.is_empty() || self.a1_positions.len() > 1,
+            repetition_count: u8::try_from(occurrences.len().min(4)).expect("bounded repetition"),
+            continuous_check_by_us: checking[current.side_to_move().index()],
+            continuous_check_by_them: checking[current.side_to_move().opposite().index()],
+        }
+    }
+
+    fn a1_push(
+        &mut self,
+        movement: Move,
+        position: &Position,
+    ) -> (
+        Option<crate::Phase10TAccumulator>,
+        Option<crate::Phase10VAccumulator>,
+    ) {
+        if self.phase10t.is_none() && self.config.runtime_profile != RuntimeProfile::PureLearned {
+            return (None, None);
+        }
+        self.a1_checks
+            .push(position.is_in_check(position.side_to_move()));
+        self.a1_positions.push(position.clone());
+        if let Some(evaluator) = &self.phase10v {
+            let state = self.v3_state.as_mut().expect("initialized v3 root");
+            self.v3_refreshes +=
+                u64::from(crate::Phase10VEvaluator::requires_refresh(state, movement));
+            self.v3_updates += 1;
+            return (
+                None,
+                Some(evaluator.update_generated_accumulator(state, movement, position)),
+            );
+        }
+        let history = self.a1_history();
+        let Some(evaluator) = self.phase10t.as_ref() else {
+            return (None, None);
+        };
+        (
+            Some(
+                evaluator
+                    .update_generated_accumulator(
+                        self.a1_state.as_mut().expect("initialized a1 root"),
+                        movement,
+                        position,
+                        history,
+                    )
+                    .expect("generated move and exact bounded history"),
+            ),
+            None,
+        )
+    }
+
+    fn a1_pop(
+        &mut self,
+        previous: (
+            Option<crate::Phase10TAccumulator>,
+            Option<crate::Phase10VAccumulator>,
+        ),
+    ) {
+        if let Some(state) = previous.1 {
+            self.v3_state = Some(state);
+        }
+        if let Some(previous) = previous.0 {
+            self.a1_state = Some(previous);
+        }
+        if self.phase10t.is_some() || self.config.runtime_profile == RuntimeProfile::PureLearned {
+            self.a1_positions.pop();
+            self.a1_checks.pop();
+        }
+    }
+
+    fn a1_repetition(&self, position: &Position, ply: usize) -> Option<NodeValue> {
+        if self.phase10t.is_none() && self.config.runtime_profile != RuntimeProfile::PureLearned {
+            return None;
+        }
+        crate::game::repetition_outcome_from_history(&self.a1_positions, &self.a1_checks).map(
+            |outcome| {
+                NodeValue::leaf(match outcome {
+                    crate::RepetitionOutcome::NoContest => 0,
+                    crate::RepetitionOutcome::PerpetualCheckLoss(side) => {
+                        if side == position.side_to_move() {
+                            -MATE_SCORE + i32::try_from(ply).unwrap_or(i32::MAX)
+                        } else {
+                            MATE_SCORE - i32::try_from(ply).unwrap_or(i32::MAX)
+                        }
+                    }
+                })
+            },
+        )
     }
 
     /// Builds a pure-value search engine backed by the strict OSAVAL02 adapter.
@@ -401,6 +690,7 @@ impl SearchEngine {
     /// selected artifact is never reinterpreted as OSAVAL01 and never blended with handcrafted
     /// evaluation.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_osaval02(config: SearchConfig, evaluator: Arc<crate::Osaval02Evaluator>) -> Self {
         Self::with_osaval02_history_and_clock(
             config,
@@ -410,8 +700,87 @@ impl SearchEngine {
         )
     }
 
+    /// Build the fail-closed OSAVAL02-only pure learned runtime.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid or mismatched expected artifact hash before search starts.
+    pub fn with_pure_learned(
+        mut config: SearchConfig,
+        evaluator: Arc<crate::Osaval02Evaluator>,
+        expected_model_sha256: &str,
+    ) -> Result<Self, String> {
+        if expected_model_sha256.len() != 64
+            || !expected_model_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("pure_learned requires a lowercase SHA-256 model identity".to_owned());
+        }
+        if evaluator.identity().artifact_sha256 != expected_model_sha256 {
+            return Err("pure_learned model SHA-256 mismatch".to_owned());
+        }
+        config.runtime_profile = RuntimeProfile::PureLearned;
+        #[cfg(feature = "handcrafted")]
+        {
+            config.evaluation = EvaluationConfig::disabled();
+        }
+        let mut engine = Self::empty(config, Arc::new(SystemMonotonicClock::default()));
+        engine.osaval02 = Some(Osaval02SearchAdapter::new(evaluator));
+        Ok(engine)
+    }
+
+    /// Build the profile evidence for a completed search.
+    ///
+    /// The engine owns no opening-book or teacher call path, so `book_hits` and
+    /// `teacher_calls` are structurally zero here; protocol layers that do own such paths
+    /// must enforce the profile before any search starts.
+    #[must_use]
+    pub fn runtime_proof(
+        &self,
+        stats: SearchStats,
+        model_sha256: impl Into<String>,
+    ) -> RuntimeProofCounters {
+        RuntimeProofCounters {
+            profile: self.config.runtime_profile.name(),
+            profile_schema: if self.phase10v.is_some() {
+                crate::PHASE10V_PROFILE_SCHEMA
+            } else if self.phase10t.is_some() {
+                crate::PHASE10T_PROFILE_SCHEMA
+            } else {
+                crate::PURE_LEARNED_PROFILE_SCHEMA
+            },
+            learned_eval_calls: stats.learned_eval_calls,
+            accumulator_updates: self.v3_updates,
+            accumulator_refreshes: self.v3_refreshes,
+            handcrafted_eval_calls: stats.handcrafted_eval_calls,
+            residual_eval_calls: stats.residual_eval_calls,
+            composite_eval_calls: stats.composite_eval_calls,
+            book_hits: 0,
+            teacher_calls: 0,
+            fallback_count: stats.fallback_count,
+            model_sha256: if let Some(evaluator) = &self.phase10v {
+                evaluator.identity().artifact_sha256.clone()
+            } else if let Some(evaluator) = &self.phase10t {
+                evaluator.identity().artifact_sha256.clone()
+            } else if let Some(evaluator) = &self.osaval02 {
+                evaluator.identity().artifact_sha256.clone()
+            } else {
+                model_sha256.into()
+            },
+            evaluator_profile_schema_hash: if self.phase10v.is_some() {
+                crate::PHASE10V_PROFILE_SCHEMA_SHA256
+            } else if self.phase10t.is_some() {
+                crate::PHASE10T_PROFILE_SCHEMA_SHA256
+            } else {
+                crate::PURE_LEARNED_PROFILE_SCHEMA_SHA256
+            },
+        }
+    }
+
     /// Builds an OSAVAL02 search engine with explicit history facts.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_osaval02_history(
         config: SearchConfig,
         evaluator: Arc<crate::Osaval02Evaluator>,
@@ -427,6 +796,7 @@ impl SearchEngine {
 
     /// Builds an OSAVAL02 search engine with an injected monotonic clock.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_osaval02_and_clock(
         config: SearchConfig,
         evaluator: Arc<crate::Osaval02Evaluator>,
@@ -442,13 +812,14 @@ impl SearchEngine {
 
     /// Builds an OSAVAL02 search engine with explicit history and clock dependencies.
     #[must_use]
+    #[cfg(feature = "handcrafted")]
     pub fn with_osaval02_history_and_clock(
         config: SearchConfig,
         evaluator: Arc<crate::Osaval02Evaluator>,
         history: crate::Osaval02History,
         clock: Arc<dyn MonotonicClock>,
     ) -> Self {
-        let mut engine = Self::with_clock(config, clock);
+        let mut engine = Self::empty(config, clock);
         engine.osaval02 = Some(Osaval02SearchAdapter::with_history(evaluator, history));
         engine
     }
@@ -562,13 +933,70 @@ impl SearchEngine {
         mut callback: impl FnMut(&SearchInfo),
     ) -> SearchResult {
         self.reset_for_search(clear_transpositions);
+        self.v3_updates = 0;
+        self.v3_refreshes = 0;
+        self.leaf_trace.borrow_mut().clear();
+        if self.config.runtime_profile == RuntimeProfile::PureLearned
+            && (self.pure_history_rejected
+                || self
+                    .a1_game_positions
+                    .last()
+                    .is_some_and(|root| root != position))
+        {
+            return SearchResult {
+                best_move: None,
+                score: 0,
+                depth: 0,
+                seldepth: 0,
+                nodes: 0,
+                elapsed: Duration::ZERO,
+                nps: 0,
+                pv: Vec::new(),
+                root_moves: Vec::new(),
+                stats: SearchStats::default(),
+                termination: SearchTermination::EvaluationError,
+            };
+        }
+        if self.phase10t.is_some() || self.config.runtime_profile == RuntimeProfile::PureLearned {
+            if self
+                .a1_game_positions
+                .last()
+                .is_some_and(|root| root.same_state(position))
+            {
+                self.a1_positions.clone_from(&self.a1_game_positions);
+                self.a1_checks.clone_from(&self.a1_game_checks);
+            } else {
+                self.a1_game_positions.clear();
+                self.a1_game_checks.clear();
+                self.a1_positions = vec![position.clone()];
+                self.a1_checks.clear();
+            }
+            if let Some(evaluator) = &self.phase10v {
+                self.v3_state = Some(evaluator.accumulator(position).expect("validated position"));
+                self.v3_refreshes = 2;
+            }
+            if let Some(evaluator) = &self.phase10t {
+                self.a1_state = Some(
+                    evaluator
+                        .accumulator(position, self.a1_history())
+                        .expect("validated search history"),
+                );
+            }
+        }
         let clock = Arc::clone(&self.clock);
         let started = clock.now();
-        let legal_moves = position.legal_moves();
+        let root_repetition = self.a1_repetition(position, 0);
+        let legal_moves = if root_repetition.is_some() {
+            Vec::new()
+        } else {
+            position.legal_moves()
+        };
         let fallback = legal_moves.first().copied();
         let mut context = SearchContext::new(limits, cancellation, started, clock.as_ref());
         let mut completed = NodeValue {
-            score: if legal_moves.is_empty() {
+            score: if let Some(repetition) = root_repetition {
+                repetition.score
+            } else if legal_moves.is_empty() {
                 if position.is_in_check(position.side_to_move()) {
                     -MATE_SCORE
                 } else {
@@ -582,8 +1010,13 @@ impl SearchEngine {
                 if limits.max_depth > 0 {
                     self.prepare_osaval02_root_policy(position, &mut context);
                 }
-                self.evaluate_position(position, &mut context)
-                    .unwrap_or_default()
+                let evaluated = self.evaluate_position(position, &mut context);
+                if evaluated.is_err() {
+                    // A failed strict inference returns the protocol-required legal move
+                    // without any valid score; the pure-learned proof must see this fallback.
+                    context.stats.fallback_count = context.stats.fallback_count.saturating_add(1);
+                }
+                evaluated.unwrap_or_default()
             },
             pv: fallback.into_iter().collect(),
         };
@@ -738,6 +1171,9 @@ impl SearchEngine {
             );
         }
         context.enter_node(ply, false)?;
+        if let Some(repetition) = self.a1_repetition(position, ply) {
+            return Ok(repetition);
+        }
 
         // Legal terminal classification must precede every horizon/static evaluation. Besides
         // preserving mate and stalemate semantics when quiescence is disabled, this guarantees
@@ -748,7 +1184,7 @@ impl SearchEngine {
                 return Ok(terminal_node(position, ply));
             }
             return Ok(NodeValue {
-                score: self.evaluate_position(position, context)?,
+                score: self.evaluate_position_kind(position, context, "pv_horizon_leaf")?,
                 pv: Vec::new(),
             });
         }
@@ -761,7 +1197,11 @@ impl SearchEngine {
             tt_move = entry.best_move;
             // The root must still enumerate every move so MultiPV/root evidence remains complete.
             // Retained root entries are used only for move ordering; interior entries may cut.
-            if ply > 0 && entry.depth >= depth {
+            if self.phase10t.is_none()
+                && self.config.runtime_profile != RuntimeProfile::PureLearned
+                && ply > 0
+                && entry.depth >= depth
+            {
                 let score = score_from_transposition(entry.score, ply);
                 match entry.bound {
                     Bound::Exact => {
@@ -810,6 +1250,7 @@ impl SearchEngine {
             let nodes_before = context.nodes;
             let quiet = is_quiet(position, movement);
             let undo = position.make_generated_move(movement);
+            let a1_previous = self.a1_push(movement, position);
             let child = if self.config.enable_pvs && self.config.enable_alpha_beta && index > 0 {
                 let scout = self.negamax(position, depth - 1, -alpha - 1, -alpha, ply + 1, context);
                 match scout {
@@ -834,6 +1275,7 @@ impl SearchEngine {
                 )
             };
             position.unmake_move(undo);
+            self.a1_pop(a1_previous);
             let child = child?;
             searched_moves += 1;
             let score = -child.score;
@@ -911,6 +1353,9 @@ impl SearchEngine {
         context: &mut SearchContext<'_>,
     ) -> Result<NodeValue, ()> {
         context.enter_node(ply, true)?;
+        if let Some(repetition) = self.a1_repetition(position, ply) {
+            return Ok(repetition);
+        }
         let in_check = position.is_in_check(position.side_to_move());
         let mut moves = position.legal_moves();
         if moves.is_empty() {
@@ -924,11 +1369,17 @@ impl SearchEngine {
         let stand_pat = if in_check {
             -INFINITY
         } else {
-            self.evaluate_position(position, context)?
+            self.evaluate_position_kind(position, context, "quiescence_leaf")?
         };
         if ply >= MAX_SEARCH_PLY {
             return Ok(NodeValue::leaf(if in_check {
-                0_i32.max(alpha).min(beta)
+                if self.phase10t.is_some() || self.phase10v.is_some() {
+                    self.evaluate_position_kind(position, context, "quiescence_leaf")?
+                        .max(alpha)
+                        .min(beta)
+                } else {
+                    0_i32.max(alpha).min(beta)
+                }
             } else {
                 stand_pat.max(alpha)
             }));
@@ -968,8 +1419,10 @@ impl SearchEngine {
         let child_remaining = remaining.saturating_sub(1);
         for movement in moves {
             let undo = position.make_generated_move(movement);
+            let a1_previous = self.a1_push(movement, position);
             let child = self.quiescence(position, -beta, -alpha, ply + 1, child_remaining, context);
             position.unmake_move(undo);
+            self.a1_pop(a1_previous);
             let child = child?;
             searched_moves += 1;
             let score = -child.score;
@@ -1122,11 +1575,61 @@ impl SearchEngine {
         position: &Position,
         context: &mut SearchContext<'_>,
     ) -> Result<i32, ()> {
-        if let Some(osaval02) = &self.osaval02 {
+        self.evaluate_position_kind(position, context, "static")
+    }
+
+    fn evaluate_position_kind(
+        &self,
+        position: &Position,
+        context: &mut SearchContext<'_>,
+        kind: &str,
+    ) -> Result<i32, ()> {
+        if let Some(evaluator) = &self.phase10v {
             let started = self.clock.now();
-            let result = osaval02.evaluate(position);
+            let result = evaluator
+                .infer_owned_accumulator(self.v3_state.as_ref().expect("initialized v3 state"));
             context.stats.neural_inference_calls =
                 context.stats.neural_inference_calls.saturating_add(1);
+            context.stats.learned_eval_calls = context.stats.learned_eval_calls.saturating_add(1);
+            context.stats.neural_inference_time = context
+                .stats
+                .neural_inference_time
+                .saturating_add(self.clock.now().saturating_sub(started));
+            if self.leaf_trace_limit > 0 {
+                let mut trace = self.leaf_trace.borrow_mut();
+                if trace.len() < self.leaf_trace_limit {
+                    trace.push(serde_json::json!({"sfen": crate::to_sfen(position),
+                        "ply": self.a1_positions.len().saturating_sub(self.a1_game_positions.len().max(1)),
+                        "kind": kind, "cp": result.cp,
+                        "model_sha256": evaluator.identity().artifact_sha256,
+                        "evaluation_ordinal": context.stats.learned_eval_calls}));
+                }
+            }
+            return Ok(result.cp);
+        }
+        if let Some(evaluator) = &self.phase10t {
+            let started = self.clock.now();
+            let result =
+                evaluator.infer_accumulator(self.a1_state.as_ref().expect("initialized a1 state"));
+            context.stats.neural_inference_calls =
+                context.stats.neural_inference_calls.saturating_add(1);
+            context.stats.learned_eval_calls = context.stats.learned_eval_calls.saturating_add(1);
+            context.stats.neural_inference_time = context
+                .stats
+                .neural_inference_time
+                .saturating_add(self.clock.now().saturating_sub(started));
+            return Ok(result.cp);
+        }
+        if let Some(osaval02) = &self.osaval02 {
+            let started = self.clock.now();
+            let result = if self.config.runtime_profile == RuntimeProfile::PureLearned {
+                osaval02.evaluate_history(position, self.a1_history())
+            } else {
+                osaval02.evaluate(position)
+            };
+            context.stats.neural_inference_calls =
+                context.stats.neural_inference_calls.saturating_add(1);
+            context.stats.learned_eval_calls = context.stats.learned_eval_calls.saturating_add(1);
             context.stats.neural_inference_time = context
                 .stats
                 .neural_inference_time
@@ -1140,27 +1643,46 @@ impl SearchEngine {
                 Err(())
             };
         }
-        let Some(neural) = &self.neural else {
-            return Ok(evaluate(position, &self.config.evaluation));
-        };
-        let started = self.clock.now();
-        let learned = neural.evaluate(position);
-        context.stats.neural_inference_calls =
-            context.stats.neural_inference_calls.saturating_add(1);
-        context.stats.neural_inference_time = context
-            .stats
-            .neural_inference_time
-            .saturating_add(self.clock.now().saturating_sub(started));
-        Ok(match self.neural_mode {
-            NeuralEvaluationMode::PureValue => learned,
-            NeuralEvaluationMode::Residual => {
-                evaluate(position, &self.config.evaluation).saturating_add(learned)
-            }
-            NeuralEvaluationMode::Composite => {
-                let handcrafted = evaluate(position, &self.config.evaluation);
-                handcrafted.saturating_add(learned) / 2
-            }
-        })
+        #[cfg(feature = "handcrafted")]
+        {
+            let Some(neural) = &self.neural else {
+                context.stats.handcrafted_eval_calls =
+                    context.stats.handcrafted_eval_calls.saturating_add(1);
+                return Ok(evaluate(position, &self.config.evaluation));
+            };
+            let started = self.clock.now();
+            let learned = neural.evaluate(position);
+            context.stats.neural_inference_calls =
+                context.stats.neural_inference_calls.saturating_add(1);
+            context.stats.learned_eval_calls = context.stats.learned_eval_calls.saturating_add(1);
+            context.stats.neural_inference_time = context
+                .stats
+                .neural_inference_time
+                .saturating_add(self.clock.now().saturating_sub(started));
+            Ok(match self.neural_mode {
+                NeuralEvaluationMode::PureValue => learned,
+                NeuralEvaluationMode::Residual => {
+                    context.stats.residual_eval_calls =
+                        context.stats.residual_eval_calls.saturating_add(1);
+                    context.stats.handcrafted_eval_calls =
+                        context.stats.handcrafted_eval_calls.saturating_add(1);
+                    evaluate(position, &self.config.evaluation).saturating_add(learned)
+                }
+                NeuralEvaluationMode::Composite => {
+                    context.stats.composite_eval_calls =
+                        context.stats.composite_eval_calls.saturating_add(1);
+                    context.stats.handcrafted_eval_calls =
+                        context.stats.handcrafted_eval_calls.saturating_add(1);
+                    let handcrafted = evaluate(position, &self.config.evaluation);
+                    handcrafted.saturating_add(learned) / 2
+                }
+            })
+        }
+        #[cfg(feature = "pure-only")]
+        {
+            context.termination = Some(SearchTermination::EvaluationError);
+            Err(())
+        }
     }
 
     fn prepare_osaval02_root_policy(
@@ -1172,9 +1694,14 @@ impl SearchEngine {
             return;
         };
         let started = self.clock.now();
-        let inference = osaval02.infer(position);
+        let inference = if self.config.runtime_profile == RuntimeProfile::PureLearned {
+            osaval02.infer_history(position, self.a1_history())
+        } else {
+            osaval02.infer(position)
+        };
         context.stats.neural_inference_calls =
             context.stats.neural_inference_calls.saturating_add(1);
+        context.stats.learned_eval_calls = context.stats.learned_eval_calls.saturating_add(1);
         context.stats.neural_inference_time = context
             .stats
             .neural_inference_time
@@ -1544,7 +2071,7 @@ fn transposition_index(hash: u64, table_len: usize) -> usize {
     usize::try_from(hash % table_len).unwrap_or_default()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "handcrafted"))]
 mod tests {
     use super::*;
     use crate::neural::NeuralEvaluator;
@@ -2276,6 +2803,236 @@ mod tests {
         assert_eq!(
             score(NeuralEvaluationMode::Composite),
             handcrafted.saturating_add(learned) / 2
+        );
+    }
+
+    #[test]
+    fn profile_counters_measure_the_real_evaluation_call_path() {
+        let position = Position::startpos();
+        let counted = |engine: &SearchEngine| {
+            let cancellation = CancellationToken::new();
+            let clock = SystemMonotonicClock::default();
+            let mut context =
+                SearchContext::new(SearchLimits::default(), &cancellation, clock.now(), &clock);
+            engine
+                .evaluate_position(&position, &mut context)
+                .expect("test evaluator is valid");
+            let stats = context.stats;
+            (
+                stats.learned_eval_calls,
+                stats.handcrafted_eval_calls,
+                stats.residual_eval_calls,
+                stats.composite_eval_calls,
+            )
+        };
+
+        let neural = Arc::new(NeuralEvaluator::side_to_move_test_evaluator());
+        let (learned, handcrafted, residual, composite) = counted(&SearchEngine::with_neural_mode(
+            SearchConfig::default(),
+            Arc::clone(&neural),
+            NeuralEvaluationMode::PureValue,
+        ));
+        assert_eq!((learned, handcrafted, residual, composite), (1, 0, 0, 0));
+
+        let (learned, handcrafted, residual, composite) = counted(&SearchEngine::with_neural_mode(
+            SearchConfig::default(),
+            Arc::clone(&neural),
+            NeuralEvaluationMode::Residual,
+        ));
+        assert_eq!((learned, handcrafted, residual, composite), (1, 1, 1, 0));
+
+        let (learned, handcrafted, residual, composite) = counted(&SearchEngine::with_neural_mode(
+            SearchConfig::default(),
+            Arc::clone(&neural),
+            NeuralEvaluationMode::Composite,
+        ));
+        assert_eq!((learned, handcrafted, residual, composite), (1, 1, 0, 1));
+
+        let (learned, handcrafted, residual, composite) =
+            counted(&SearchEngine::new(SearchConfig::default()));
+        assert_eq!((learned, handcrafted, residual, composite), (0, 1, 0, 0));
+    }
+
+    #[test]
+    fn disabled_evaluation_terms_leave_no_handcrafted_contribution() {
+        let position = Position::startpos();
+        assert_eq!(evaluate(&position, &EvaluationConfig::disabled()), 0);
+        let engine = SearchEngine::new(SearchConfig {
+            evaluation: EvaluationConfig::disabled(),
+            runtime_profile: RuntimeProfile::PureLearned,
+            ..SearchConfig::default()
+        });
+        assert_eq!(engine.config.runtime_profile, RuntimeProfile::PureLearned);
+        assert_eq!(engine.config.evaluation, EvaluationConfig::disabled());
+    }
+
+    #[test]
+    fn standard_runtime_proof_is_never_valid_pure_learned_evidence() {
+        let engine = SearchEngine::new(SearchConfig::default());
+        let stats = SearchStats::default();
+        let proof = engine.runtime_proof(stats, "a".repeat(64));
+        assert_eq!(proof.profile, "standard");
+        assert!(!proof.valid_pure_learned());
+    }
+}
+
+#[cfg(test)]
+mod pure_history_tests {
+    use super::*;
+    use std::io::Read;
+
+    fn engine() -> SearchEngine {
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../../../tests/fixtures/osaval02/pure-history.osaval02.gz")[..],
+        )
+        .read_to_end(&mut bytes)
+        .unwrap();
+        let model = Arc::new(crate::Osaval02Evaluator::from_bytes(&bytes).unwrap());
+        let hash = model.identity().artifact_sha256.clone();
+        SearchEngine::with_pure_learned(
+            SearchConfig {
+                enable_quiescence: false,
+                transposition_entries: 64,
+                ..SearchConfig::default()
+            },
+            model,
+            &hash,
+        )
+        .unwrap()
+    }
+    fn initial() -> Position {
+        crate::parse_sfen("4k4/9/9/9/9/9/9/9/4K4 b - 1").unwrap()
+    }
+    fn cycle() -> Vec<Move> {
+        ["5i6i", "5a6a", "6i5i", "6a5a"]
+            .iter()
+            .map(|m| crate::parse_usi_move(m).unwrap())
+            .collect()
+    }
+    fn limits() -> SearchLimits {
+        SearchLimits {
+            max_depth: 0,
+            max_nodes: Some(32),
+            movetime: None,
+        }
+    }
+
+    #[test]
+    fn osaval02_search_history_changes_leaf_score_and_unmakes_exactly() {
+        let mut engine = engine();
+        let root = initial();
+        engine.set_pure_history(&root, &[]).unwrap();
+        let result = engine.search(&root, limits(), &CancellationToken::new());
+        assert!(engine.runtime_proof(result.stats, "").valid_pure_learned());
+        let initial_score = result.score;
+        let initial_history = engine.a1_history();
+        assert!(initial_history.available);
+        assert_eq!(initial_history.repetition_count, 1);
+        let mut position = root.clone();
+        let mut previous = Vec::new();
+        for movement in cycle() {
+            position.make_move(movement).unwrap();
+            previous.push(engine.a1_push(movement, &position));
+        }
+        assert_eq!(engine.a1_history().repetition_count, 2);
+        let token = CancellationToken::new();
+        let clock = Arc::clone(&engine.clock);
+        let mut context = SearchContext::new(limits(), &token, clock.now(), clock.as_ref());
+        let score = engine.evaluate_position(&position, &mut context).unwrap();
+        assert!(
+            score > initial_score + 100,
+            "synthetic model scores its repetition-count input"
+        );
+        assert!(engine.runtime_proof(context.stats, "").valid_pure_learned());
+        for state in previous.into_iter().rev() {
+            engine.a1_pop(state);
+        }
+        assert_eq!(engine.a1_history(), initial_history);
+        assert_eq!(engine.a1_positions, vec![root]);
+    }
+
+    #[test]
+    fn osaval02_pure_repetition_and_position_only_tt_are_isolated() {
+        let root = initial();
+        let mut engine = engine();
+        let moves = cycle().repeat(3);
+        let mut position = root.clone();
+        for movement in &moves {
+            position.make_move(*movement).unwrap();
+        }
+        engine.set_pure_history(&root, &moves).unwrap();
+        let terminal = engine.search(&position, limits(), &CancellationToken::new());
+        assert_eq!(terminal.best_move, None);
+        assert_eq!(terminal.score, 0);
+        assert_eq!(terminal.stats.learned_eval_calls, 0);
+        engine.set_pure_history(&root, &[]).unwrap();
+        engine.search(&root, limits(), &CancellationToken::new());
+        engine.store_transposition(&root, 20, 12345, Bound::Exact, None);
+        let token = CancellationToken::new();
+        let clock = Arc::clone(&engine.clock);
+        let mut context = SearchContext::new(
+            SearchLimits {
+                max_depth: 1,
+                max_nodes: Some(32),
+                movetime: None,
+            },
+            &token,
+            clock.now(),
+            clock.as_ref(),
+        );
+        let value = engine
+            .negamax(&mut root.clone(), 1, -INFINITY, INFINITY, 1, &mut context)
+            .unwrap();
+        assert!(context.stats.tt_hits > 0);
+        assert_ne!(
+            value.score, 12345,
+            "history-blind TT score must not cut off pure inference"
+        );
+        assert!(context.stats.learned_eval_calls > 0);
+    }
+
+    #[test]
+    fn explicit_history_mismatch_or_rejected_history_never_becomes_unknown_history() {
+        let root = initial();
+        let mut engine = engine();
+        let movement = cycle()[0];
+        engine.set_pure_history(&root, &[movement]).unwrap();
+        let rejected = engine.search(&root, limits(), &CancellationToken::new());
+        assert_eq!(rejected.termination, SearchTermination::EvaluationError);
+        assert_eq!(rejected.best_move, None);
+        assert_eq!(rejected.stats.learned_eval_calls, 0);
+        assert!(
+            engine
+                .set_pure_history(&root, &[crate::parse_usi_move("5i5a").unwrap()])
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .search(&root, limits(), &CancellationToken::new())
+                .termination,
+            SearchTermination::EvaluationError
+        );
+        engine.set_pure_history(&root, &[]).unwrap();
+        let wrong_ply = crate::parse_sfen("4k4/9/9/9/9/9/9/9/4K4 b - 99").unwrap();
+        assert_eq!(
+            engine
+                .search(&wrong_ply, limits(), &CancellationToken::new())
+                .termination,
+            SearchTermination::EvaluationError
+        );
+        assert_ne!(
+            engine
+                .search(&root, limits(), &CancellationToken::new())
+                .termination,
+            SearchTermination::EvaluationError
+        );
+        let mut standalone = super::pure_history_tests::engine();
+        assert_ne!(
+            standalone
+                .search(&root, limits(), &CancellationToken::new())
+                .termination,
+            SearchTermination::EvaluationError
         );
     }
 }

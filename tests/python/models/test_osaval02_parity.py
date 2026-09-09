@@ -130,6 +130,7 @@ def test_python_native_and_actual_wasm_parity(
     _validate_candidate_parity_document(wasm, "Wasm")
     assert native["schema"] == wasm["schema"] == OSAVAL02_PARITY_SCHEMA
     assert native["modelIdentity"] == wasm["modelIdentity"]
+    assert native["modelIdentity"]["datasetManifestSha256"] == model.dataset_manifest_sha256
     _assert_close(native, wasm, "native-wasm")
     assert len(native["fixtures"]) == len(corpus["fixtures"]) == 12
 
@@ -190,33 +191,6 @@ def test_candidate_comparison_reports_a_real_schema_mismatch() -> None:
         {"schema": "open_shogiai_osaval02_parity/v2"},
     )
     assert mismatches == ["root.schema"]
-
-
-@pytest.mark.parametrize("variant", [VARIANT_PAIR, VARIANT_PRIMARY])
-def test_completed_1m_candidate_native_wasm_schema_identity_and_numerical_parity(
-    variant: str,
-) -> None:
-    candidate_dir = ROOT / "local/phase10r-data/checkpoints/phase10r/1m" / variant
-    model_path = candidate_dir / f"{variant}.osaval02"
-    summary_path = candidate_dir / "training-summary.json"
-    if not model_path.is_file() or not summary_path.is_file():
-        pytest.skip("completed local Phase 10R 1M candidate is not present")
-
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    expected_sha256 = summary["artifact"]["sha256"]
-    assert hashlib.sha256(model_path.read_bytes()).hexdigest() == expected_sha256
-
-    native = _run_native(model_path)
-    wasm = _run_wasm(model_path)
-    _validate_candidate_parity_document(native, "native")
-    _validate_candidate_parity_document(wasm, "Wasm")
-    _assert_close(native, wasm, f"completed-1m-{variant}")
-    identity = native["modelIdentity"]
-    assert identity == wasm["modelIdentity"]
-    assert identity["formatVersion"] == 2
-    assert identity["variantId"] == variant
-    assert identity["artifactSha256"] == expected_sha256
-    assert identity["datasetManifestSha256"] == summary["manifest_sha256"]
 
 
 def test_generated_wasm_bindings_regenerate_deterministically() -> None:

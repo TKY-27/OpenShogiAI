@@ -8,7 +8,6 @@ Phase 10 execution contract.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -1228,44 +1227,7 @@ def validate_frozen_variant(variant: str) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Build or structurally verify the frozen start pool without executing Phase 10."""
-
-    parser = argparse.ArgumentParser(prog="python -m open_shogi_training.phase10_execution")
-    commands = parser.add_subparsers(dest="command", required=True)
-    build = commands.add_parser("build-start-pool")
-    build.add_argument("--positions", required=True, type=Path)
-    build.add_argument("--dataset-manifest", required=True, type=Path)
-    build.add_argument("--audit-manifest", required=True, type=Path)
-    build.add_argument("--output", required=True, type=Path)
-    build.add_argument("--overlap-output", required=True, type=Path)
-    verify = commands.add_parser("verify-start-pool")
-    verify.add_argument("--manifest", required=True, type=Path)
-    arguments = parser.parse_args(argv)
-    if arguments.command == "build-start-pool":
-        manifest, overlap = build_phase10_start_pool_manifest(
-            positions_path=arguments.positions,
-            dataset_manifest_path=arguments.dataset_manifest,
-            audit_manifest_path=arguments.audit_manifest,
-            output_path=arguments.output,
-            overlap_output_path=arguments.overlap_output,
-        )
-        result = {
-            "schema": START_POOL_SCHEMA,
-            "positions": len(manifest["positions"]),
-            "groups": {
-                group: manifest["groups"][group]["uniqueEligible"] for group in START_GROUPS
-            },
-            "overlapSchema": overlap["schema"],
-        }
-    else:
-        manifest = load_phase10_start_pool_manifest(arguments.manifest)
-        result = {
-            "schema": manifest["schema"],
-            "positions": len(manifest["positions"]),
-            "status": "valid",
-        }
-    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
-    return 0
+    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
 
 
 __all__ = [

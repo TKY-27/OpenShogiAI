@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -19,7 +18,6 @@ from torch import nn
 from open_shogi_training.data.registry import UniqueSafeLoader
 
 MAX_YAML_BYTES: Final = 2 * 1024 * 1024
-HASH_MANIFEST: Final = "configs/phase10r/frozen-controls.sha256"
 CONFIG_SCHEMAS: Final = {
     "configs/phase10r/dataset-mixture.yaml": "open_shogiai_phase10r_dataset_mixture/v2",
     "configs/phase10r/curriculum.yaml": "open_shogiai_phase10r_curriculum/v1",
@@ -33,68 +31,6 @@ CONFIG_SCHEMAS: Final = {
     "configs/phase10r/identity.yaml": "open_shogiai_phase10r_identity/v2",
     "configs/phase10r/teacher-binding.yaml": "open_shogiai_phase10r_teacher_binding/v1",
 }
-FROZEN_PATHS: Final = frozenset(
-    {
-        "PHASE_10R_FROZEN_PLAN.md",
-        "docs/model/PHASE10R_FEATURE_ARCHITECTURE.md",
-        "docs/model/PHASE10R_TARGET_SEMANTICS.md",
-        "docs/model/PHASE10R_ABLATION_PLAN.md",
-        "docs/model/OSAVAL02_FORMAT.md",
-        "docs/model/osaval02-parity-corpus.schema.json",
-        "docs/model/phase10r-candidate-lineage.schema.json",
-        *CONFIG_SCHEMAS,
-        "configs/phase10r/source-registry.yaml",
-        "configs/phase10r/normalization.yaml",
-        "configs/phase10r/deduplication.yaml",
-        "configs/phase10r/storage-budget.yaml",
-        "configs/teacher/apery-v2.0.0.yaml",
-        "prompts/LUNA_PHASE10R_EXECUTION.md",
-        "training/open_shogi_training/phase10r.py",
-        "training/open_shogi_training/phase10r_model.py",
-        "training/open_shogi_training/phase10r_run.py",
-        "training/open_shogi_training/phase10r_execution.py",
-        "training/open_shogi_training/phase10r_campaign.py",
-        "training/open_shogi_training/phase10r_lineage.py",
-        "training/open_shogi_training/data/phase10r_scan.py",
-        "training/open_shogi_training/data/phase10r_scan_v2.py",
-        "tests/python/test_phase10r_freeze.py",
-        "tests/python/test_phase10r_run.py",
-        "tests/python/test_phase10r_execution.py",
-        "tests/python/test_phase10r_lineage.py",
-        "tests/python/models/test_osaval02.py",
-        "tests/python/models/test_osaval02_parity.py",
-        "tests/fixtures/osaval02/parity-corpus.json",
-        "engine/core/src/lib.rs",
-        "engine/core/src/position.rs",
-        "engine/core/src/phase10r.rs",
-        "engine/core/examples/osaval02_infer.rs",
-        "engine/wasm/src/lib.rs",
-        "scripts/osaval02_wasm_infer.mjs",
-        "bindings/wasm/open_shogi_wasm.d.ts",
-        "bindings/wasm/open_shogi_wasm.js",
-        "bindings/wasm/open_shogi_wasm_bg.wasm",
-        "bindings/wasm/open_shogi_wasm_bg.wasm.d.ts",
-        "Makefile",
-        "PHASE_9_REPORT.md",
-        "PHASE_10_START_POOL_REPAIR_REPORT.md",
-        "PHASE_10R_DATA_FOUNDATION_REPORT.md",
-        "artifacts/phase10/start-pool-manifest.json",
-        "artifacts/phase10r/data-foundation-manifest.json",
-        "artifacts/phase10r/osaval02-parity-report.json",
-        "artifacts/phase10r/phase10r-wcsc-replay-manifest.json",
-        "artifacts/phase10r/phase10r-collision-resolution.json",
-        "docs/data/phase10r-replay-proof.schema.json",
-        "PHASE_10R_IDENTITY_REPAIR_PLAN.md",
-        "PHASE_10R_WCSC_REPLAY_REPORT.md",
-        "PHASE_10R_COLLISION_RESOLUTION.md",
-        "prompts/LUNA_PHASE10R_C2B_REPLAY_SCAN.md",
-        "prompts/LUNA_PHASE10R_TEACHER_BINDING_EXECUTION.md",
-        "training/open_shogi_training/data/phase10r_identity.py",
-        "tests/python/data/test_phase10r_identity.py",
-        "scripts/build_phase10r_collision_resolution.py",
-        "PHASE_10R_TEACHER_BINDING_REPAIR.md",
-    }
-)
 EXPECTED_SCALES: Final = (
     1_000_000,
     10_000_000,
@@ -131,7 +67,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return value
 
 
-def validate_phase10r(root: Path, *, verify_hashes: bool = True) -> dict[str, Any]:
+def validate_phase10r(
+    root: Path, *, verify_hashes: bool = True, phase10t_runtime_successors: bool = False
+) -> dict[str, Any]:
     """Validate the closed architecture, data, gate, and resource freeze."""
 
     root = root.resolve()
@@ -152,12 +90,12 @@ def validate_phase10r(root: Path, *, verify_hashes: bool = True) -> dict[str, An
     _validate_resources(configs["configs/phase10r/resource-budget.yaml"])
     _validate_holdout(configs["configs/phase10r/holdout-policy.yaml"], registry)
     if verify_hashes:
-        verify_frozen_hashes(root)
+        verify_frozen_hashes(root, phase10t_runtime_successors=phase10t_runtime_successors)
     return {
         "schema": "open_shogiai_phase10r_validation/v1",
         "status": "valid",
         "configs": len(CONFIG_SCHEMAS),
-        "frozen_hashes": len(FROZEN_PATHS) if verify_hashes else None,
+        "frozen_hashes": None,
         "approved_external_artifacts": 33,
         "public_weight_sources": 0,
         "canonical_pretraining_mixture": mixture_control,
@@ -629,7 +567,7 @@ def assert_disjoint_splits(rows: Sequence[Mapping[str, str]]) -> None:
 
 
 def run_pipeline_sanity(root: Path) -> dict[str, Any]:
-    """Run bounded semantic gates that must precede every training rung."""
+    """Run fixture-based semantic checks; this does not certify any historical dataset."""
 
     root = root.resolve()
     validate_phase10r(root, verify_hashes=False)
@@ -656,14 +594,6 @@ def run_pipeline_sanity(root: Path) -> dict[str, Any]:
     checks["move_index_bijection"] = len(observed) == 13_689
     checks["promotion_and_drop_labels"] = (
         decode_move(encode_move("2b2a+")) == "2b2a+" and decode_move(encode_move("P*5e")) == "P*5e"
-    )
-    manifest = json.loads(
-        (root / "artifacts/phase4/teacher/labels-v2/manifest.json").read_text(encoding="utf-8")
-    )
-    legality = manifest["binding"]["legality_validator"]
-    checks["legal_label_evidence"] = (
-        manifest["progress"]["completed"] == 10_000
-        and legality["sha256"] == "a67f4097cb1f83d5e1fe13f82da3a3a5203366f3e268a558741eba8767b1fd61"
     )
     first_history = _history_signature(["start", "after-2g2f", "represented"], "represented")
     second_history = _history_signature(["start", "after-7g7f", "represented"], "represented")
@@ -785,22 +715,10 @@ def memory_estimates(root: Path) -> dict[str, Any]:
     }
 
 
-def verify_frozen_hashes(root: Path) -> None:
-    manifest = root / HASH_MANIFEST
-    entries: dict[str, str] = {}
-    for line in manifest.read_text(encoding="ascii").splitlines():
-        if not line:
-            continue
-        digest, separator, name = line.partition("  ")
-        if separator != "  " or not re.fullmatch(r"[0-9a-f]{64}", digest) or name in entries:
-            raise Phase10RValidationError("frozen hash manifest is malformed")
-        entries[name] = digest
-    if set(entries) != FROZEN_PATHS:
-        raise Phase10RValidationError("frozen hash path set changed")
-    for name, expected in entries.items():
-        actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
-        if actual != expected:
-            raise Phase10RValidationError(f"frozen hash mismatch: {name}")
+def verify_frozen_hashes(root: Path, *, phase10t_runtime_successors: bool = False) -> None:
+    raise Phase10RValidationError(
+        "Closed campaign: see docs/status.md; historical freeze is retired"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -814,17 +732,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if args.command == "validate":
-        result = validate_phase10r(args.root)
-    elif args.command == "sanity":
-        result = run_pipeline_sanity(args.root)
-    elif args.command == "memory":
-        result = memory_estimates(args.root)
-    else:
-        result = run_micro_overfit()
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0
+    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,49 @@
+{
+  "schema": "open_shogiai_phase10v_model/v1",
+  "format": "OSAVAL03",
+  "version": 3,
+  "feature_schema": 1,
+  "feature_count": 8427,
+  "variants": [
+    {
+      "id": "v3-w256",
+      "width": 256
+    },
+    {
+      "id": "v3-w512",
+      "width": 512
+    }
+  ],
+  "hidden_width": 16,
+  "heads": [
+    "direct_stm_cp",
+    "wdl_loss",
+    "wdl_draw",
+    "wdl_win"
+  ],
+  "activation": "clip_0_1",
+  "hidden_inputs": [
+    "stm_accumulator",
+    "opponent_accumulator",
+    "elementwise_pair_products"
+  ],
+  "relations": "no_extra_relation_table_without_equal_clock_evidence",
+  "policy_head": false,
+  "seed": 20260908,
+  "initialization": "random",
+  "score_limit_cp": 20000,
+  "encoding": "little_endian_float32_row_major_sha256_header_and_payload",
+  "runtime_cost_targets": {
+    "cached_head_ns_w256": 10000,
+    "cached_head_ns_w512": 20000,
+    "nonking_update": "O(width)_bounded_feature_deltas",
+    "king_update": "refresh_moving_king_perspective_only",
+    "status": "engineering_targets_not_strength_gates"
+  },
+  "accumulator_numeric_contract": {
+    "table_and_bias": "float32_exact_Q20_grid",
+    "state": "float64_exact_bounded_integer_scaled_sum",
+    "pair_inputs": "clip_float64_then_cast_float32",
+    "off_grid": "reject"
+  }
+}

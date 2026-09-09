@@ -37,7 +37,6 @@ from open_shogi_training.phase10r_execution import (
 )
 from open_shogi_training.phase10r_model import (
     VARIANT_PAIR,
-    VARIANT_PRIMARY,
     HistoryFacts,
     infer_osaval02,
     parse_osaval02,
@@ -63,8 +62,8 @@ STAGE_EPOCHS: Final = 1
 CHECKPOINT_INTERVAL_STEPS: Final = 1_000
 CHECKPOINT_INTERVAL_EXAMPLES: Final = 128_000
 RSS_TARGET_BYTES: Final = 16 * 1024**3
-MINIMUM_FREE_BYTES: Final = 150 * 1024**3
-TRAIN_VARIANTS: Final = (VARIANT_PAIR, VARIANT_PRIMARY)
+MINIMUM_FREE_BYTES: Final = 100 * 1024**3
+TRAIN_VARIANTS: Final = (VARIANT_PAIR,)
 STAGE_ONE: Final = "representation_policy_pretraining"
 STAGE_TWO: Final = "source_specific_wdl_value_pretraining"
 TRAINING_SPLIT: Final = "train"
@@ -400,7 +399,7 @@ def _load_checkpoint(
 def _resource_guard(data_root: Path) -> dict[str, int | bool]:
     snapshot = resource_snapshot(data_root, minimum_free_bytes=MINIMUM_FREE_BYTES)
     if not snapshot["disk_passed"]:
-        raise Phase10RCampaignError("free disk crossed the frozen 150 GiB floor")
+        raise Phase10RCampaignError("free disk crossed the 100 GiB campaign floor")
     if int(snapshot["peak_rss_bytes"]) > RSS_TARGET_BYTES:
         raise Phase10RCampaignError("RSS exceeded the frozen 16 GiB target")
     return snapshot
@@ -431,6 +430,7 @@ def _run_stage(
     resume: bool,
 ) -> dict[str, Any]:
     checkpoint = stage_dir / "last.pt"
+    best_checkpoint = stage_dir / "best.pt"
     checkpoint_was_present = checkpoint.exists()
     if checkpoint_was_present and not resume:
         raise Phase10RCampaignError(f"checkpoint exists; --resume is required: {checkpoint}")
@@ -456,7 +456,24 @@ def _run_stage(
             variant_id=model.variant_id,
             expected_rows=expected_rows,
         )
+    best_loss = float(state["metrics"].get("best_batch_loss", float("inf")))
+    if best_checkpoint.is_symlink() or (best_checkpoint.exists() and not best_checkpoint.is_file()):
+        raise Phase10RCampaignError(f"best checkpoint is not a regular file: {best_checkpoint}")
     if state["completed"]:
+        if not best_checkpoint.exists():
+            _save_checkpoint(
+                best_checkpoint,
+                model,
+                optimizer,
+                scheduler,
+                manifest_sha256=manifest_sha256,
+                stage_id=stage_id,
+                variant_id=model.variant_id,
+                step=state["step"],
+                cursor=state["cursor"],
+                metrics=state["metrics"],
+                completed=True,
+            )
         return {
             "stage_id": stage_id,
             "status": "passed",
@@ -465,15 +482,60 @@ def _run_stage(
             "stream_rows_consumed": state["cursor"],
             "metrics": _stage_metrics(state["metrics"]),
             "checkpoint": checkpoint,
+            "checkpoint_sha256": _sha256_file(checkpoint),
+            "best_checkpoint": best_checkpoint,
+            "best_checkpoint_sha256": _sha256_file(best_checkpoint),
         }
     stage_dir.mkdir(parents=True, exist_ok=True)
     model.train()
     cursor = int(state["cursor"])
     step = int(state["step"])
     metrics = dict(state["metrics"])
+    state_metrics = metrics
     last_checkpoint_step = step
     last_checkpoint_cursor = cursor
     started = time.monotonic()
+
+    def save_progress(*, completed: bool) -> None:
+        nonlocal best_loss
+        best_updated = False
+        latest_loss = state_metrics.get("last_batch_loss")
+        if (
+            isinstance(latest_loss, (int, float))
+            and math.isfinite(float(latest_loss))
+            and (not best_checkpoint.exists() or float(latest_loss) < best_loss)
+        ):
+            best_loss = float(latest_loss)
+            state_metrics["best_batch_loss"] = best_loss
+            best_updated = True
+        _save_checkpoint(
+            checkpoint,
+            model,
+            optimizer,
+            scheduler,
+            manifest_sha256=manifest_sha256,
+            stage_id=stage_id,
+            variant_id=model.variant_id,
+            step=step,
+            cursor=cursor,
+            metrics=state_metrics,
+            completed=completed,
+        )
+        if best_updated or not best_checkpoint.exists():
+            _save_checkpoint(
+                best_checkpoint,
+                model,
+                optimizer,
+                scheduler,
+                manifest_sha256=manifest_sha256,
+                stage_id=stage_id,
+                variant_id=model.variant_id,
+                step=step,
+                cursor=cursor,
+                metrics=state_metrics,
+                completed=completed,
+            )
+
     for epoch in range(STAGE_EPOCHS):
         if epoch > 0:
             cursor = 0
@@ -516,52 +578,15 @@ def _run_stage(
                 if step - last_checkpoint_step >= CHECKPOINT_INTERVAL_STEPS or (
                     cursor - last_checkpoint_cursor >= CHECKPOINT_INTERVAL_EXAMPLES
                 ):
-                    _save_checkpoint(
-                        checkpoint,
-                        model,
-                        optimizer,
-                        scheduler,
-                        manifest_sha256=manifest_sha256,
-                        stage_id=stage_id,
-                        variant_id=model.variant_id,
-                        step=step,
-                        cursor=cursor,
-                        metrics=metrics,
-                        completed=False,
-                    )
+                    save_progress(completed=False)
                     last_checkpoint_step = step
                     last_checkpoint_cursor = cursor
                 if step == 0 or step % 64 == 0:
                     _resource_guard(data_root)
         except Exception:
-            _save_checkpoint(
-                checkpoint,
-                model,
-                optimizer,
-                scheduler,
-                manifest_sha256=manifest_sha256,
-                stage_id=stage_id,
-                variant_id=model.variant_id,
-                step=step,
-                cursor=cursor,
-                metrics=metrics,
-                completed=False,
-            )
+            save_progress(completed=False)
             raise
-        cursor = 0
-    _save_checkpoint(
-        checkpoint,
-        model,
-        optimizer,
-        scheduler,
-        manifest_sha256=manifest_sha256,
-        stage_id=stage_id,
-        variant_id=model.variant_id,
-        step=step,
-        cursor=expected_rows,
-        metrics=metrics,
-        completed=True,
-    )
+    save_progress(completed=True)
     resource_after = _resource_guard(data_root)
     return {
         "stage_id": stage_id,
@@ -575,6 +600,8 @@ def _run_stage(
         "resources": resource_after,
         "checkpoint": checkpoint,
         "checkpoint_sha256": _sha256_file(checkpoint),
+        "best_checkpoint": best_checkpoint,
+        "best_checkpoint_sha256": _sha256_file(best_checkpoint),
     }
 
 
@@ -1131,7 +1158,11 @@ def evaluate_scale(
         if not checkpoint.is_file() or checkpoint.is_symlink() or not artifact_path.is_file():
             raise Phase10RCampaignError(f"completed stage-2 candidate is missing: {variant}")
         device_receipt = select_device("auto", allow_cpu_fallback=True)
-        model = Phase10RModel(variant, seed=TRAINING_SEED).to(device_receipt.selected)
+        # Source-held-out evaluation uses forked workers.  Keep the inherited
+        # model CPU-resident because forking an MPS-backed model is unsupported
+        # on macOS and terminates the worker pool before it can produce a
+        # receipt.  Training-device selection remains recorded separately.
+        model = Phase10RModel(variant, seed=TRAINING_SEED).to("cpu")
         try:
             payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
             if (
@@ -1169,6 +1200,7 @@ def evaluate_scale(
             {
                 "variant": variant,
                 "device": device_receipt.as_dict(),
+                "evaluation_device": "cpu",
                 "checkpoint": checkpoint,
                 "checkpoint_sha256": _sha256_file(checkpoint),
                 "artifact": artifact_path,

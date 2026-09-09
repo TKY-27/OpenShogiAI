@@ -1,0 +1,37 @@
+{
+  "schema": "open_shogiai_pure_learned_profile/v1",
+  "profile": "pure_learned",
+  "modelFormat": "OSAVAL02",
+  "leafEvaluation": "selected_learned_model_only",
+  "handcraftedEvaluation": false,
+  "residualEvaluation": false,
+  "compositeEvaluation": false,
+  "openingBook": false,
+  "openingStyleRestriction": false,
+  "teacherDuringPlay": false,
+  "handcraftedFallback": false,
+  "modelHashRequiredBeforeGameStart": true,
+  "terminalMateAndRuleHandling": "exact",
+  "allowedSearchFacilities": [
+    "ordinary_search",
+    "time_management",
+    "transposition_tables",
+    "move_ordering",
+    "legal_move_generation"
+  ],
+  "requiredProofCounters": [
+    "learned_eval_calls",
+    "handcrafted_eval_calls",
+    "residual_eval_calls",
+    "composite_eval_calls",
+    "book_hits",
+    "teacher_calls",
+    "fallback_count",
+    "model_sha256",
+    "evaluator_profile_schema_hash"
+  ],
+  "validity": {
+    "learnedEvalCallsMinimum": 1,
+    "prohibitedCounterMaximum": 0
+  }
+}

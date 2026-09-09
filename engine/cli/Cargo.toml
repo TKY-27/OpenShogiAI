@@ -7,15 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["handcrafted"]
+handcrafted = ["dep:flate2", "dep:serde", "dep:sha2", "dep:toml", "open-shogi-core/handcrafted", "open-shogi-usi/handcrafted"]
+pure-only = ["dep:serde", "open-shogi-core/pure-only", "open-shogi-usi/pure-only"]
+
 [dependencies]
-flate2 = "=1.1.9"
-open-shogi-core.workspace = true
-open-shogi-usi.workspace = true
-serde = { version = "=1.0.229", features = ["derive"] }
+flate2 = { version = "=1.1.9", optional = true }
+open-shogi-core = { workspace = true, default-features = false }
+open-shogi-usi = { workspace = true, default-features = false }
+serde = { version = "=1.0.229", features = ["derive"], optional = true }
 # Cross-runtime self-hashes require the same correctly rounded decimal-to-f64 value as Python.
 serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
-sha2 = "=0.10.9"
-toml = "=0.8.23"
+sha2 = { version = "=0.10.9", optional = true }
+toml = { version = "=0.8.23", optional = true }
 
 [dev-dependencies]
 base64 = "=0.22.1"

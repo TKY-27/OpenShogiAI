@@ -1,0 +1,11 @@
+{
+  "schema": "open_shogiai_handcrafted_experimental_profile/v1",
+  "profile": "handcrafted_experimental",
+  "modelFormat": "HANDCRAFTED",
+  "leafEvaluation": "EvaluationConfig::handcrafted_experimental",
+  "openingBook": false,
+  "teacherDuringPlay": false,
+  "learnedEvaluation": false,
+  "residualEvaluation": false,
+  "compositeEvaluation": false
+}

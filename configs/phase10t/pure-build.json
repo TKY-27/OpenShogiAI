@@ -1,0 +1,85 @@
+{
+  "schema": "open_shogiai_phase10t_pure_build/v1",
+  "status": "closed_historical_specification",
+  "status_detail": "old receipts removed; current builds use make pure-build and make frozen-smoke",
+  "cargo_features": {
+    "default": [
+      "handcrafted"
+    ],
+    "pure-only": [],
+    "mutually_exclusive": [
+      "handcrafted",
+      "pure-only"
+    ],
+    "handcrafted": []
+  },
+  "compile_error_if_both_or_neither": true,
+  "excluded_modules": [
+    "evaluation_handcrafted",
+    "champion_handcrafted",
+    "opening_book",
+    "residual",
+    "composite",
+    "teacher"
+  ],
+  "refactor": "implemented_compile_time_exclusion_and_shared_core_a1_runtime",
+  "runtime": "missing_or_invalid_model_reject_ready_and_search_no_fallback",
+  "model_validation": [
+    "format_version",
+    "feature_schema_hash",
+    "tensor_shapes",
+    "finite_values",
+    "quantization_bounds",
+    "checksum",
+    "file_size",
+    "random_lineage",
+    "trained_cp_calibration_identity"
+  ],
+  "native_audit": [
+    "cargo_metadata_features",
+    "rustc_cfg",
+    "link_map_object_inventory",
+    "nm_demangled_defined_and_undefined",
+    "negative_compile_import_test"
+  ],
+  "wasm_audit": [
+    "cargo_metadata_features",
+    "wasm_import_export_function_and_data_sections",
+    "unstripped_symbol_or_name_section",
+    "no_teacher_or_eval_assets",
+    "configuration_hash"
+  ],
+  "stripped_symbols_alone_are_proof": false,
+  "audit_before_and_after_optimization": true,
+  "tests": [
+    "missing_model",
+    "corrupt_model",
+    "wrong_schema",
+    "wrong_hash",
+    "nan_weights",
+    "unsupported_quantization",
+    "prohibited_module_import_compile_failure",
+    "native_usi_wasm_ready_failure",
+    "zero_prohibited_calls"
+  ],
+  "arena_baseline": "separate_handcrafted_binary_never_linked_into_pure_candidate",
+  "build_gate_closed": true,
+  "campaign_gate_opened": false,
+  "compiled_evaluator_registrations": [
+    "osaval02",
+    "phase10t-a1"
+  ],
+  "profile_schema_path": "configs/runtime/pure_learned-a1-v1.json",
+  "profile_schema_sha256": "b8561b90d92d1c7d356e43db66888a5b525375fa8e76158849bbfb26fd42c6a9",
+  "model_registry": "configs/models/registry.json",
+  "runtime_validation_scope": {
+    "container": "OSAVAL02 incumbent and OSAT10A1 candidates; explicitly selected native/Wasm loaders; no conversion or fallback",
+    "random_lineage": "deterministic synthetic fixture regenerated without training",
+    "trained_cp_calibration_identity": "not applicable to synthetic build fixture; required separately for trained campaign admission",
+    "candidate_strength_or_calibration_certified": false
+  },
+  "supported_playing_formats": [
+    "OSAVAL02",
+    "OSAT10A1"
+  ]
+}

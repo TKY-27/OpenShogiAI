@@ -2,6 +2,7 @@
 members = [
     "engine/cli",
     "engine/core",
+    "engine/phase10t",
     "engine/usi",
     "engine/wasm",
 ]
@@ -15,8 +16,8 @@ license = "AGPL-3.0-only"
 authors = ["OpenShogiAI contributors"]
 
 [workspace.dependencies]
-open-shogi-core = { path = "engine/core" }
-open-shogi-usi = { path = "engine/usi" }
+open-shogi-core = { path = "engine/core", default-features = false }
+open-shogi-usi = { path = "engine/usi", default-features = false }
 proptest = "1"
 
 [workspace.lints.rust]

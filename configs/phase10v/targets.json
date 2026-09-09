@@ -1,0 +1,37 @@
+{
+  "schema": "open_shogiai_phase10v_targets/v1",
+  "primary": "direct_evaluated_position_side_to_move_cp",
+  "scalar_loss": "smooth_l1_cp_scaled_by_600",
+  "auxiliaries": [
+    "factual_wdl_cross_entropy",
+    "observed_pairwise_candidate_ranking"
+  ],
+  "mate": "typed_sign_and_distance_metadata_no_scalar_cp_fabrication",
+  "score_limit_cp": 20000,
+  "candidate_perspective": "parent_side_to_move",
+  "candidate_prediction": "negative_child_score",
+  "multipv": {
+    "requested": 3,
+    "accepted": [
+      1,
+      2,
+      3
+    ],
+    "missing": "masked",
+    "ties": "no_pair",
+    "legality": "full_pv_and_exact_successor_replay"
+  },
+  "policy": {
+    "enabled": false,
+    "index_audit": "existing_encode_osaval02_move_remains_legacy_only",
+    "admission": "not_in_authorized_two_variant_matrix"
+  },
+  "calibration_candidates": [
+    "identity_cp",
+    "development_only_linear_scale",
+    "source_balanced_hard_examples"
+  ],
+  "final_holdout_access": false,
+  "observed_cp_limit": 28999,
+  "scalar_target_saturation": "retain_observed_cp_and_saturation_flag_clip_training_target_to_20000"
+}

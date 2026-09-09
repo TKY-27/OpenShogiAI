@@ -25,18 +25,15 @@ from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
 forbidden_local_roots = {
-    "data/raw",
-    "data/processed",
-    "training/data/raw",
-    "training/data/processed",
-    "local/phase10r-selection",
-    "local/phase10r-data",
-    "local/phase10r-runs",
-    "local/teacher",
+    "local", "data", "weights", "artifacts", "training/data/raw", "training/data/processed",
 }
 forbidden_roots = {"node_modules", "package-lock.json", "package.json", "web"}
 ui_suffixes = {".css", ".html", ".tsx"}
-artifact_suffixes = {".ckpt", ".nnue", ".onnx", ".pt", ".pth", ".safetensors"}
+artifact_suffixes = {
+    ".ckpt", ".nnue", ".onnx", ".pt", ".pth", ".safetensors",
+    ".osaval", ".osaval02", ".osaval03", ".osat10a1",
+}
+approved_absolute_path_documents = set()
 failures: list[str] = []
 
 
@@ -102,7 +99,10 @@ for relative_name in tracked:
         continue
     local_home_marker = "/" + "Users" + "/"
     local_uri_marker = "file" + "://"
-    if local_home_marker in text or local_uri_marker in text:
+    if (
+        relative.as_posix() not in approved_absolute_path_documents
+        and (local_home_marker in text or local_uri_marker in text)
+    ):
         failures.append(f"machine-local path leaked into versioned text: {relative}")
 
 if failures:

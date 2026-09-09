@@ -1,0 +1,37 @@
+{
+  "schema": "open_shogiai_phase10v_data_policy/v1",
+  "stage_rows": 100000,
+  "requirements": {
+    "train": {
+      "leaf_kinds": {
+        "quiescence_leaf": 20000
+      },
+      "position_categories": {
+        "quiet_middlegame": 1000,
+        "tactical_middlegame": 1000,
+        "mate_boundary": 1000,
+        "endgame": 1000,
+        "approved_external": 1000,
+        "crossplay_leaf": 1000
+      }
+    },
+    "validation": {
+      "leaf_kinds": {
+        "quiescence_leaf": 32
+      },
+      "position_categories": {
+        "quiet_middlegame": 8,
+        "tactical_middlegame": 8,
+        "mate_boundary": 8,
+        "endgame": 8,
+        "approved_external": 8,
+        "crossplay_leaf": 8
+      }
+    }
+  },
+  "primary_distribution": "actual_qsearch_and_pv_horizon_observations",
+  "pv_leaf_requirement": "report_count_no_fake_pv_when_qsearch_enabled",
+  "teacher_candidates": "all_observed_legal_candidates_auxiliary_ranking_missing_masked",
+  "strata_semantics": "category_of_pinned_source_root_not_claimed_leaf_tactical_state",
+  "final_holdout_access": false
+}

@@ -58,7 +58,7 @@ diagnostic_controls:
     evaluator_kind: residual
     new_training_run: false
     objective_eligible: false
-    evidence: PHASE_9_REPORT.md residual 2x128 equal-wall-clock gate
+    evidence: historical residual 2x128 equal-wall-clock gate (closed; see docs/status.md)
   - control_id: handcrafted-experimental-fixed
     evaluator_kind: handcrafted-experimental
     new_training_run: false

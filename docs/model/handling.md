@@ -1,0 +1,51 @@
+# Models and local comparison
+
+The default evaluator is built-in `handcrafted-experimental`, requiring no local weight.
+The [registry](../../configs/models/registry.json) records a single comparison candidate;
+it does not promote a champion. All trained weights remain ignored and distribution is
+pending review; source licensing does not grant weight redistribution.
+
+## Frozen baseline
+
+`100k-w256-hard2` uses OSAVAL03, width 256, SHA-256
+`859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480`, size 8,679,836 bytes.
+Source commit: `0203a847dc662b4f32404b30340905a953f42865`.
+The one canonical copy is `local/frozen/baseline/model.osaval03`; its profile and local manifest
+bind format, hash and provenance. `metadata/` contains compact training/teacher/split/result
+records. The historical training corpus had 115,993 labeled rows (107,763 train / 8,230 validation),
+with 4,131 mate-only rows masked. These are row counts, not claims of unique new positions;
+training exposures and lineage are separately recorded. No optimizer or restart checkpoint is retained.
+Historical results and current limitations are in [status](../status.md).
+
+```sh
+make pure-build
+make frozen-smoke
+```
+
+The smoke checks the explicit hash, native legal search and actual Wasm model/browser contract.
+Without the local model it fails with a missing-model error; `make check` does not need it.
+Builds are regenerated from source/lockfiles, not kept as large frozen build directories.
+
+## Unresolved hard4 failure
+
+The sole extra trained weight is `local/frozen/hard4/model.osaval03`, hash
+`5550803b616c8fd77e57f9cec4f2c9d0779e2bf1ad6a0c450f51663ed9c8e044`.
+It is only for the stopped `p0039-0` case. The exact historical native executable, final
+responses/error tails, identity and next request are retained locally. The next request was
+reconstructed from the last opponent response. Exactly that one request reproduced exit 2 and
+`pure runtime proof failed` with the historical executable, without playing the game again.
+The local instructions are in `local/frozen/hard4/reproduce.md`.
+No root cause or fix is claimed here.
+
+## Supported formats
+
+- OSAVAL01: dense value model, feature/model configs under `configs/features/` and `configs/models/`;
+  the container is specified in [interfaces](../interfaces.md).
+- [OSAVAL02](OSAVAL02_FORMAT.md): sparse pair/triple evaluator and explicit history semantics.
+- [OSAT10A1](OSAT10A1_FORMAT.md): king-relative accumulator runtime.
+- [OSAVAL03](OSAVAL03_FORMAT.md): current local W256 comparison container.
+
+Legacy trained candidates were removed. Small synthetic fixtures and deterministic generators
+exercise format/legality/parity without those weights. Historical registry identifiers do not
+mean a removed model is currently available. Model loads fail closed; no format fallback or
+handcrafted substitution is permitted inside the pure-only profile.

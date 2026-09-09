@@ -1,0 +1,625 @@
+{
+  "schema": "open_shogiai_phase10u_arena_rerun_plan/v1",
+  "status": "READY_FOR_REVIEW_NOT_EXECUTED",
+  "reason": "Explicit-format pure native/Wasm adapter, immutable separate-player transport, deadline and independent replay gates implemented and audited; reviewed schedule is prepared but execution is not authorized.",
+  "execution_authorized_in_this_task": false,
+  "purpose": "Replace only incumbent-ranking evidence, without training or expansion.",
+  "controls": {
+    "path": "configs/phase10t/arena.json",
+    "sha256": "af0f558f3f6a81a613d707e4285749691524507ad9f23efd5d0ba3e69660a2b6"
+  },
+  "selector": "all_attempts_reported_select_by_equal_clock_handcrafted_conservative_then_lower_then_equal_node_conservative",
+  "start_manifest": {
+    "path": "artifacts/phase10/start-pool-manifest.json",
+    "sha256": "491a3d54d3d67002fc03fc3644c16b405f5b1dbb662e88e4af260bd45757a1f1"
+  },
+  "historical_schedule": {
+    "path": "local/phase10u-runs/arena/100k/diagnostic-200-v1/schedule.json",
+    "sha256": "c31f43dc9d68c5f99dac4edba6f0a2fb277c5fff8378dc8d90e43babcda31e24"
+  },
+  "starts": [
+    {
+      "group": "general_opening",
+      "position_id": "00ac7c5f6a1e4879f7d9b39bed9175f1fe1af02b7b2257228392137f34f711f0",
+      "sfen": "lnsgkgsnl/1r5b1/p1ppppppp/9/1p7/2P4P1/PPBPPPP1P/7R1/LNSGKGSNL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "00d0b670434797f25f7299846d088412e6ee5217faed564b397287b2e89d8e62",
+      "sfen": "ln1gk2nl/1r4g2/2spppspp/p1p3p2/1p5P1/P1P3P2/1PSPPPS1P/2G4R1/LN2KG1NL b Bb 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "02c241e40714562409a3e91fa809c09271cac5e0e496eae071e7f9b0fbb9f553",
+      "sfen": "l2gk2nl/1r1s2gb1/p1np1pspp/1pp1p1p2/7P1/2PPP4/PPS2PP1P/1BK1G2R1/LN1G2SNL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "02f96b12a1c7defcd9734c86b70d007d709541bb329d4481ffc81cd07d8174e2",
+      "sfen": "lnsgk2nl/1r4gb1/p1pp1pspp/4p1p2/1p5P1/2P3P2/PPSPPP2P/1BG4R1/LN2KGSNL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "033b55dc6fe548659d8eebef095874b9847c6a1305c4e7af7505427cae8af0a9",
+      "sfen": "ln1g2snl/1rs1k1gb1/p1pppppp1/8p/7P1/PP4P2/2PPPP2P/1BGK2SR1/LNS2G1NL w P 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "0c45dd1ca32383908d38e40c735a34b872db7e3d661769dfbfc52316717f7b0a",
+      "sfen": "ln1gk2nl/1r1s2gb1/p1pp1pspp/4p1p2/1p5P1/2P1P1P2/PPSP1P2P/1BG2S1R1/LN2KG1NL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "0d38518b9fe3c4fedbc9566f58bffaa4e107162021b0703f62647dd88cc950a8",
+      "sfen": "ln1gk2nl/1r1s2gb1/p2p1pspp/2p1p1p2/1p5P1/2P1P1P2/PPSP1P2P/1B1K1S1R1/LN1G1G1NL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "114c3042027d51f00d64e1683a9942ebb41377330a66e6db366250144b1f7d26",
+      "sfen": "ln1gk1s1l/1rs3g2/p3ppn1p/2pp1bR2/1p7/2P2P3/PPSPP1P1P/1BG2G3/LN2K1SNL w 2Pp 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "1334a7e2d70f4b3c3efd5ed19fa7123f94d1596ec0ad8b2815aa8c40da7b626f",
+      "sfen": "ln3k1nl/1r1sg1gb1/p2p1pspp/2p1p1p2/1p5P1/2P1P1P2/PPSP1P2P/1BG1GS1R1/LN1K3NL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "141f5120ac89379aaebaef7f17487a2792d8db207cc54678d4f1c1e7f0af44f7",
+      "sfen": "ln1gk1snl/2s3gb1/3ppppp1/p1p4Rp/9/Pr4P2/2PPPPN1P/1BGK2S2/LNS2G2L b 2Pp 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "17c7841fd7d10b5700c62c59c64bd75bcc970843d8d4511e745b009cd2a708ee",
+      "sfen": "ln1g2snl/1rs1k1gb1/p1ppppppp/9/1p5P1/P8/1PPPPPP1P/1BGK2SR1/LNS2G1NL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "1a89f87075c43c31035814539ec81b5ac7e3e19c19db37cdbf7c153336327a7a",
+      "sfen": "ln1g2snl/2s1k1gb1/p1pppppp1/8p/7P1/Pr4P2/2PPPP2P/1BGK2SR1/LNS2G1NL b Pp 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "1c2cc6c3256611772548eb0606cc1b4b68cac640c59d778ff21f7422cdf6d556",
+      "sfen": "ln1gkg1nl/1r1s3b1/p1pp1pspp/1p2p1p2/7P1/2P6/PPSPPPP1P/1BK4R1/LN1G1GSNL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "1c58c4e02495bf3681dadae50de5487abe9bbb45680879cdb6faf21f9ce22e1a",
+      "sfen": "ln1g1k1nl/1r1s2gb1/p4pspp/1pppp1p2/7P1/2PPP4/PPS2PP1P/1BK1GS1R1/LN1G3NL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "1cd8b8c231d1fe15a1814dee6ad6bf5a5f2591e4bd1c1a0816f6ab3d3b561580",
+      "sfen": "lnsgkg1nl/1r5b1/p2p1pspp/1pp1p1p2/7P1/2P6/PPSPPPP1P/1BK4R1/LN1G1GSNL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "209d10f39cbb6ae94956e3c4b6e5d4ed020971ab6224db06a9a6b40ab930d2f5",
+      "sfen": "ln1g2snl/1rs1k1gb1/2ppppppp/p8/1p5P1/P4P3/1PPPP1P1P/1BG3SR1/LNS1KG1NL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "209ea37f479bc84e1ef9e77cdc437f05f806adf8a64c338e0848bf1ad9bbbb11",
+      "sfen": "ln1gk2nl/1r1s2gb1/p2p1pspp/1pp1p1p2/7P1/2P6/PPSPPPP1P/1BK1G2R1/LN1G2SNL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "20bead5fcef0e197b03ec762cf5002bfd028047f72d88656bb5bc43d31c21b00",
+      "sfen": "ln1gk2nl/1r1s2g2/p1ppppspp/6p2/1p5P1/2P3P2/PPSPPP2P/2G3SR1/LN2KG1NL w Bb 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "2224ae1aeeea80d91c7cf9b06bd246aa96fe71d671c4e5ae30a08556f29f3909",
+      "sfen": "ln1gk1snl/2s3gb1/2pppppp1/p7p/7P1/Pr4P2/2PPPPN1P/1BGK2SR1/LNS2G2L w Pp 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "23d3edf20b3ba9e71d6db9b1dcaae9dd0a6b9a88cc90d5dcef5e49809cacf20e",
+      "sfen": "ln1gk2nl/1r1s2g2/p2pppspp/2p3p2/1p5P1/P1P3P2/1PSPPP2P/2G3SR1/LN2KG1NL w Bb 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "2469a6ac0f87c06eb32315f428ce5a380af97608deb2ac118b06c3f265f00587",
+      "sfen": "ln1g1k1nl/1r1s2gb1/p2p1pspp/1pp1p1p2/7P1/2PP5/PPSGPPP1P/1BK4R1/LN1G2SNL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "24f7e0c98071e0f1d4b50de37f157e1fa60bb1fc61ae6d85f5909ccb2f57604f",
+      "sfen": "ln1gk1snl/1rs3gb1/p2ppp1pp/1pp3p2/7P1/2P6/PPSPPPP1P/1BG4R1/LN2KGSNL w - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "25178dc516ed0326bd4668101181cdecdb9dc0cc5de7fbdb905d298982f758de",
+      "sfen": "ln1gk1snl/1rs3gb1/2pppppp1/p7p/1p5P1/P8/1PPPPPP1P/1BGK2SR1/LNS2G1NL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "26285fd53cce82889e8f86046a9c2ccf7e8735afeeddb7236ccdc1e8f1ba9460",
+      "sfen": "lnsgkg1nl/1r5b1/p2pppspp/1pp3p2/7P1/2P6/PPSPPPP1P/1B5R1/LN1GKGSNL b - 1"
+    },
+    {
+      "group": "general_opening",
+      "position_id": "2772c9350a30bb57417a1182d371d51248e97be7284829113ac7fe64bab6db39",
+      "sfen": "ln1g1kbnl/1r1s2g2/p2p1pspp/2p1p1p2/1p5P1/2P1P1P2/PPSP1P2P/2G1GS1R1/LNBK3NL w - 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0005e915a9ac2a26073f19c5436e0d9dec0c26b94a9f02a3ca965ab6979976c5",
+      "sfen": "lr6l/3gk1g2/1P2p2p1/2Pp1p1sp/pnG1Pn3/5S2P/P2bsP3/1R2S4/LN2KG1NL w B4P2p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "00a676353fe77ad39215e64ed97859e76e91f146f5c809c0959adbe3211ed275",
+      "sfen": "l7l/5kg2/p1n1+Npg1p/2ppl1p+r1/9/P1PPS1P2/2BG4P/3KS1+n2/L3P3+r w G2SN4Pb2p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0141ba68ed8d190aa033fa4952f6bbd3462899a0d6f31a8843dd2739b09a4546",
+      "sfen": "l5bnl/1S+R3G2/p4p1gp/1pp2sp1k/7P1/2PP2P+r1/PPN+bGPN1P/2K6/L7L b GS3Psnp 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "01885d8c6b69346a624078c6130d4a05b179c574db1360b32c38422e532f2249",
+      "sfen": "l2g4l/7+N1/p3kp+R1p/3pp2P1/brP6/1Nn1K4/PP1P2P1P/1G7/L6+pL b 2SNPb2g2s4p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "018f4f79ac8fae5edb0de9032b92bd869f3fd9e8ba056b72dad65ca86a03b97d",
+      "sfen": "lB7/4k+S3/p3s1gp+B/3s1pp2/P1p1p3p/L1rPG4/gP+n5P/2G6/2K5L w NLrs2n7p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0428f331ff1ecad88aa4f42109d8f66d547d8b2feb009a8ff92e29ea6a6f6383",
+      "sfen": "+R3pk2l/6p2/p2sgpbp1/1p1pg3p/3n5/PPpPN4/4SP2P/1G1S1S3/L2K4L b B2NLrg4p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "048c8c8379cc9fc2d83f53e8d4bb6dfda748a166c8e1dcd738183039c0cc781f",
+      "sfen": "l2g4l/1rs1k1g2/2npppnp1/p5p1p/6s2/P1PPSP3/1pN1P1P1P/2G2R3/L1S1KG1NL b B3Pb 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "052908dd39116bed41b182c2757d68e55b962742679736f703f59a8491cac20d",
+      "sfen": "1+S3G1nl/1K4g2/1+Lp3sp1/4+Npp2/P1P5P/3GP1k2/1G+B2P+n2/7+r+l/2+s6 w RN4Pbsl5p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0536886f4b5599c5c21f7d0a183b1e25414d9c34c33b674513f89978ba063fca",
+      "sfen": "l7l/7k1/p1g1+S+R2p/2p1N4/4g2s1/nSPP1b3/PP1gP3P/1K7/L7+p b RBGSN5Pnl3p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0579a65a56aeff42b91b458b8e7c7af788ef6fadb228b6a26009a9afb8e0291c",
+      "sfen": "l7l/1+B2s4/p4p3/2pnP1+BPp/1S2k1g2/PpP1G4/1N1G1+p2P/1KS+r5/LN1Nr3L w G6Psp 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "071003e455f973a5418380bdee1f633b1bf0fabfce2295e354d6e49ccdf6e5d8",
+      "sfen": "l4r1nl/2S3gk1/3p1gsp1/1+Bp2pp2/pS5P1/PPPPP4/4G1S1+p/1KG2R3/LN2b3L w N4Pnp 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "07c4f9454f8a91505b10aee1ef7559665e76af2b4c9ff7777b14a50ed07923c4",
+      "sfen": "l6rl/3gksg2/p1spppn1p/6R2/9/PPP2PPp1/1S2P3P/1SG1G4/+b1K4NL w BN5Pnl 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0805fd0caddc8b593da645a78d98cfe3f0883673a38854f27a4f1e278be6135e",
+      "sfen": "KS5nl/PP4gk1/+rsp2gsp1/4ppp1p/4n2P1/2PP2P1P/2Sp5/4G4/4L3+l w RB2N2Pbgl2p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "08f7d135a7aac6d2015d5d97a993d21d4645e7e96576f6748295e007ffa33d6a",
+      "sfen": "l1+Rnk2g1/3pgn3/p4p3/2pg2p1p/B2nnP3/P1PS2P2/1KL5P/1Pb+p5/L7L b G2Srs5p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "094a8e232dd0bbdc13d1167d630d2d2d13f26d17f563cecabc4fe65bc1e8c6e0",
+      "sfen": "l2g1p1+Rl/3k1g1+P1/p1nsp3p/2pp5/3nNS3/1SP1P4/P2P1PP1+b/1PG1GRp2/LN2K2+s1 b Pbl2p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "09b8bce4c648b3399508943b09440991ce7f07b928d054c55f4e0dcbf8d58590",
+      "sfen": "l4g2l/4+P2k1/4ppnp1/1P4p1p/1N2g1s2/p3GP3/1p2PKPnP/4SG1r1/L6NL w R2B2SP4p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "09d80f8a66395decb84aee2db5357007bb8528dfa1c0562e9600b739a27853bf",
+      "sfen": "l4r1nl/2S1g1gk1/3+N2sp1/1+Bp2pp2/PS1N3P1/1PPPP4/KG6+p/5+r3/LN6L w B7Pgs 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "09ecec5e4356ed7a1b49f01976759c9e1c2bd8c666ad8d885514f7c316386ec9",
+      "sfen": "l3+L4/2+N2g3/p2kp3p/2pp1p3/5n+R2/2P1s4/PP+bP2PBP/4PK1g1/L4G1NL b RSN4Pg2sp 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0ab70b1054ed8a4d1d2c6b3433d846b4ad7d354a03b8b202a1f1bd8db5f66b97",
+      "sfen": "5+R1nl/9/3p2+L1k/1ppsp1pp1/p4P2p/2PPP1s+b1/SP1G1+n3/LK+r6/1N6L b B2GSNPg4p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0ac79c3a8a633c7ae300c1270accec6f01659a952359adde028d156fc7afdaae",
+      "sfen": "l5knl/5rg2/p2+BPp3/3p3Rp/1pP3p2/P5P2/1Pg+b1PN1P/KG1s5/L3s3L w G2S2N3P2p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0b92e6eb6588832a8200ac9a858b18e3dd3269304d67a0802fb571f66aa44b30",
+      "sfen": "5+R1nl/7g1/3p2+L1k/1ppsp1pp1/p4P2p/2PPP1s+b1/SP1G1+n3/L1K6/1N6L b RB2GSNP4p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0cf1de1be1f8947619b487e712cdb577c12a10a6777f5d44d3b6feee7cdd175e",
+      "sfen": "7rl/2s1g1g2/5pk1p/2P+Bp2Ps/3n5/2lSSPg1P/PP1PP2+p1/K2+bR4/LN3N2L b N5Pgp 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0daf21f562330bfaf7456eb5484863029377d0b8964ff0d47e2182785beb0ffa",
+      "sfen": "lr6l/2s1g1sP1/p5n1p/2pppk1G1/2P2s1p1/1S1R1p3/PPNP2P1P/1pG1P4/L3KG1NL b B2Pbn 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "0f7a366b5f98d7bc0c1c7d2aceea8bf23e21acdd1f118b9ca287703838db37cf",
+      "sfen": "1S1g1gk1l/1K2sn3/2+R2rgp1/4pp2p/P1P3sP1/4P1p1P/5P3/9/3+n4+l b GSNLP2bnl6p 1"
+    },
+    {
+      "group": "hard_middlegame_endgame",
+      "position_id": "100778a33f868e30f34685be5e60779d3a1d7348321bf68602648f5d09071b56",
+      "sfen": "1k2l1+R2/4g1+P2/B1Gs4p/P1pp1p3/1r2P4/2s2P3/+p+pNP1SN1P/1PK1G4/LL6L b 2N4Pbgsp 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0092e9af15a4adb9ca463d2406a7c4fd09d40302b4b861283bf1ed2f3db6f253",
+      "sfen": "l6nl/1r2g1kb1/p1ns1p1g1/2p2s1pp/1p2P1p2/PPPSGBP2/2S2PN1P/2K1G2R1/LN6L b 3Pp 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "00f173e9b44183f0f5f72795995fb96bd551252bfdf1fbeb806a346af781759f",
+      "sfen": "ln1gk2nl/1r1s2g2/2ppppsp1/p5p1p/1p5P1/P1P3P2/1PSPPP2P/2G2S1R1/LN2KG1NL b Bb 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0113116b490474c412752ab7c5b2690123ee847c24c47f8e3dab2904c5a17166",
+      "sfen": "l4k2l/1rg3gs1/p3pp2p/2p+b3R1/4S4/1SP1S4/PP1P2P1P/2G1PK3/L6+pL w G2N5Pb2n 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "011fe52929d18703169ee4e7a857ef2ac6f12f7f08e3dd3870b4b1a19ca7ac2d",
+      "sfen": "l2g1k1nl/1r1s2gb1/p1np1p1pp/2p1psp2/1p5P1/2PPP1P2/PPS2P2P/1BK1GS1R1/LN1G3NL b - 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "01de3f60d58bef795ef689c459d2155df317672330e4c802b6d383e23d4d43b8",
+      "sfen": "ln1g4l/3k2g1p/2pSPp1p1/4p3P/p1N2P2L/1r2S1G2/PN1S2B2/4K1s2/LN5R1 w B6Pg2p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "027e2ab76acddc81472e9b9e1c04d49e2f5e22f78c86cdf8b90694d2aefce247",
+      "sfen": "ln4knl/1r4g2/3p1gs2/p3pppS1/9/1PPPP1P2/P2G1P3/1KG4R1/LN3b1NL w BS3Ps3p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "03856a1ddcaf9e60d43180c2f1bf8113a47ebbc0bfb7f8d2a4be021997d95597",
+      "sfen": "l2gk3l/1rs3gs1/p3pp2p/2pp5/9/1SP6/PPNP+n1P1P/2G4R1/L3KG1NL b BN3Pbs3p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "04aa06acf75ed35cc7b6ccd57eeca776111e91283f202240d6539e6e589e69f3",
+      "sfen": "lr5nl/7k1/2Sp+PNsg1/pS3pp1P/3Pp3S/PpP3P2/3G1P3/2Kb3R1/LN5NL w B3P2g2p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "058be392726296139cf65de4d229fc1f9af461635ad79cb905bed9a6d206bd9c",
+      "sfen": "lr6l/3k1p1+R1/p1gsp3p/1ppps3+b/B4n3/4P3P/P2P2K2/1P1G5/LN6L b G2S2N6Pg 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "06fa8f0426083a95147055d5a647eae06c52d4e0d9dced9519498d5b9bff3069",
+      "sfen": "lr5nl/3gk1gs1/2nppp1p1/2ps2P1p/p5S2/1pPPP3P/P2S1P3/1PG4R1/LN2KG1NL b BPbp 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "079ab7c6dfcda00e8ab4635e61b5e6d41f79837af45e4ea934304ed20236ef5e",
+      "sfen": "lr3k2l/2Ssg1g2/p2p1pnpp/1Pp3p2/b2nS2P1/2PB2P2/PG1P1P2P/4GS1R1/LN1K4L w Pn2p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "096c4972b7af077871d7f293c39d62dd203597acbfece0a5e7845edf3af12864",
+      "sfen": "l4k1nl/1r1sg1gb1/p1n2pspp/2pp2p2/1p2p2P1/2PPP1P2/PPSG1PN1P/1BK2S1R1/LN1G4L b - 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0b6bb48c1095f0940d04d76a6a46691ac4ce166f694dcfb4c7ac17f4595959ab",
+      "sfen": "1n+B2S1nl/6g1k/2s5p/3g1pps1/P3P4/1PpP2P1P/2N2P3/1KG4R1/L6NL w RL3Pbgs4p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0e2c2b40b5733d8d3337030bf570fc8c43c3b795f6c81dea111d0439701489bf",
+      "sfen": "1n6l/1r3ggkp/3p2np1/2p2PP1P/Lp1P1p1P1/n1PSp4/1PSs+p4/2G4R1/2K2L1NL b 2BS2Pgp 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0e58bfab41729c2c502112086b01b5d54db3178bf5972b73c22c024293be09d5",
+      "sfen": "l4k1nl/1r1sg1gb1/p1n2psp1/1pppp1p1p/7P1/2PPP1P2/PPS2P2P/2K1GS1R1/LNBG3NL b - 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0f84ef07a938fbc3dfcfdbd350c5757b76f6580bb00f92a69e4db47d7b07c38a",
+      "sfen": "l4k2l/1r1sg1g2/p1n2p1pp/2pp2p2/1p2n4/PPPP1GPR1/2Ssn3P/1B7/LNK1G3L b BS3Pp 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "0fb75764801d9eb9bad9df01a1094432ce1131778d428fb5a1fa09f2160564df",
+      "sfen": "l4k1nl/1r1sg1g2/p1np1psp1/2pbp1p1p/1p5P1/P1PPPSP2/1PS2P2P/2G4R1/LNBK1G1NL b - 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "1235d8e8b2b51b4315beca98587d0774cc6e1114746fb740821831099fd22d3f",
+      "sfen": "ln4knl/1r4g2/2sp1gsp1/p1p1ppp1p/1p5P1/2PPPPP1P/PPSG1bS2/1KG4R1/LN5NL w B 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "154d3f356821311cb0431f84dc9a9c9d817ee4a9f9f53ef376b194a8959b8896",
+      "sfen": "l6nl/1r1sg1kp1/p1n6/2pp1ppPp/9/PSPP2P2/1P3PN1P/2KG1S1R1/LN6L w BGPbgs2p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "155c1133a01b330e86a61bfafc28500c13f2ca988f3cc72cb3a26f9522caa02e",
+      "sfen": "l6nl/3k2gs1/p1gppp2p/9/2pN1bPp1/P8/3PPPS1P/2G1K4/L+rS2G1RL w BSP2n4p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "156acb5044d97c91d729fc00b0c510f715be74d933de63fd9ec990db0b2635f1",
+      "sfen": "l2g4l/1rsk5/p3pG2p/2+Bp1pBp1/5n3/1SP3s2/PPNn4P/4PK3/L1G2G1NL b 4Prs3p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "1813c7a10e868523eb23a1cda45744a64f447d685df4e7d0f1321a5d0e5a6adf",
+      "sfen": "4sk2l/1r3P3/KNp2N+P2/1n2pp2p/P1P6/3PPNS1P/1G3S3/1P7/2s2+b1+lL w L4Prb3g2p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "19dddf7474e1ba4f47711cf9915b78043f82a4a9c60c2587110e2bd54f546675",
+      "sfen": "l4k1nl/1r4gb1/2n1pp1pp/3pg1p2/1p3N1P1/p1PPSPP2/1PS5P/2KG3R1/LNB5L b G2s3p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "1b198a7fa06f3312b4c5c3d6932322c548bb27dc90e18c5b3b33e33460ec3565",
+      "sfen": "l3g1g1l/5k3/p2+B3+R1/2p2pp1p/1n3P3/PSP+bPnP2/3+p2N1P/7K1/8L w R2GS4P2snl2p 1"
+    },
+    {
+      "group": "ibisha",
+      "position_id": "1bd054f04fad4ea789e81ac714b3d97609eea656275e488f82ce4931979967dc",
+      "sfen": "l4kbnl/1r4g2/p4p1pp/1pp1gsp2/1n2p4/2PP1SP2/PPS2PN1P/2GB3R1/LNK5L b S2Pgp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "00d7320ecb074663f17e11d0bca239719443664305896a2ee2ba08de57a5a731",
+      "sfen": "l1ks4l/9/p3p3p/2+Bp2rp1/5p3/1SP6/PPNn4P/4PK3/L1G2G1NL b SN4Prb2gs3p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "00dfd5b9e2f6e1932bef2478aa0a71861e4d5e571ba92978be9e01084346d535",
+      "sfen": "l4k1nl/4+R4/p1ng1p3/2pp2pgp/5G1P1/PSPP2P2/1P3P+bpP/1K7/LN1G4L w RS2Pb2snp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "00ff9a85e8efcce79dca7b10f7a7db4061e248fdda21857ccb6fe427e0388e8f",
+      "sfen": "ln5nl/1r4gkp/2bp1gsp1/2p2p2P/1p1P3P1/L1P1p1S2/1PSG1P3/1KG2B2R/1N5NL w S4Pp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "02f714e302a15db245ddb0d97ea03235373e82308fcc96a68ceda606500cdd56",
+      "sfen": "1l1k1G1nl/2nr1s1g1/l1+B1pp2p/2spP4/2K2S3/2PP1PP2/P+nS5P/1P1G5/+r7L b GPbn5p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "052eceed9a3a80df77487554a1dd0741d627cdaba905fb438f88f6c6e3f2304c",
+      "sfen": "l4k2l/4+Pp3/2n3n2/p1G1pSp2/1l3P1pp/P+Rp3P2/3PsS2P/1K1g4R/LN6+b w 2GNPbs4p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "055561485e8b9f420f561b2e76f369f493a177df49bf8a38b27a6dcea15f30ff",
+      "sfen": "l1r1kgs+R1/1P2g3+P/1B1ppg3/p2s1p2p/2P3N2/PS2PNP1P/3P1KN2/2+p6/L2b4L b L3Pgsnp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "06c185c1c9c56a48298e58afa00f6183067c94d5bb6f149d798ad6cd4403d77d",
+      "sfen": "l4g1k1/1r4ps1/2ns2LpP/p3pLP1p/5G3/PP3b3/1p1KP1+p2/2NS3r1/LN1G5 b SN2Pbg4p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "06d3773af2e51dae7863e459c7271bcc888ec20d4195d14442b4cea6207c15d1",
+      "sfen": "l4k1nl/5gg2/p4p1Pp/2s2bpR1/7Nr/1Ppps1P2/PG3P2P/K1sPGS3/LNB5L b N2P3p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "07179b451e4247e5acee4e6e6e144490998b24f1b1f99cf49e87db6be0cbf200",
+      "sfen": "1n5nl/2S3gk1/r1p+B1gsp1/3pppp1p/P6P1/G1PPP1PSP/3G1P3/1K1S5/1N5+lL b BLrn3p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "0756ee50f29c975fc2a0a5eca4eee6de9fbdc9d8ac6fec706c1b8563c911a1ed",
+      "sfen": "l6+Rl/3+S1+B1sg/p1n2pppk/2ppg3p/2n1+b1SPs/PPP5P/KG1PpP3/2N+r5/LN4P1L b G2p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "07c8df7aa32cc0843f88820b4feeddc2e7b6354b49de6f79e862e5db6a208669",
+      "sfen": "l1+R1k2g1/4gn3/p4p3/2pg2pBp/3nnP3/P1PS2P2/1KLp4P/3+b5/L7L w G2SPrsn6p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "08cf24968aaef4cbd4df6d05515fce35fd20597b2755335548d7a83ad810e16c",
+      "sfen": "l2g4l/1r4kg1/p2s2n1p/3ppS1P1/1SP2p+B2/9/PP1P2P1P/1G3G3/L3K1+r+pL b BN3Ps2n2p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "092ac79cc6dda1fa193d09c67a524c0ca76d4e7e05080a4ac7b6218c01e93315",
+      "sfen": "l3kg1sR/1b2s1s2/7p1/p2ppNp1l/1NBn1P1Rp/P1p1PGP2/3P5/4K1s2/L7L w G3Pgn3p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "0bc9f2cc4f54c6985e322e6b37d54594bb2766d61b3610a20ca627824a3aefda",
+      "sfen": "KSb4nl/PPg3gk1/+rs2g1sp1/N1pBppp1p/4n2P1/2PP2P1P/2Sp5/4G4/4L3+l b R2Pnl2p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "0c607d39a2b921de89bb340693fe16b96a8e891f8d1b321f2e88643e0a9576d3",
+      "sfen": "l4sk1l/4+P4/4ppnp1/1P2g1p1p/1N7/p2K5/1p2P1PnP/4+r4/L6NL b 2BGSPr2g2s5p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "0dba850d6bc17631e5211420f4b395c7ebb401dda27fadea001de521034cb8f2",
+      "sfen": "l6nl/3rg1kb1/pSGs2ppp/1ppp1p3/1n7/2PPP1P2/PP1G1PN1P/2KS1S3/LN1G4L b 2Prb 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "1063ce13500efb07c9575fe2143749aa9a4ef7714489adf5249f37135f194fc2",
+      "sfen": "l2g2+P1l/1rs6/p3pk1+bp/2pp1psp1/5n3/1SP3R2/PPNP2P1P/2G1P4/L3KG1NL w GS3Pbn 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "156939cda1aeb869e51e9fee89d7b019feb6da7f4905107d6eb3f4de242e14f5",
+      "sfen": "l1S2k1nl/4r1g2/p1n+B1p1pp/2ppg4/5N3/1PP6/PGSPpP2P/1K2s2+b1/LN3+r2L b S4Pgp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "15cf4f0736c6006dbc8726a69c68c34d25c17710a33b1267cef537ed3c790020",
+      "sfen": "2R4nl/6gk1/np+B2gs2/2p1pppPp/G8/2KPP4/pP1G1s1+pP/3R5/LN1sb2NL w L3Ps2p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "162f71aa3934a4f8971eb593ffb049e737648f04d0eec10b93da2456d31aed57",
+      "sfen": "l4r1nl/2S3gk1/3p1gsp1/1+Bp2pp2/pS5P1/PPPPP4/8+p/1KG2G3/LN1r4L b B2N4Psp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "1702d135d164f149cc440e2e65b9c7ef359159a6931dfa4d3b7f9f814204d963",
+      "sfen": "+R4p1nl/5g1k1/3p2g2/1ppsp1pp1/pn3Pnsp/1SPPP+B3/PP1G2R2/1KG4b1/LN6L w LPs2p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "1795732d0e4bb8817eb9a239374f0786cd355b9b0bb117ae87c2534c7d917add",
+      "sfen": "l2s1k1nl/1r7/p1ngPp1g1/2pp2pBp/4s2P1/PSPPS1Pb1/1P3PNpP/1K1GR4/LN1G4L w Pp 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "184361d01685a8696b46256a39759eee74946630ed0d42fb99def62548d1941f",
+      "sfen": "+R3pk2l/6p2/p2sgpbp1/1p1pg3p/9/PPpPN4/2n1SP2P/1G1SKS3/L2R4L w BNLgn4p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "18ef50a7c2f5c40ee3626cca4f7f695ef8a03ff0637e10c44b5d52f604e85e26",
+      "sfen": "5+B3/l4G1k1/p1sp1p2l/6ppp/1B2p4/PNpPg1P1P/NP2+r4/2P4R1/L2KN3L b N2P2g3s2p 1"
+    },
+    {
+      "group": "opponent_furibisha",
+      "position_id": "1b3fa8cc166e58ca4c49d5c9b9e437c01ba5dea33e5776ac6e72d283eb22fcb6",
+      "sfen": "l2g3+Rl/3k1g1+P1/p1nsp3p/2pp1b3/3n1S3/1SP1P4/P2P1PP1P/1PG1GRp2/LN2K2+s1 w NPbl2p 1"
+    }
+  ],
+  "seed": 20260907,
+  "entrants": [
+    {
+      "id": "prior-1m",
+      "model": {
+        "path": "local/phase10r-data/checkpoints/phase10r/1m/sparse-pair-policy-wdl/teacher-bound-v1/teacher-bound-v1.osaval02",
+        "sha256": "41ce44a93219b0bcee0270677104c379029999050524fe99c1a560bb5cc05060"
+      }
+    },
+    {
+      "id": "a1-100k",
+      "model": {
+        "path": "local/phase10u-runs/train-100k/attempt-0002/selected-a1-king-relative-128.osat10",
+        "sha256": "09f02be8c821417cc9a1edf0d6058bce9904ab41533997c11b300f6cce19ec22"
+      }
+    },
+    {
+      "id": "hard1",
+      "model": {
+        "path": "local/phase10u-runs/train-100k-hard-relabel/attempt-0001/selected-a1-king-relative-128.osat10",
+        "sha256": "88a1e7d46aac5584e535f39d157ea60003ce77c264ff2ee9a1654d87651f119c"
+      }
+    }
+  ],
+  "opponent": "handcrafted-experimental",
+  "modes": [
+    "equal_nodes",
+    "equal_wall_clock"
+  ],
+  "pairs_per_variant": 100,
+  "games_per_variant": 200,
+  "variants": 6,
+  "total_new_games": 1200,
+  "pairing": "Exactly listed starts, reversed colors, no cherry picking or historical/new game merging.",
+  "process_parallelism": 1,
+  "controls_values": {
+    "threads_per_player": 1,
+    "hash_mib_per_player": 32,
+    "depth_cap": 64,
+    "max_plies": 256,
+    "book": false,
+    "nodes": 2000,
+    "node_emergency_timeout_ms": 30000,
+    "clock_ms": 100,
+    "clock_hard_cap_ms": 1000
+  },
+  "preconditions": [
+    "Clean committed current branch; all implementation/frozen/preservation hashes pass.",
+    "Reviewed bounded external-process Arena runner; pure-only learned playing binaries separate from handcrafted opponent.",
+    "Prior OSAVAL02 pure-only native and actual-Wasm playing adapters explicitly support this exact model; no architecture conversion or fallback.",
+    "Model-specific identity/loading/parity/history/legality/prohibited-call proofs for all three entrants; synthetic a1 audit alone is insufficient.",
+    "Per-launch immutable native binary SHA plus build receipt and source commit/arena implementation identity; validate executable immediately before launch and bind returned raw traces.",
+    "Per-search deadlines and full wall time including replay/setup; warmup excluded consistently and traced; no concurrent benchmark jobs.",
+    "Independently replay every raw game; trace cp/depth/node/time/history/cycle metrics, exclusions and all runtime counters; history/loading/evaluation/time failures STOP_CLOSED, never a scored loss.",
+    "Bind all controls, models, start IDs, profiles, calibration/lineage and aggregate input hashes; tests reject substitutions, missing evidence, caps-as-draw and denominator changes.",
+    "Current native/Wasm audit and make check pass; >=150 GiB available before any future execution.",
+    "Separate later execution instruction after implementation review; this plan is not permission to run."
+  ],
+  "statistics": {
+    "minimum_completion": 0.95,
+    "conservative_denominator": 200,
+    "caps": "excluded_not_draw; zero contribution to conservative score",
+    "bootstrap": "10000 whole start-pair resamples",
+    "bootstrap_seed": 20260907,
+    "lower_percentile": 0.025
+  },
+  "historical_head_to_head": "Superseded diagnostic context only. No replacement needed for incumbent ranking. A later expansion claim requires separately predeclared a1/prior and hard1/prior dual-mode evidence; do not reuse old claims.",
+  "prohibited": [
+    "long_labeling",
+    "training",
+    "selfplay",
+    "final_holdout",
+    "merge",
+    "push",
+    "release",
+    "deployment",
+    "OpenShogiUI_changes"
+  ],
+  "next_action": "Review these implementation and immutable artifact receipts. Stop here. A separate later explicit instruction is required before authorization-file creation or Arena execution; preserve all original controls and resource preconditions.",
+  "implementation_review": {
+    "adapter_audit": {
+      "path": "artifacts/phase10u/prior-adapter/adapter-audit-final.json",
+      "sha256": "24ee743121dc4f9f43046f5d23ee3231542159c1facc99324db24df1c6cca468"
+    },
+    "arena_games_executed": 0,
+    "receipt_schema": {
+      "path": "docs/data/phase10u-arena-receipt.schema.json",
+      "sha256": "745e945985339cf2b2a0f23b21dce4397c99fbf8cfeb97a82dcc3cc79c41c6e6"
+    },
+    "reviewed_manifest": {
+      "path": "artifacts/phase10u/prior-adapter/reviewed-manifest.json",
+      "sha256": "42c3cfc3843bacc162c41416e8b5be5ae1a07fe80070813905b358b1487c02f7"
+    },
+    "round2_boundary": {
+      "path": "configs/phase10u/round2-label-prefix.json",
+      "sha256": "0e9cecf932b2618dd3825631d9234ba2ea1d8c470dfeb4a13cb8dd848ee0ed63"
+    },
+    "runtime_source_commit": "c342e78fb52ff79f9d7834f7528cccd8915f2aee",
+    "validation": {
+      "path": "artifacts/phase10u/prior-adapter/validation.json",
+      "sha256": "1b60d18dc68f939064d0bdf758e63d6413e7cee344f7c44aaaf1d2e2079333ff"
+    }
+  }
+}

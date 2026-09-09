@@ -1,0 +1,776 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Phase 10U immutable Arena receipt",
+  "description": "Canonical UTF-8 JSON, sorted object keys, no spaces, one trailing LF. receipt_sha256 hashes the complete object excluding itself. replay_sha256 hashes initial_sfen/moves/final_sfen/result/termination/max_plies_reached. Authenticity requires an independently pinned reviewed manifest and full artifact revalidation; self-hashes alone are insufficient.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "game_id",
+    "pairing_id",
+    "seed",
+    "manifest_sha256",
+    "start_manifest_sha256",
+    "sides",
+    "controls",
+    "initial_sfen",
+    "moves",
+    "searches",
+    "runtime",
+    "final_sfen",
+    "result",
+    "termination",
+    "max_plies_reached",
+    "replay_sha256",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "open_shogiai_phase10u_arena_receipt/v1"
+    },
+    "game_id": {
+      "type": "string"
+    },
+    "pairing_id": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "start_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sides": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "black",
+        "white"
+      ],
+      "properties": {
+        "black": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_commit",
+            "cargo_features",
+            "adapter_format",
+            "evaluator_schema_sha256",
+            "native",
+            "wasm",
+            "profile",
+            "model",
+            "build_audit",
+            "profile_name"
+          ],
+          "properties": {
+            "source_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "cargo_features": {
+              "enum": [
+                [
+                  "pure-only"
+                ],
+                [
+                  "handcrafted"
+                ]
+              ]
+            },
+            "adapter_format": {
+              "enum": [
+                "OSAVAL02",
+                "OSAT10A1",
+                "HANDCRAFTED"
+              ]
+            },
+            "evaluator_schema_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "native": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "wasm": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "profile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "sha256",
+                    "payload_sha256"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "payload_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "build_audit": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "profile_name": {
+              "enum": [
+                "pure_learned",
+                "handcrafted_experimental"
+              ]
+            }
+          }
+        },
+        "white": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_commit",
+            "cargo_features",
+            "adapter_format",
+            "evaluator_schema_sha256",
+            "native",
+            "wasm",
+            "profile",
+            "model",
+            "build_audit",
+            "profile_name"
+          ],
+          "properties": {
+            "source_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "cargo_features": {
+              "enum": [
+                [
+                  "pure-only"
+                ],
+                [
+                  "handcrafted"
+                ]
+              ]
+            },
+            "adapter_format": {
+              "enum": [
+                "OSAVAL02",
+                "OSAT10A1",
+                "HANDCRAFTED"
+              ]
+            },
+            "evaluator_schema_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "native": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "wasm": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "profile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "sha256",
+                    "payload_sha256"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "payload_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "build_audit": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "profile_name": {
+              "enum": [
+                "pure_learned",
+                "handcrafted_experimental"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock",
+        "threads",
+        "hash_mb",
+        "search_options",
+        "movetime_ns",
+        "hard_timeout_ns",
+        "nodes",
+        "max_plies",
+        "max_depth",
+        "warmup"
+      ],
+      "properties": {
+        "clock": {
+          "const": "monotonic_ns"
+        },
+        "threads": {
+          "const": 1
+        },
+        "hash_mb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "search_options": {
+          "type": "object"
+        },
+        "movetime_ns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "hard_timeout_ns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nodes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "max_plies": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "warmup": {
+          "const": "none; model startup excluded for both sides; all request setup charged"
+        }
+      }
+    },
+    "initial_sfen": {
+      "type": "string"
+    },
+    "moves": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "string"
+      }
+    },
+    "searches": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "side",
+          "move",
+          "runtime",
+          "timing",
+          "engine_timing",
+          "request",
+          "response"
+        ],
+        "properties": {
+          "side": {
+            "enum": [
+              "black",
+              "white"
+            ]
+          },
+          "move": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "learned_eval_calls",
+              "handcrafted_eval_calls",
+              "residual_eval_calls",
+              "composite_eval_calls",
+              "fallback_count",
+              "book_hits",
+              "teacher_calls"
+            ],
+            "properties": {
+              "learned_eval_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "handcrafted_eval_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "residual_eval_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "composite_eval_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "fallback_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "book_hits": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "teacher_calls": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "timing": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "clock",
+              "start_ns",
+              "end_ns",
+              "deadline_ns",
+              "elapsed_ns",
+              "compliant"
+            ],
+            "properties": {
+              "clock": {
+                "const": "monotonic_ns"
+              },
+              "start_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deadline_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "elapsed_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "compliant": {
+                "const": true
+              }
+            }
+          },
+          "engine_timing": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "clock",
+              "scope",
+              "setup_elapsed_ns",
+              "search_start_ns",
+              "search_budget_ns",
+              "search_elapsed_ns",
+              "elapsed_ns",
+              "hard_budget_ns",
+              "hard_timeout_ms",
+              "requested_movetime_ms",
+              "soft_budget_ns",
+              "soft_compliant",
+              "hard_compliant",
+              "compliant"
+            ],
+            "properties": {
+              "clock": {
+                "const": "monotonic"
+              },
+              "scope": {
+                "const": "request_parse_replay_setup_search"
+              },
+              "setup_elapsed_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "search_start_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "search_budget_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "search_elapsed_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "elapsed_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "hard_budget_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "hard_timeout_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "requested_movetime_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              },
+              "soft_budget_ns": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              },
+              "soft_budget_exhausted_in_setup": {
+                "type": "boolean"
+              },
+              "hard_deadline_safety_margin_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "soft_compliant": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "hard_compliant": {
+                "const": true
+              },
+              "compliant": {
+                "const": true
+              }
+            }
+          },
+          "request": {
+            "type": "object"
+          },
+          "response": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "black",
+        "white"
+      ],
+      "properties": {
+        "black": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "learned_eval_calls",
+            "handcrafted_eval_calls",
+            "residual_eval_calls",
+            "composite_eval_calls",
+            "fallback_count",
+            "book_hits",
+            "teacher_calls"
+          ],
+          "properties": {
+            "learned_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "handcrafted_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "residual_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "composite_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fallback_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "book_hits": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "teacher_calls": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "white": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "learned_eval_calls",
+            "handcrafted_eval_calls",
+            "residual_eval_calls",
+            "composite_eval_calls",
+            "fallback_count",
+            "book_hits",
+            "teacher_calls"
+          ],
+          "properties": {
+            "learned_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "handcrafted_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "residual_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "composite_eval_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fallback_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "book_hits": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "teacher_calls": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "final_sfen": {
+      "type": "string"
+    },
+    "result": {
+      "enum": [
+        "black",
+        "white",
+        "draw",
+        "excluded"
+      ]
+    },
+    "termination": {
+      "enum": [
+        "checkmate",
+        "repetition",
+        "perpetual_check",
+        "max_plies"
+      ]
+    },
+    "max_plies_reached": {
+      "type": "boolean"
+    },
+    "replay_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

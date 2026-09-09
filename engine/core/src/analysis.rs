@@ -383,7 +383,7 @@ fn validate_identity_hash(name: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "handcrafted"))]
 mod tests {
     use super::*;
     use crate::{SearchConfig, Side, TimeControl, TimeManager};

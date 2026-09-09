@@ -11,25 +11,17 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Local data and generated artifacts
-/data/raw/
-/data/processed/
+# Generated research assets: canonical root is local/ (Cargo uses target/).
+/local/
+/artifacts/
+/data/
+/weights/
 /training/data/raw/
 /training/data/processed/
-/artifacts/*
-!/artifacts/README.md
-!/artifacts/phase10r/
-/artifacts/phase10r/*
-!/artifacts/phase10r/data-foundation-manifest.json
-!/artifacts/phase10r/osaval02-parity-report.json
-!/artifacts/phase10r/phase10r-mixture-reconciliation.json
-/local/*
-!/local/README.md
-
-# Generated model weights (documentation remains tracked)
-/weights/*
-!/weights/README.md
-!/weights/LICENSE-PENDING.md
+*.osaval
+*.osaval02
+*.osaval03
+*.osat10a1
 
 # Teacher engines and evaluation files
 **/teacher/

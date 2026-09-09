@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["handcrafted"]
+handcrafted = []
+pure-only = []
+
 [dependencies]
 flate2 = "=1.1.9"
 libc = "=0.2.189"
@@ -20,3 +25,7 @@ proptest.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "phase10t_probe"
+required-features = ["handcrafted"]

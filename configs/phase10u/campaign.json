@@ -1,0 +1,68 @@
+{
+  "schema": "open_shogiai_phase10u_campaign/v1",
+  "status": "closed_historical_regression_fixture",
+  "implementation_prerequisites": [
+    "training_target_masks",
+    "game_lineage_split",
+    "bounded_arena_runner",
+    "teacher_relabelled_trajectory_ingestion"
+  ],
+  "runner_status": "missing_paths_require_bounded_wiring_and_verification_before_execution",
+  "deadline": "2026-09-13T12:00:00+09:00",
+  "training_cutoff": "2026-09-13T06:00:00+09:00",
+  "final_reserve_hours": 6,
+  "checkpoints": [
+    "100k_a1_export",
+    "200_game_diagnostic",
+    "1m_a1_export",
+    "400_game_diagnostic",
+    "strongest_sunday_candidate"
+  ],
+  "diagnostic_games_per_mode_per_opponent": [
+    200,
+    400
+  ],
+  "opponents": [
+    "learned_1m",
+    "handcrafted_experimental"
+  ],
+  "modes": [
+    "equal_nodes",
+    "equal_wall_clock"
+  ],
+  "arena_controls": "configs/phase10t/arena.json",
+  "minimum_completion": 0.95,
+  "improvement": "learned_1m_clock_lower_and_conservative_gt_0.50_nodes_conservative_ge_0.50_and_no_handcrafted_regression_both_modes",
+  "baseline": "fixed_learned_1m_vs_handcrafted_on_identical_starts",
+  "caps": "missing_not_draw_conservative_score_divides_by_all_scheduled_games",
+  "integrity": [
+    "provenance",
+    "leakage",
+    "hashes",
+    "legality",
+    "parity",
+    "pure_runtime",
+    "model_loading",
+    "target_semantics",
+    "build_audit"
+  ],
+  "hard_relabel": {
+    "max_rounds": 2,
+    "max_positions_per_round": 25000,
+    "nodes": 400000,
+    "train_only": true
+  },
+  "pre48_trajectories": "pure_models_only_selected_train_positions_teacher_relabelled_before_training",
+  "trajectory_limits": {
+    "max_games_per_round": 200,
+    "max_plies_per_game": 256,
+    "max_selected_positions_per_round": 25000,
+    "max_rounds_per_rung": 2
+  },
+  "unassisted_selfplay": "phase10t_selfplay_entry_48pct_800_per_mode_lower43",
+  "research_objective": "unchanged_phase10t_final55_1600_per_mode_lower_strictly_gt50",
+  "sunday_candidate_requires_final55": false,
+  "candidate_selection": "all_attempts_reported_select_by_equal_clock_handcrafted_conservative_then_lower_then_equal_node_conservative",
+  "final_holdout": false,
+  "promotion": false
+}

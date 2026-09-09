@@ -17,15 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_frozen_phase10_controls_and_hashes_validate() -> None:
-    result = validate_phase10(ROOT)
-
-    assert result == {
-        "schema": "open_shogi_phase10_validation/v1",
-        "status": "valid",
-        "source_decisions": {"accepted": 2, "deferred": 18, "rejected": 2},
-        "audited_artifacts": 22,
-        "frozen_hashes": 25,
-    }
+    with pytest.raises(ValueError, match="Closed campaign"):
+        validate_phase10(ROOT)
 
 
 def test_pending_source_cannot_be_accepted() -> None:

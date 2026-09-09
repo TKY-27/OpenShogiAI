@@ -1,0 +1,97 @@
+{
+  "schema": "open_shogiai_phase10t_arena/v1",
+  "status": "frozen_not_started",
+  "baseline": "handcrafted-experimental",
+  "baseline_binding": "engine_binary_sha256_and_evaluation_config_sha256_required",
+  "start_manifest": "artifacts/phase10/start-pool-manifest.json",
+  "start_sha256": "491a3d54d3d67002fc03fc3644c16b405f5b1dbb662e88e4af260bd45757a1f1",
+  "same_pairs_colors_and_seeds_across_variants": true,
+  "seed": 20260907,
+  "threads": 1,
+  "hash_mib_per_player": 32,
+  "max_plies": 256,
+  "depth_cap": 64,
+  "book": false,
+  "modes": {
+    "equal_nodes": {
+      "nodes": 2000,
+      "clock": "none",
+      "emergency_timeout_ms": 30000,
+      "timeout": "invalid_pair_integrity_stop"
+    },
+    "equal_wall_clock": {
+      "movetime_ms": 100,
+      "nodes": "none",
+      "hard_cap_ms": 1000
+    }
+  },
+  "practical_smoke": {
+    "games": 20,
+    "movetime_ms": 1000,
+    "cannot_open_progression": true
+  },
+  "minimum_completion_fraction": 0.95,
+  "max_plies_result": "excluded_not_draw",
+  "conservative_score": "wins_plus_half_draws_div_all_scheduled_games",
+  "require_conservative_score_at_gate": true,
+  "confidence": {
+    "method": "paired_bootstrap",
+    "replicates": 10000,
+    "seed": 20260907,
+    "lower_percentile": 0.025
+  },
+  "gates": [
+    {
+      "id": "recovery",
+      "score": 0.2,
+      "lower": 0.15,
+      "games_per_mode": 400
+    },
+    {
+      "id": "viable",
+      "score": 0.35,
+      "lower": 0.3,
+      "games_per_mode": 800
+    },
+    {
+      "id": "selfplay_entry",
+      "score": 0.48,
+      "lower": 0.43,
+      "games_per_mode": 800
+    },
+    {
+      "id": "final_objective",
+      "score": 0.55,
+      "lower": 0.5,
+      "lower_strict": true,
+      "games_per_mode": 1600
+    }
+  ],
+  "gate_evidence": "both_modes_required",
+  "same_model_hash_both_modes": true,
+  "final_holdout": false,
+  "promotion": false,
+  "required_metrics": [
+    "nodes",
+    "elapsed_search_ns",
+    "nps",
+    "completed_depth_histogram",
+    "learned_eval_calls",
+    "calls_per_node",
+    "leaf_latency_p50_p95",
+    "policy_time",
+    "zero_depth_search_fraction",
+    "max_plies_by_start_group",
+    "two_three_fourfold_recurrences",
+    "reversible_cycles",
+    "score_sign_and_magnitude",
+    "all_prohibited_counters",
+    "illegal_moves",
+    "crashes",
+    "per_move_deadline"
+  ],
+  "pairing": "first_sorted_position_ids_within_frozen_group_quota_then_reversed_colors",
+  "repeated_rounds": "final_1600_uses_same_400_starts_two_frozen_seed_rounds_bootstrap_by_unique_start",
+  "development_overfit": "report_cumulative_evaluations_before_new_candidate_selection",
+  "candidate_reevaluation": "predeclare_schedule_report_all_attempts_no_cherry_picking"
+}

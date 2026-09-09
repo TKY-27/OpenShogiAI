@@ -1,0 +1,140 @@
+schema: open_shogiai_phase10s_supervised_redesign/v1
+frozen_as_of: "2026-09-07"
+status: frozen_not_started
+base:
+  required_branch: codex/pure-learned-pre-selfplay
+  required_ancestor_commit: b81efc487ee3911d1c3e66d5ba868c3d4fe08199
+  prior_result: SUPERVISED_REDESIGN_REQUIRED
+  rejected_model_id: phase10r-10m-diagnostic-sparse-pair-policy-wdl
+  rejected_for: [promotion, default_selection, selfplay_seed]
+  preservation_manifest: retired_campaign_no_execution_authority
+
+runtime:
+  profile: pure_learned
+  model_format: OSAVAL02
+  allowed: [exact_rules, terminal_handling, mate_handling, search, time_management]
+  prohibited:
+    - handcrafted_evaluation
+    - residual_evaluation
+    - composite_evaluation
+    - opening_book
+    - teacher_during_play
+    - fallback_evaluation
+  prohibited_call_counters_must_equal: 0
+  model_or_hash_failure: reject_game_start
+
+sources:
+  deny_by_default: true
+  approved:
+    - source_id: aobazero
+      artifacts: [aobazero-no-noise-exact100]
+      eligible_unique_train_rows: 7825
+      maximum_exposures_per_supervised_generation: 2
+    - source_id: wcsc
+      artifacts: [wcsc01-through-wcsc29-except-none, wcsc31, wcsc32]
+      eligible_unique_train_rows: 356214
+      maximum_exposures_per_supervised_generation: 2
+    - source_id: denryu
+      artifacts: [denryu-dr5-hardware3]
+      eligible_unique_train_rows: 11466
+      maximum_exposures_per_supervised_generation: 2
+    - source_id: openshogiai_apery_teacher
+      identity_sha256: 781a45570ce6c88e29e4c9f7f3acb96e3981bb74d7da6fb10ff80cdd76f51cbf
+      maximum_label_bundle_per_canonical_position: 1
+      maximum_training_fraction: 0.25
+  forbidden: [pending_permission, denied, reserved_holdout, final_holdout, public_test]
+
+unique_information_contract:
+  scale_unit: unique_canonical_history_positions
+  materialized_repeated_row_target: forbidden
+  eligible_unique_factual_rows: 375505
+  maximum_factual_exposures_per_supervised_generation: 751010
+  order: sha256_of_seed_source_record_history_and_pass
+  seed: 20260729
+  no_row_reuse_before_source_exhaustion: true
+  duplicate_identity_across_splits: forbidden
+  source_influence: macro_average_active_source_losses
+  require_new_information_before_next_generation:
+    - newly_approved_unique_records
+    - new_train_only_teacher_label_bundles
+    - new_gated_crossplay_positions
+
+training:
+  architecture_control: sparse-pair-policy-wdl
+  schedule: joint_policy_wdl_multitask
+  batch_size: 128
+  optimizer: AdamW
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  gradient_clip_norm: 5.0
+  scheduler:
+    type: cosine_with_linear_warmup
+    warmup_fraction: 0.05
+    minimum_learning_rate: 0.00003
+  deterministic_epoch_shuffle: true
+  maximum_passes_per_supervised_generation: 2
+  stage_rules:
+    - id: joint_factual_policy_wdl
+      trainable: [backbone, wdl_head, uncertainty_head, policy_head]
+      losses: [legal_policy_cross_entropy, factual_wdl_cross_entropy, wdl_brier]
+      policy_anchor_fraction_minimum: 0.25
+    - id: train_only_teacher_score_ranking
+      activation: after_factual_offline_gate
+      trainable: [score_mapping_or_head, policy_context, uncertainty_head]
+      backbone: frozen_by_default
+      losses: [source_local_score_huber, candidate_ranking, calibration]
+    - id: hard_position_relabel
+      activation: after_supervised_crossplay_gate
+      selection_only_signals: [candidate_handcrafted_disagreement, learned_model_disagreement]
+      handcrafted_score_as_target: false
+  checkpointing:
+    every_optimizer_steps: 1000
+    keep_pareto_best: 3
+    keep_last: true
+    export_source: selected_validation_checkpoint
+    training_batch_loss_may_select: false
+  early_stopping:
+    evaluation_interval_steps: 500
+    patience_intervals: 3
+    restore_selected_checkpoint: true
+    selector: source_macro_validation_pareto
+    required_metrics: [policy_nll, policy_top1, wdl_nll, wdl_brier, calibration_ece]
+  catastrophic_forgetting_gate:
+    policy_top1_maximum_absolute_regression: 0.005
+    policy_nll_maximum_absolute_regression: 0.05
+    compare_before_and_after_every_value_or_teacher_stage: true
+  calibration:
+    fit_population: non_final_validation_with_approved_teacher_labels
+    positive_monotonic: true
+    frozen_before_any_arena: true
+    refit_after_arena: false
+    default_scale_or_bias_may_enter_arena: false
+
+offline_gates:
+  primary_selection: paired_equal_wall_clock_playing_strength
+  diagnostics_only: [training_loss, policy_nll, policy_top1, wdl_nll, wdl_brier, calibration_ece]
+  source_held_out:
+    baseline: selected_1m_control
+    maximum_absolute_regression: 0.01
+    report_each_source: true
+  zero_tolerance: [illegal_move, unexplained_crash, parity_failure, prohibited_runtime_call]
+  final_holdout_access: forbidden
+
+crossplay_and_selfplay:
+  before_selfplay:
+    allowed: [supervised_learning, pure_model_crossplay, handcrafted_crossplay_for_selection]
+    hard_positions_may_be_relabelled_by: frozen_openshogiai_apery_teacher
+  handcrafted_outputs_as_training_targets: forbidden
+  pure_selfplay_entry:
+    handcrafted_score_minimum: 0.48
+    games: 400
+    paired_bootstrap_lower_minimum: 0.43
+    all_offline_and_runtime_gates_required: true
+  automatic_promotion: false
+  final_holdout_access: false
+
+strength_targets:
+  - {stage: recovery, score_against_handcrafted: 0.20}
+  - {stage: viable_supervised, score_against_handcrafted: 0.35}
+  - {stage: pure_selfplay_entry, score_against_handcrafted: 0.48}
+  - {stage: final_objective, score_against_handcrafted: 0.55}

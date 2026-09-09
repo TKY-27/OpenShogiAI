@@ -6,17 +6,36 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(all(feature = "handcrafted", feature = "pure-only"))]
+compile_error!("handcrafted and pure-only are mutually exclusive");
+#[cfg(not(any(feature = "handcrafted", feature = "pure-only")))]
+compile_error!("select exactly one of handcrafted or pure-only");
+
 mod analysis;
+#[cfg(feature = "handcrafted")]
 mod champion;
+#[cfg(feature = "handcrafted")]
 mod evaluation;
 mod game;
+#[cfg(feature = "handcrafted")]
 mod neural;
 mod notation;
+#[cfg(feature = "handcrafted")]
 mod opening;
 mod perft;
 mod phase10r;
+mod phase10t;
+mod phase10v;
+pub use phase10v::{
+    PHASE10V_ACCUMULATOR_WIDTH, PHASE10V_FEATURE_COUNT, PHASE10V_HEAD_COUNT, PHASE10V_HIDDEN_WIDTH,
+    PHASE10V_MODEL_MAGIC, Phase10VAccumulator, Phase10VError, Phase10VEvaluator, Phase10VIdentity,
+    Phase10VInference,
+};
+mod pure_playing;
+pub use pure_playing::PurePlayingEvaluator;
 mod position;
 mod resource;
+mod runtime_profile;
 mod search;
 #[cfg(any(
     target_os = "macos",
@@ -47,14 +66,17 @@ pub use analysis::{
     AnalysisState, AnalysisStep, AnalysisUpdate, AnalysisUpdateSource,
     DEFAULT_ANALYSIS_CACHE_ENTRIES, MAX_ANALYSIS_MULTI_PV,
 };
+#[cfg(feature = "handcrafted")]
 pub use champion::{
     ChampionScope, NEURAL_LINEAGE_CHAMPION_ID, OVERALL_CHAMPION_ID, overall_champion_evaluation,
 };
+#[cfg(feature = "handcrafted")]
 pub use evaluation::{EvaluationBreakdown, EvaluationConfig, evaluate, evaluate_breakdown};
 pub use game::{
     EnteringKingDeclaration, EnteringKingRule, Game, GameEnd, GameRecord, ImpasseCondition,
     ImpasseOutcome, RepetitionOutcome, repetition_outcome_from_moves,
 };
+#[cfg(feature = "handcrafted")]
 pub use neural::{
     FEATURE_ATTACK_MAPS, FEATURE_BOARD_PIECES, FEATURE_HAND_COUNTS, FEATURE_KING_COORDINATES,
     FEATURE_SIDE_TO_MOVE, MAX_NEURAL_MODEL_BYTES, MAX_NEURAL_SCORE_CP, NeuralActivation,
@@ -65,6 +87,7 @@ pub use notation::{
     CsaGame, CsaParseError, CsaResultValidation, CsaSpecialMove, NotationError, parse_csa_game,
     parse_csa_move, parse_sfen, parse_usi_move, to_csa_game, to_csa_move, to_sfen, to_usi_move,
 };
+#[cfg(feature = "handcrafted")]
 pub use opening::{
     OPENING_BOOK_SCHEMA, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile,
 };
@@ -74,13 +97,22 @@ pub use phase10r::{
     Osaval02Inference, Osaval02Quantization, Osaval02SearchAdapter, Osaval02Variant,
     encode_osaval02_move,
 };
+pub use phase10t::{
+    PHASE10T_ACCUMULATOR_WIDTH, PHASE10T_FEATURE_COUNT, PHASE10T_HEAD_COUNT, PHASE10T_HIDDEN_WIDTH,
+    PHASE10T_MODEL_MAGIC, Phase10TAccumulator, Phase10TError, Phase10TEvaluator, Phase10TIdentity,
+    Phase10TInference,
+};
 pub use position::{IllegalMove, Position, PositionError, Undo};
 pub use resource::{RESOURCE_BUDGET_SCHEMA, ResourceBudget, ResourceCoordinator};
+pub use runtime_profile::{
+    PHASE10T_PROFILE_SCHEMA, PHASE10T_PROFILE_SCHEMA_SHA256, PHASE10V_PROFILE_SCHEMA,
+    PHASE10V_PROFILE_SCHEMA_SHA256, PURE_LEARNED_PROFILE_NAME, PURE_LEARNED_PROFILE_SCHEMA,
+    PURE_LEARNED_PROFILE_SCHEMA_SHA256, RuntimeProfile, RuntimeProofCounters,
+};
 pub use search::{
     CancellationToken, MATE_SCORE, MATE_THRESHOLD, MateSearchResult, MonotonicClock,
-    NeuralEvaluationMode, RandomMoveSelector, RootMoveStat, SearchConfig, SearchEngine, SearchInfo,
-    SearchLimits, SearchResult, SearchStats, SearchTermination, SystemMonotonicClock,
-    is_mate_score,
+    RandomMoveSelector, RootMoveStat, SearchConfig, SearchEngine, SearchInfo, SearchLimits,
+    SearchResult, SearchStats, SearchTermination, SystemMonotonicClock, is_mate_score,
 };
 #[doc(hidden)]
 #[cfg(any(
@@ -174,6 +206,24 @@ impl ReproducibilitySeed {
         Self(u64::from_le_bytes(bytes))
     }
 }
+
+#[cfg(feature = "handcrafted")]
+pub use search::NeuralEvaluationMode;
+
+/// Evaluator implementations compiled into this core build.
+pub const COMPILED_EVALUATORS: &[&str] = if cfg!(feature = "handcrafted") {
+    &[
+        "handcrafted",
+        "neural",
+        "residual",
+        "composite",
+        "osaval02",
+        "phase10t-a1",
+        "phase10v",
+    ]
+} else {
+    &["osaval02", "phase10t-a1", "phase10v"]
+};
 
 #[cfg(test)]
 mod tests {

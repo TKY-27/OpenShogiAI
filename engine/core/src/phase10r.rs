@@ -1039,6 +1039,28 @@ impl Osaval02SearchAdapter {
         self.evaluator.evaluate_score(position, self.history)
     }
 
+    /// Evaluate with authoritative per-node replay history.
+    /// # Errors
+    /// Rejects inconsistent history or inference failure.
+    pub fn evaluate_history(
+        &self,
+        position: &Position,
+        history: Osaval02History,
+    ) -> Result<i32, Osaval02Error> {
+        self.evaluator.evaluate_score(position, history)
+    }
+
+    /// Infer with authoritative root replay history.
+    /// # Errors
+    /// Rejects inconsistent history or inference failure.
+    pub fn infer_history(
+        &self,
+        position: &Position,
+        history: Osaval02History,
+    ) -> Result<Osaval02Inference, Osaval02Error> {
+        self.evaluator.infer(position, history)
+    }
+
     /// Run the strict OSAVAL02 inference and return the legal policy logit for one move.
     ///
     /// # Errors

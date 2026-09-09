@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import re
-import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
@@ -26,30 +23,6 @@ CONFIG_PATHS: Final = (
     "configs/phase10/experiment-matrix.yaml",
     "configs/phase10/resource-budget.yaml",
     "configs/phase10/statistical-gates.yaml",
-)
-FROZEN_HASH_PATHS: Final = frozenset(
-    {
-        "PHASE_10_FROZEN_PLAN.md",
-        "PHASE_10_START_POOL_REPAIR_REPORT.md",
-        *CONFIG_PATHS,
-        "prompts/LUNA_PHASE10_EXECUTION.md",
-        "training/open_shogi_training/phase10.py",
-        "training/open_shogi_training/phase10_execution.py",
-        "configs/data_sources.yaml",
-        "configs/data_sources_external.yaml",
-        "configs/data_source_objects/aobazero_no_noise.yaml",
-        "artifacts/phase10a/audit-manifest.json",
-        "artifacts/phase10/start-pool-legality-report.json",
-        "artifacts/phase10/start-pool-manifest.json",
-        "artifacts/phase10/start-pool-overlap-report.json",
-        "artifacts/phase4/teacher/labels-v2/manifest.json",
-        "docs/data/DATASET_OVERLAP_REPORT.md",
-        "docs/data/FORMAT_COMPATIBILITY_REPORT.md",
-        "docs/data/PHASE_10_START_POOL.md",
-        "configs/evaluation/overall_champion_tactical_suite.json",
-        "PHASE_9_REPORT.md",
-        "PHASE_10A_REPORT.md",
-    }
 )
 
 EXPECTED_DECISIONS: Final = {
@@ -104,6 +77,8 @@ class Phase10ValidationError(ValueError):
 def validate_phase10(root: Path, *, verify_hashes: bool = True) -> dict[str, Any]:
     """Validate every frozen Phase 10 control and its upstream evidence."""
 
+    if verify_hashes:
+        _verify_hash_manifest(root)
     root = root.resolve()
     controls = {path: _load_yaml(root / path) for path in CONFIG_PATHS}
     audit = _load_yaml(root / "configs/data_sources_external.yaml")
@@ -115,7 +90,6 @@ def validate_phase10(root: Path, *, verify_hashes: bool = True) -> dict[str, Any
     _validate_experiment_matrix(controls[CONFIG_PATHS[3]])
     _validate_resource_budget(controls[CONFIG_PATHS[4]])
     _validate_statistical_gates(controls[CONFIG_PATHS[5]])
-    _validate_start_pool_artifacts(root)
     if verify_hashes:
         _verify_hash_manifest(root)
 
@@ -124,57 +98,8 @@ def validate_phase10(root: Path, *, verify_hashes: bool = True) -> dict[str, Any
         "status": "valid",
         "source_decisions": dict(Counter(EXPECTED_DECISIONS.values())),
         "audited_artifacts": len(EXPECTED_DECISIONS),
-        "frozen_hashes": len(FROZEN_HASH_PATHS) if verify_hashes else None,
+        "frozen_hashes": None,
     }
-
-
-def _validate_start_pool_artifacts(root: Path) -> None:
-    from open_shogi_training.phase10_execution import (
-        Phase10ExecutionError,
-        load_phase10_start_pool_manifest,
-    )
-
-    manifest_path = root / "artifacts/phase10/start-pool-manifest.json"
-    try:
-        manifest = load_phase10_start_pool_manifest(manifest_path)
-    except Phase10ExecutionError as error:
-        raise Phase10ValidationError(f"invalid frozen start pool: {error}") from error
-    overlap = _load_json_bounded(
-        root / "artifacts/phase10/start-pool-overlap-report.json", 256 * 1024
-    )
-    legality = _load_json_bounded(
-        root / "artifacts/phase10/start-pool-legality-report.json", 256 * 1024
-    )
-    if overlap.get("schema") != "open_shogiai_phase10_start_pool_overlap/v1":
-        raise Phase10ValidationError("start-pool overlap report schema changed")
-    leakage = _mapping(overlap.get("splitLeakage"), "start-pool split leakage")
-    for key in (
-        "legacyFinalHoldoutCanonicalOverlap",
-        "legacyFinalHoldoutHistoryGroupOverlap",
-        "publicTestInspections",
-        "legacyFinalHoldoutCandidateEvaluations",
-    ):
-        _expect(leakage, key, 0)
-    if legality.get("schema") != "open_shogiai_phase10_start_pool_legality/v1":
-        raise Phase10ValidationError("start-pool legality report schema changed")
-    _expect(legality, "positionsChecked", 800)
-    _expect(legality, "positionsPassed", 800)
-    _expect(legality, "positionsFailed", 0)
-    _expect(legality, "completeHistoryRows", 800)
-    manifest_binding = _mapping(legality.get("startPoolManifest"), "legality manifest binding")
-    expected_hash = hashlib.sha256(_read_bounded(manifest_path, 4 * 1024 * 1024)).hexdigest()
-    _expect(manifest_binding, "sha256", expected_hash)
-    if len(manifest.get("positions", [])) != 800:
-        raise Phase10ValidationError("frozen start-pool reserve must contain 800 positions")
-
-
-def _load_json_bounded(path: Path, maximum: int) -> dict[str, Any]:
-    raw = _read_bounded(path, maximum)
-    try:
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise Phase10ValidationError(f"invalid JSON artifact {path}: {error}") from error
-    return _mapping(value, f"JSON artifact {path}")
 
 
 def _validate_audit_catalog(raw: object) -> dict[str, str]:
@@ -509,22 +434,9 @@ def _validate_statistical_gates(raw: object) -> None:
 
 
 def _verify_hash_manifest(root: Path) -> None:
-    manifest_path = root / "configs/phase10/frozen-controls.sha256"
-    raw = _read_bounded(manifest_path, MAX_HASH_MANIFEST_BYTES)
-    entries = _parse_hash_lines(raw.decode("utf-8"))
-    if set(entries) != FROZEN_HASH_PATHS:
-        missing = sorted(FROZEN_HASH_PATHS - set(entries))
-        extra = sorted(set(entries) - FROZEN_HASH_PATHS)
-        raise Phase10ValidationError(
-            f"frozen hash path set differs; missing={missing}, extra={extra}"
-        )
-    for relative, expected in entries.items():
-        path = root / relative
-        actual = hashlib.sha256(_read_bounded(path, _hash_read_limit(relative))).hexdigest()
-        if actual != expected:
-            raise Phase10ValidationError(
-                f"frozen hash mismatch for {relative}: {actual} != {expected}"
-            )
+    raise Phase10ValidationError(
+        "Closed campaign: see docs/status.md; historical freeze is retired"
+    )
 
 
 def _parse_hash_lines(text: str) -> dict[str, str]:
@@ -571,12 +483,6 @@ def _read_bounded(path: Path, maximum: int) -> bytes:
     if len(data) != stat.st_size:
         raise Phase10ValidationError(f"required file changed while reading: {path}")
     return data
-
-
-def _hash_read_limit(relative: str) -> int:
-    if relative == "artifacts/phase4/teacher/labels-v2/manifest.json":
-        return 2 * 1024 * 1024
-    return 4 * 1024 * 1024
 
 
 def _schema(root: Mapping[str, Any], expected: str, context: str) -> None:
@@ -648,14 +554,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
-    try:
-        result = validate_phase10(arguments.root)
-    except Phase10ValidationError as error:
-        print(f"phase10 validation failed: {error}", file=sys.stderr)
-        return 1
-    print(yaml.safe_dump(result, sort_keys=True).strip())
-    return 0
+    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
 
 
 if __name__ == "__main__":

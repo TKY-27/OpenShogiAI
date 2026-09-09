@@ -1,0 +1,75 @@
+{
+  "certified_prefix_sha256": "68da42b23eda4f1238990de0dbddae88cb4a9518f7abb5366b7d1b2f99fbd4c4",
+  "certified_rows": 600,
+  "commands": {
+    "authenticate_later": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10u_label_prefix authenticate --root . --receipt local/phase10u-runs/round2-tail-reacquired/receipt.json",
+    "certify": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10u_label_prefix certify --root .",
+    "prepare_reacquisition": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.phase10u_label_prefix prepare-reacquisition --root ."
+  },
+  "execution_authorized": false,
+  "future_receipt_required_fields": [
+    "request_sha256",
+    "teacher",
+    "nodes",
+    "positions_completed",
+    "legality_verified",
+    "labels",
+    "receipt_sha256"
+  ],
+  "future_receipt_schema": "open_shogiai_phase10u_tail_acquisition_receipt/v1",
+  "future_receipt_serialization": "UTF-8 sorted keys, compact separators, ensure_ascii=false, allow_nan=false, trailing LF; receipt_sha256 excluded from its own digest",
+  "future_receipt_trust_boundary": "Binding verification only; receipt must come from an independently reviewed acquisition and legality audit. Local digest is not a provenance signature. No training authorization is granted.",
+  "observed_rows": 686,
+  "original": {
+    "path": "local/phase10u-runs/hard-relabel/attempt-0002/hard-labels.jsonl",
+    "sha256": "05a28d01bce7cc955b16b730458830786bf3300a2cf48660e90235c0b88fd2a0"
+  },
+  "original_mutation_permitted": false,
+  "progress": {
+    "path": "local/phase10u-runs/hard-relabel/attempt-0002/progress.json",
+    "sha256": "69bc336289f3d3e0df38b1e15ea0431c25b7a36f74828ab3aa3275db4d3229b6"
+  },
+  "reacquisition_request_sha256": "e3aefd1a4dcb39f7af883a88ee45ec1cd48bf45c4a39ec5bb29fd00b68a204ed",
+  "schema": "open_shogiai_phase10u_round2_prefix/v1",
+  "selection": {
+    "path": "local/phase10u-runs/hard-selection/attempt-0002/selection-manifest.json",
+    "sha256": "281841485c2bc24c8f7956cc843e25fbe7eb6d76bdceeaa89aaa0acdd5bde849"
+  },
+  "status": "CERTIFIED_PREFIX_ONLY_TAIL_UNAUTHENTICATED",
+  "stop_receipt": {
+    "path": "local/phase10u-packages/a1-100k-attempt-0002-final/evidence/hard-round-2-integrity-stop.json",
+    "sha256": "282cc0d39aff9508540ac25d7082935818baa380e6590729dffb7df5bac13472"
+  },
+  "teacher": {
+    "binary": {
+      "path": "local/teacher/build/apery-v2.0.0/apery_2.0.0/target/release/apery",
+      "sha256": "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403",
+      "size": 2364896
+    },
+    "book_enabled": false,
+    "config_path": "configs/teacher/apery-v2.0.0.yaml",
+    "config_sha256": "b04b4ab4ec5c434a3521a2840dfb6569900be18b6cf3116bb43186d2e6f15e5d",
+    "configured_nodes": 25000,
+    "eval_files": [
+      {
+        "path": "local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617/KKP.bin",
+        "sha256": "422b23bced817ecb3430adf1d2621f5a7934263b4e46673ab80cf34633537fa5",
+        "size": 40625712
+      },
+      {
+        "path": "local/teacher/build/apery-v2.0.0/apery_2.0.0/eval/20190617/KPP.bin",
+        "sha256": "4906c48c201a102ec02217216929c20f73ab364e79be26e6213a02c04e454805",
+        "size": 776402496
+      }
+    ],
+    "hash_mb": 1024,
+    "multipv": 3,
+    "name": "Apery",
+    "semantic_sha256": "50ecf1b0a3395c0c00208b2d4bad12bb5d16c1f2ec49b8f66fa234a8ab847ba3",
+    "threads": 4,
+    "version": "2.0.0"
+  },
+  "training_authorized": false,
+  "unauthenticated_rows": 86,
+  "unauthenticated_tail_sha256": "e51de2f0c9121493f65a85833e6ca8834a126aa5bdb12e6ff994019e5e5dfe43"
+}

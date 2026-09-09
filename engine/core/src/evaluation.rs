@@ -30,6 +30,21 @@ pub struct EvaluationConfig {
 }
 
 impl EvaluationConfig {
+    /// No handcrafted term. Required by the pure learned runtime profile.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            material: false,
+            hands: false,
+            promotions: false,
+            king_safety: false,
+            mobility: false,
+            check: false,
+            enemy_camp: false,
+            tempo: false,
+        }
+    }
+
     /// Material-only profile used for the first reproducible evaluator rung.
     #[must_use]
     pub const fn material_only() -> Self {

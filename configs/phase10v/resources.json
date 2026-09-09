@@ -1,0 +1,14 @@
+{
+  "schema": "open_shogiai_phase10v_resources/v1",
+  "hard_free_space_floor_bytes": 85899345920,
+  "check_before": [
+    "label_chunk",
+    "training_checkpoint",
+    "arena_pair",
+    "selfplay_game"
+  ],
+  "symlinks": "reject_all_path_components",
+  "live_check": "recheck_hash_open_files_and_active_processes_immediately_before_delete",
+  "status": "closed_historical_regression_fixture",
+  "current_storage_policy": "docs/development.md"
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "open_shogiai_pure_learned_v3_profile/v1",
+  "model_format": "OSAVAL03",
+  "primary_output": "direct_stm_cp",
+  "score_limit_cp": 20000,
+  "architecture": "dual_king_relative_clipped_pair_accumulator",
+  "widths": [
+    256,
+    512
+  ],
+  "history_features": false,
+  "rule_history": "exact_search_adjudication",
+  "prohibited": [
+    "handcrafted",
+    "residual",
+    "composite",
+    "book",
+    "teacher",
+    "fallback"
+  ],
+  "initialization": "random",
+  "modelFormat": "OSAVAL03",
+  "profile": "pure_learned"
+}

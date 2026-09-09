@@ -697,29 +697,23 @@ def _sha(value: object, context: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OpenShogiAI overall-champion gate")
     parser.add_argument("--project-root", default=".")
-    parser.add_argument("--config", default="configs/evaluation/overall_champion_gate.toml")
+    parser.add_argument("--config", required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
     preflight_parser = subparsers.add_parser("preflight")
     preflight_parser.add_argument("--engine", default="target/release/open-shogi-cli")
-    preflight_parser.add_argument(
-        "--output-dir", default="artifacts/strength-campaign/overall-gate/arena"
-    )
+    preflight_parser.add_argument("--output-dir", default="local/runs/overall-gate/arena")
     tactical_parser = subparsers.add_parser("tactical-run")
     tactical_parser.add_argument("--engine", default="target/release/open-shogi-cli")
-    tactical_parser.add_argument(
-        "--output", default="artifacts/strength-campaign/overall-gate/tactical-report.json"
-    )
+    tactical_parser.add_argument("--output", default="local/runs/overall-gate/tactical-report.json")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--engine", default="target/release/open-shogi-cli")
     verify_parser.add_argument(
-        "--arena-report", default="artifacts/strength-campaign/overall-gate/arena/arena-report.json"
+        "--arena-report", default="local/runs/overall-gate/arena/arena-report.json"
     )
     verify_parser.add_argument(
-        "--tactical-report", default="artifacts/strength-campaign/overall-gate/tactical-report.json"
+        "--tactical-report", default="local/runs/overall-gate/tactical-report.json"
     )
-    verify_parser.add_argument(
-        "--output", default="artifacts/strength-campaign/overall-gate/decision.json"
-    )
+    verify_parser.add_argument("--output", default="local/runs/overall-gate/decision.json")
     return parser
 
 

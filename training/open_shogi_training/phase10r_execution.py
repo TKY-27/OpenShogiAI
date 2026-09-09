@@ -28,7 +28,6 @@ from open_shogi_training.phase10r import (
     Phase10RValidationError,
     allocate_source_counts,
     load_canonical_pretraining_mixture,
-    validate_phase10r,
 )
 from open_shogi_training.phase10r_model import HistoryFacts
 from open_shogi_training.phase10r_training import Phase10RExample
@@ -36,6 +35,8 @@ from open_shogi_training.phase10r_training import Phase10RExample
 PREPARATION_SCHEMA: Final = "open_shogiai_phase10r_preparation/v2"
 LEGACY_PREPARATION_SCHEMA: Final = "open_shogiai_phase10r_preparation/v1"
 REJECTION_SCHEMA: Final = "open_shogiai_phase10r_preparation_rejection/v1"
+LEGACY_SCALE: Final = "1m"
+CANONICAL_MIXTURE_VERSION: Final = "mixture-v2"
 TRAINING_EXAMPLE_SCHEMA: Final = "phase10r_training_example/v1"
 HELPER_SCHEMA: Final = "phase10r_replay_features/v1"
 PREPARATION_SEED: Final = 20_260_729
@@ -47,6 +48,8 @@ MAX_POSITIONS_PER_GAME_PER_EPOCH: Final = 128
 MAX_HELPER_LINE_BYTES: Final = 64 * 1024 * 1024
 HELPER_BUILD_TIMEOUT_SECONDS: Final = 300
 AGGREGATE_RSS_TARGET_BYTES: Final = 16 * 1024**3
+PREPARATION_MINIMUM_FREE_BYTES: Final = 150 * 1024**3
+CAMPAIGN_10M_MINIMUM_FREE_BYTES: Final = 100 * 1024**3
 SCALE_COUNTS: Final = {
     "1m": 1_000_000,
     "10m": 10_000_000,
@@ -351,7 +354,7 @@ def _scan_identity(root: Path, data_root: Path) -> dict[str, Any]:
 
 
 def _configuration_hashes(root: Path) -> dict[str, str]:
-    paths = (*CONFIG_PATHS, "configs/phase10r/frozen-controls.sha256")
+    paths = CONFIG_PATHS
     return {path: _sha256_file(root / path) for path in paths}
 
 
@@ -367,28 +370,21 @@ def _validate_preparation_configuration_hashes(root: Path, declared: object) -> 
     ):
         raise Phase10RExecutionError("versioned preparation configuration hashes are stale")
 
-    # The frozen-control manifest binds implementation, documentation, generated runtime, and
-    # tests in addition to every data-affecting configuration above. Preserve its preparation-time
-    # digest as provenance while independently requiring the current registry to validate. This
-    # permits an implementation-only repair without rewriting immutable prepared data.
-    frozen_manifest = "configs/phase10r/frozen-controls.sha256"
-    if not isinstance(declared[frozen_manifest], str) or len(declared[frozen_manifest]) != 64:
-        raise Phase10RExecutionError("versioned preparation frozen-control identity is invalid")
-    if declared[frozen_manifest] != current[frozen_manifest]:
-        try:
-            validate_phase10r(root)
-        except Phase10RValidationError as error:
-            raise Phase10RExecutionError(
-                "current frozen controls are invalid after preparation"
-            ) from error
+    # Bind every data-affecting control. Historical document/receipt freezes are retired;
+    # old manifests with an extra freeze member are rejected by the exact inventory above.
 
 
-def _resource_check(root: Path, data_root: Path) -> dict[str, int | bool]:
+def _resource_check(
+    root: Path,
+    data_root: Path,
+    *,
+    minimum_free_bytes: int = PREPARATION_MINIMUM_FREE_BYTES,
+) -> dict[str, int | bool]:
     usage = shutil.disk_usage(data_root if data_root.exists() else root)
-    minimum = 150 * 1024**3
+    minimum = minimum_free_bytes
     if usage.free < minimum:
         raise Phase10RExecutionError(
-            f"free disk crossed the frozen 150 GiB floor: {usage.free} < {minimum}"
+            f"free disk crossed the {minimum // 1024**3} GiB stage floor: {usage.free} < {minimum}"
         )
     rss_unit = 1 if os.uname().sysname == "Darwin" else 1024
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * rss_unit
@@ -407,28 +403,58 @@ def _resource_check(root: Path, data_root: Path) -> dict[str, int | bool]:
     }
 
 
+def _preparation_relative_path(scale: str, mixture: Mapping[str, Any]) -> Path:
+    """Resolve one requested scale against the validated canonical mixture contract."""
+
+    if not isinstance(scale, str) or scale not in SCALE_COUNTS:
+        raise Phase10RExecutionError(f"unsupported preparation scale: {scale}")
+    if mixture.get("control_id") != f"phase10r-1m-{CANONICAL_MIXTURE_VERSION}":
+        raise Phase10RExecutionError("canonical replacement mixture identity is unsupported")
+    if mixture.get("target_shares") != {
+        "aobazero": 0.35,
+        "wcsc": 0.45,
+        "denryu": 0.2,
+    } or mixture.get("maximum_shares") != {
+        "aobazero": 0.35,
+        "wcsc": 0.55,
+        "denryu": 0.2,
+    }:
+        raise Phase10RExecutionError("canonical replacement mixture source shares changed")
+    output = mixture.get("output")
+    if not isinstance(output, Mapping):
+        raise Phase10RExecutionError("canonical replacement mixture output identity is missing")
+    expected_template = f"phase10r-prepared/{{scale}}-{CANONICAL_MIXTURE_VERSION}"
+    if output.get("path_template") != expected_template:
+        raise Phase10RExecutionError("canonical replacement mixture path identity changed")
+    relative = Path(expected_template.format(scale=scale))
+    expected_relative = Path("phase10r-prepared") / f"{scale}-{CANONICAL_MIXTURE_VERSION}"
+    if relative != expected_relative or relative.is_absolute() or ".." in relative.parts:
+        raise Phase10RExecutionError("canonical preparation output path is unsafe")
+    return relative
+
+
 def preparation_manifest_path(root: Path, scale: str) -> Path:
     root = root.resolve()
     mixture = load_canonical_pretraining_mixture(root)
-    template = mixture["output"]["path_template"]
-    relative = Path(str(template).format(scale=scale))
-    if relative.is_absolute() or ".." in relative.parts or relative.name != f"{scale}-mixture-v2":
-        raise Phase10RExecutionError("canonical preparation output path is unsafe")
-    return _data_root(root) / relative / "preparation-manifest.json"
+    return (
+        _data_root(root) / _preparation_relative_path(scale, mixture) / "preparation-manifest.json"
+    )
 
 
 def _legacy_rejection_evidence(
     data_root: Path,
     mixture: Mapping[str, Any],
-    replacement_manifest: Path,
 ) -> dict[str, Any]:
-    legacy_dir = data_root / "phase10r-prepared/1m"
+    replacement_relative = (
+        _preparation_relative_path(LEGACY_SCALE, mixture) / "preparation-manifest.json"
+    ).as_posix()
+    legacy_dir = data_root / f"phase10r-prepared/{LEGACY_SCALE}"
     legacy_manifest_path = legacy_dir / "preparation-manifest.json"
     marker_path = legacy_dir / "REJECTED_MIXTURE_CONTROL_CONFLICT.json"
     if not legacy_manifest_path.is_file() or legacy_manifest_path.is_symlink():
         return {"status": "legacy_preparation_not_present", "marker": None}
     legacy = _read_json(legacy_manifest_path)
-    if legacy.get("schema") != LEGACY_PREPARATION_SCHEMA or legacy.get("scale") != "1m":
+    if legacy.get("schema") != LEGACY_PREPARATION_SCHEMA or legacy.get("scale") != LEGACY_SCALE:
         raise Phase10RExecutionError("legacy 1M preparation identity is incompatible")
     total = legacy.get("streamed_examples")
     counts = legacy.get("source_stream_counts")
@@ -464,7 +490,6 @@ def _legacy_rejection_evidence(
     if not violations:
         raise Phase10RExecutionError("legacy 1M preparation no longer proves the mixture conflict")
     legacy_manifest_file_sha = _sha256_file(legacy_manifest_path)
-    replacement_relative = replacement_manifest.relative_to(data_root).as_posix()
     evidence = {
         "schema": REJECTION_SCHEMA,
         "status": "REJECTED_MIXTURE_CONTROL_CONFLICT",
@@ -472,7 +497,9 @@ def _legacy_rejection_evidence(
             "The legacy sampler normalized 1.0/1.0/0.5 weights to 40%/40%/20%, "
             "exceeding the frozen AobaZero maximum share of 35%."
         ),
-        "legacy_preparation_manifest": "phase10r-prepared/1m/preparation-manifest.json",
+        "legacy_preparation_manifest": (
+            f"phase10r-prepared/{LEGACY_SCALE}/preparation-manifest.json"
+        ),
         "legacy_preparation_manifest_file_sha256": legacy_manifest_file_sha,
         "legacy_preparation_manifest_declared_sha256": legacy.get("manifest_sha256"),
         "legacy_train_sha256": legacy.get("files", {}).get("train.jsonl", {}).get("sha256"),
@@ -1080,14 +1107,22 @@ def prepare_scale(root: Path, scale: str) -> dict[str, Any]:
     scan = _scan_identity(root, data_root)
     manifest_path = preparation_manifest_path(root, scale)
     output_dir = manifest_path.parent
-    legacy_rejection = _legacy_rejection_evidence(data_root, mixture, manifest_path)
+    legacy_rejection = _legacy_rejection_evidence(data_root, mixture)
     if manifest_path.is_file() and not manifest_path.is_symlink():
         manifest = validate_preparation(root, scale)
         return {"status": "passed", "manifest": manifest_path, "details": manifest}
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    minimum_free_bytes = (
+        CAMPAIGN_10M_MINIMUM_FREE_BYTES if scale == "10m" else PREPARATION_MINIMUM_FREE_BYTES
+    )
+
     def resource_check() -> object:
-        return _resource_check(root, data_root)
+        return _resource_check(
+            root,
+            data_root,
+            minimum_free_bytes=minimum_free_bytes,
+        )
 
     resource_before = resource_check()
     connection = sqlite3.connect(f"file:{scan['database']}?mode=ro", uri=True)

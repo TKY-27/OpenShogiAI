@@ -1,0 +1,97 @@
+{
+  "schema": "open_shogiai_phase10t_data/v1",
+  "status": "frozen_not_started",
+  "deny_by_default": true,
+  "approved_sources": [
+    "aobazero-no-noise-exact100",
+    "wcsc01-through-wcsc29-except-none",
+    "wcsc31",
+    "wcsc32",
+    "denryu-dr5-hardware3"
+  ],
+  "approval_contract": "configs/phase10s/supervised-redesign.yaml",
+  "teacher_contract": "configs/phase10r/target-semantics.yaml",
+  "forbidden_splits": [
+    "final_holdout",
+    "reserved_holdout",
+    "public_test",
+    "pending_permission",
+    "denied"
+  ],
+  "split_unit": "game_lineage_and_transposition_connected_component",
+  "keep_previous_split_assignment": true,
+  "scale_unit": "unique_canonical_history_positions",
+  "eligible_legacy_unique_rows": 375505,
+  "maximum_exposures_per_position_per_generation": 2,
+  "maximum_unchanged_label_exposures_campaign": 6,
+  "no_reuse_before_source_exhaustion": true,
+  "shuffle": "sha256(seed,source,game_id,history_id,pass)",
+  "source_loss": "macro_average_over_active_source_lanes",
+  "oversampling_to_fill_quota": false,
+  "training_composition": {
+    "deep_teacher_root": 0.35,
+    "quiescent_and_pv_leaf": 0.35,
+    "pure_vs_handcrafted_hard_relabel": 0.2,
+    "factual_anchor": 0.1,
+    "insufficient_unique": "underfill_report_do_not_repeat"
+  },
+  "labeling": {
+    "minimum_nodes": 100000,
+    "multipv": 3,
+    "hard_nodes": 400000,
+    "mate_not_cp": true,
+    "all_candidates_legal": true,
+    "cache_key": [
+      "position",
+      "history",
+      "teacher_identity",
+      "nodes",
+      "multipv",
+      "semantics_version"
+    ],
+    "no_new_teacher_or_source_without_freeze": true,
+    "requested_multipv_is_maximum": true,
+    "minimum_valid_candidates": 1,
+    "partial_multipv_is_not_quarantine": true,
+    "resume_valid_prefix_without_relabel": true
+  },
+  "new_information_required_for_1m": true,
+  "one_million_cannot_be_synthesized_from_375505": true,
+  "relabel": {
+    "trigger": "quality_only_offline_failure_or_missed_strength_gate",
+    "maximum_rounds_per_rung": 2,
+    "maximum_new_unique_positions_per_round": 25000,
+    "select": [
+      "wrong_sign",
+      "large_teacher_error",
+      "candidate_rank_disagreement",
+      "tactical_qsearch_miss",
+      "nonterminal_cycle"
+    ],
+    "selection_split": "train_only_crossplay_separate_from_gate_starts",
+    "validation_examples_to_training": false,
+    "evaluation_scores_as_targets": false,
+    "resume": "last_integrity_valid_selected_checkpoint_of_this_random_lineage",
+    "same_optimizer_state_if_resuming": true
+  },
+  "required_receipts": [
+    "source_approval",
+    "teacher_binary_and_tables_identity",
+    "legal_replay",
+    "position_and_game_hashes",
+    "split_exclusions",
+    "unique_and_effective_source_counts",
+    "exposure_histogram",
+    "label_depth_nodes_pv",
+    "target_masks",
+    "novel_label_delta"
+  ],
+  "micro_exception": {
+    "unique_positions": 32,
+    "maximum_steps": 2000,
+    "maximum_seconds": 120,
+    "exposure_cap_exempt": true,
+    "weights_discarded_before_100k": true,
+    "not_counted_as_campaign_unique_or_strength_evidence": true
+  }
+}

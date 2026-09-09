@@ -38,5 +38,5 @@ install manifest. None of those binaries or evaluation files is tracked or distr
 The exact approved AobaZero game-record slice is Public Domain under the source-scoped decision
 in `docs/source-audits/aobazero.md`; its bytes remain untracked. Floodgate remains denied
 pending adequate rights evidence. Generated model weights remain `pending-review` and are not
-distributed. See `DATASET_CARD.md`, `MODEL_CARD.md`, `PROVENANCE.md`, and
-`LICENSE_SCOPE.md`.
+distributed. See [data handling](docs/data/handling.md), [model handling](docs/model/handling.md),
+[source provenance](docs/provenance/source.md), and [license scope](docs/license-scope.md).

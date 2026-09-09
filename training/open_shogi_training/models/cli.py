@@ -197,39 +197,39 @@ def build_parser() -> argparse.ArgumentParser:
         arena.add_argument(
             "--starts",
             type=Path,
-            default=Path("artifacts/phase6-inputs/start-positions.json"),
+            required=True,
         )
         arena.add_argument(
             "--starts-validation",
             type=Path,
-            default=Path("artifacts/phase6-inputs/start-validation.json"),
+            required=True,
         )
         arena.add_argument(
             "--output-root",
             type=Path,
-            default=Path("artifacts/phase5/arena/diversified"),
+            default=Path("local/runs/model-comparison"),
         )
         arena.add_argument(
             "--f32-model",
             type=Path,
-            default=Path("artifacts/phase4/models/value-v0-initial/export/value_v0.f32.osaval"),
+            required=True,
         )
         arena.add_argument(
             "--int8-model",
             type=Path,
-            default=Path("artifacts/phase4/models/value-v0-initial/export/value_v0.int8.osaval"),
+            required=True,
         )
         arena.add_argument(
             "--opening-book",
             type=Path,
-            default=Path("data/processed/phase3/opening/aobazero-no-noise-pd-sample100.jsonl.gz"),
+            required=True,
         )
         arena.add_argument("--git-commit", default=PHASE5_GIT_COMMIT)
         if command == "arena-verify":
             arena.add_argument(
                 "--manifest",
                 type=Path,
-                default=Path("artifacts/phase5/arena/diversified/arena-manifest.json"),
+                default=Path("local/runs/model-comparison/arena-manifest.json"),
             )
     return parser
 

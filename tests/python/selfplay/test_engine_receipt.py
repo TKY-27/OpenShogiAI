@@ -330,14 +330,6 @@ def test_rustc_version_spawn_rejects_original_runtime_replacement_without_readin
     assert not marker.exists()
 
 
-def test_makefile_uses_the_nonconflicting_engine_pointer_path() -> None:
-    repository = Path(__file__).resolve().parents[3]
-    makefile = (repository / "Makefile").read_text(encoding="utf-8")
-
-    assert "ENGINE_BUILD_RECEIPT ?= local/build-receipts/open-shogi-cli.pointer.json" in makefile
-    assert "ENGINE_BUILD_RECEIPT ?= local/build-receipts/open-shogi-cli.json" not in makefile
-
-
 def test_private_cargo_cache_rejects_sparse_index_checksum_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

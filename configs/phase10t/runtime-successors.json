@@ -1,0 +1,42 @@
+{
+  "base_commit": "93d2ec1303c46000cdebd4c868f18b3ab8b51c9c",
+  "files": {
+    "bindings/wasm/open_shogi_wasm_bg.wasm": {
+      "after": "d9f3043d1a73bc2300894c1094e10b8c51db911aec09cefed477e219b91f7f00",
+      "before": "346643612eef082efeeb000654cef82a01a4589a90a0a2498a75d7b4013f5480"
+    },
+    "engine/core/src/lib.rs": {
+      "after": "d1def1087ab89d22133b1720260fd1331664e47621fdd1e489179ee104fa39e6",
+      "before": "68495ef4f4395952f1df72758b6059e780f6f1d89f4c4cc44297e723a5caa022"
+    },
+    "engine/core/src/phase10r.rs": {
+      "after": "85ab71b6423e408599747e2fa975fb6c19a56cc7edef46d59231f7ce7190c5ee",
+      "before": "b23219a7481aa5d72ec887e89fd7e724588b56159ebbc65d82e4b29a164000cc"
+    },
+    "engine/core/src/position.rs": {
+      "after": "60a1e388c700b6a7911557561b7f94297a6fbdf5975a9058b02ea4d5ccf587fd",
+      "before": "db12f86a94b019a822a7fbbfeb4185003f57e2232d3512d3e3a2a824956bbe06"
+    },
+    "engine/wasm/src/lib.rs": {
+      "after": "9794a4bbbfd564833fd836362207e55a3b496d7bb1a75a3b1eb7bf328538d412",
+      "before": "8f9203aa6d1f2e3c86f8c805fd79a39169be1f1e36a0b28b296f857dda0964ec"
+    },
+    "tests/python/test_phase10r_execution.py": {
+      "after": "db119810878aa36f3ffd085573fc1a8ba47c1bf4af7cf11e73cdc4b4f51a091e",
+      "before": "396015e9ed7673253c6dedbf37c4f5db1069788f900ebfd677c873547948d948"
+    },
+    "tests/python/test_phase10r_freeze.py": {
+      "after": "369476a402f65e33afde71e0c6b42f62caf77b646c5135923e5c068f3fec5514",
+      "before": "ced13f76a30d514e3b5fe064bceceae2f1bc671be9bcb7449f763cfbc9e3974a"
+    },
+    "training/open_shogi_training/phase10r.py": {
+      "after": "5239ffa3bcc6905b321eaca4b15dc531532bd2c23fb0037cc4c4c33fbd08eece",
+      "before": "88500bf1f0c7936f8d3a489ef019fc89c0f52eb13fb47f1fddfe9cee30e8b2b4"
+    },
+    "training/open_shogi_training/phase10r_run.py": {
+      "after": "897039f446a2cd5c1bf8b999cc78e90510bd3a435840291a006ae5420201f10d",
+      "before": "d009d40831e72384d0fcd34b86c0405ba7d3849893d0023e81be1a72026c33e1"
+    }
+  },
+  "schema": "open_shogiai_phase10t_runtime_successors/v1"
+}

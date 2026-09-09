@@ -1,0 +1,40 @@
+{
+  "schema": "open_shogiai_phase10v_campaign/v1",
+  "status": "closed_historical_regression_fixture",
+  "stages": [
+    100000,
+    500000,
+    1000000
+  ],
+  "widths": [
+    256,
+    512
+  ],
+  "attempts_per_variant": [
+    "base",
+    "checkpoint",
+    "calibration",
+    "hard1"
+  ],
+  "candidate_failure": "advance",
+  "integrity_failure": "STOP_CLOSED",
+  "larger_labeling": "requires_both_modes_score_0.20_lower_0.15_receipts",
+  "continuation": "teacher_relabelled_train_only_hard_rounds_until_cutoff",
+  "new_work_cutoff": "2026-09-13T06:00:00+09:00",
+  "deadline": "2026-09-13T12:00:00+09:00",
+  "final_holdout": false,
+  "promotion": false,
+  "offline_metrics": "diagnostic_never_stop_campaign",
+  "unassisted_selfplay": {
+    "limited": {
+      "score_both_modes": 0.35,
+      "lower_both_modes": 0.3,
+      "maximum_games_per_round": 200
+    },
+    "full": {
+      "score_both_modes": 0.48,
+      "lower_both_modes": 0.43
+    },
+    "prerequisite": "all_three_trajectory_origins_teacher_relabelled_train_only"
+  }
+}

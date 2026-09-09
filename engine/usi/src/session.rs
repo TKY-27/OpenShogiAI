@@ -9,9 +9,9 @@ use std::{
 use open_shogi_core::{
     CancellationToken, EvaluationConfig, MATE_SCORE, NeuralEvaluationMode, NeuralEvaluator,
     NeuralQuantization, OpeningBookV2, OpeningPolicy, OpeningProfile, Osaval02Evaluator,
-    Osaval02Quantization, Position, SearchConfig, SearchEngine, SearchInfo, SearchResult,
-    SearchTermination, TimeControl, TimeManager, is_mate_score, parse_sfen, parse_usi_move,
-    to_usi_move,
+    Osaval02Quantization, Position, RuntimeProfile, SearchConfig, SearchEngine, SearchInfo,
+    SearchResult, SearchTermination, TimeControl, TimeManager, is_mate_score, parse_sfen,
+    parse_usi_move, to_usi_move,
 };
 
 use crate::{GoParameters, UsiCommand, engine_id_line, parse_command, parser::MAX_GO_DEPTH};
@@ -135,6 +135,8 @@ pub struct UsiOptions {
     pub model_kind: ModelKind,
     pub model_semantics: NeuralEvaluationMode,
     pub model_path: String,
+    pub expected_model_sha256: String,
+    pub runtime_profile: RuntimeProfile,
     pub opening_book_path: String,
     pub opening_profile: OpeningProfile,
     pub opening_max_plies: u32,
@@ -152,6 +154,8 @@ impl Default for UsiOptions {
             model_kind: ModelKind::Handcrafted,
             model_semantics: NeuralEvaluationMode::PureValue,
             model_path: String::new(),
+            expected_model_sha256: String::new(),
+            runtime_profile: RuntimeProfile::Standard,
             opening_book_path: String::new(),
             opening_profile: OpeningProfile::IbishaStrict,
             opening_max_plies: DEFAULT_OPENING_MAX_PLIES,
@@ -335,12 +339,17 @@ impl UsiSession {
         self.sink.send(
             "option name ModelSemantics type combo default pure-value var pure-value var residual var composite-50-50",
         );
+        self.sink.send(
+            "option name RuntimeProfile type combo default standard var standard var pure_learned",
+        );
         self.sink.send(&format!(
             "option name TimeSafetyMarginMs type spin default {DEFAULT_SAFETY_MARGIN_MS} min 0 max {}",
             open_shogi_core::MAX_SAFETY_MARGIN_MS
         ));
         self.sink
             .send("option name ModelPath type filename default <empty>");
+        self.sink
+            .send("option name ExpectedModelSha256 type string default <empty>");
         self.sink
             .send("option name OpeningBookPath type filename default <empty>");
         self.sink.send(
@@ -413,7 +422,8 @@ impl UsiSession {
                         );
                     }
                 };
-                if self.options.model_kind.is_osaval02()
+                if (self.options.model_kind.is_osaval02()
+                    || self.options.runtime_profile == RuntimeProfile::PureLearned)
                     && semantics != NeuralEvaluationMode::PureValue
                 {
                     return Err(
@@ -422,6 +432,19 @@ impl UsiSession {
                     );
                 }
                 self.options.model_semantics = semantics;
+            }
+            "RuntimeProfile" => {
+                let profile = RuntimeProfile::parse(
+                    value.ok_or_else(|| "RuntimeProfile requires a value".to_owned())?,
+                )?;
+                self.options.runtime_profile = profile;
+                if profile == RuntimeProfile::PureLearned {
+                    self.options.model_semantics = NeuralEvaluationMode::PureValue;
+                    self.options.evaluation = EvaluationConfig::disabled();
+                    self.options.opening_profile = OpeningProfile::Unrestricted;
+                    self.options.opening_book_path.clear();
+                    self.opening_book = None;
+                }
             }
             "ModelPath" => {
                 let path = value.ok_or_else(|| "ModelPath requires a value".to_owned())?;
@@ -434,7 +457,25 @@ impl UsiSession {
                     .map_or(self.options.model_kind, |(kind, _)| *kind);
                 self.apply_model_candidate(model_kind, path.to_owned())?;
             }
+            "ExpectedModelSha256" => {
+                let hash =
+                    value.ok_or_else(|| "ExpectedModelSha256 requires a value".to_owned())?;
+                if hash.len() != 64
+                    || !hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                {
+                    return Err(
+                        "ExpectedModelSha256 must be 64 lowercase hexadecimal characters"
+                            .to_owned(),
+                    );
+                }
+                hash.clone_into(&mut self.options.expected_model_sha256);
+            }
             "OpeningBookPath" => {
+                if self.options.runtime_profile == RuntimeProfile::PureLearned {
+                    return Err("pure_learned prohibits opening books".to_owned());
+                }
                 let path = value.ok_or_else(|| "OpeningBookPath requires a value".to_owned())?;
                 if path.is_empty() {
                     return Err("OpeningBookPath must not be empty".to_owned());
@@ -445,9 +486,15 @@ impl UsiSession {
                 self.opening_book = Some(Arc::new(book));
             }
             "OpeningProfile" => {
-                self.options.opening_profile = OpeningProfile::parse(
+                let profile = OpeningProfile::parse(
                     value.ok_or_else(|| "OpeningProfile requires a value".to_owned())?,
                 )?;
+                if self.options.runtime_profile == RuntimeProfile::PureLearned
+                    && profile != OpeningProfile::Unrestricted
+                {
+                    return Err("pure_learned requires unrestricted opening style".to_owned());
+                }
+                self.options.opening_profile = profile;
             }
             "OpeningMaxPlies" => {
                 let value = parse_u32_option(value, "OpeningMaxPlies")?;
@@ -472,6 +519,9 @@ impl UsiSession {
             }
             option if option.starts_with("Eval") => {
                 let enabled = parse_bool_option(value, option)?;
+                if self.options.runtime_profile == RuntimeProfile::PureLearned && enabled {
+                    return Err("pure_learned prohibits handcrafted evaluation terms".to_owned());
+                }
                 set_evaluation_option(&mut self.options.evaluation, &option[4..], enabled)?;
             }
             _ => return Err(format!("unknown option `{name}`")),
@@ -531,6 +581,8 @@ impl UsiSession {
         let neural_evaluator = self.neural_evaluator.clone();
         let osaval02_evaluator = self.osaval02_evaluator.clone();
         let model_semantics = self.options.model_semantics;
+        let runtime_profile = self.options.runtime_profile;
+        let expected_model_sha256 = self.options.expected_model_sha256.clone();
         let time_control = time_control(&self.options, parameters);
         let plan = TimeManager::default().plan(
             position.side_to_move(),
@@ -546,16 +598,13 @@ impl UsiSession {
             .then(|| Arc::new(CompletionGate::default()));
         let worker_gate = completion_gate.clone();
         let handle = thread::spawn(move || {
-            let mut engine = osaval02_evaluator.map_or_else(
-                || {
-                    neural_evaluator.map_or_else(
-                        || SearchEngine::new(config),
-                        |evaluator| {
-                            SearchEngine::with_neural_mode(config, evaluator, model_semantics)
-                        },
-                    )
-                },
-                |evaluator| SearchEngine::with_osaval02(config, evaluator),
+            let mut engine = build_search_engine(
+                config,
+                runtime_profile,
+                &expected_model_sha256,
+                osaval02_evaluator,
+                neural_evaluator,
+                model_semantics,
             );
             let callback_sink = Arc::clone(&sink);
             let callback_authority = Arc::clone(&output_authority);
@@ -569,6 +618,11 @@ impl UsiSession {
                     });
                 },
             );
+            if runtime_profile == RuntimeProfile::PureLearned {
+                let proof = engine.runtime_proof(result.stats, expected_model_sha256);
+                output_authority
+                    .send_if_current(generation, sink.as_ref(), || format_runtime_proof(&proof));
+            }
             complete_search(
                 &result,
                 worker_gate,
@@ -586,15 +640,44 @@ impl UsiSession {
     }
 
     fn ensure_model_ready(&mut self) -> Result<(), String> {
+        if self.options.runtime_profile == RuntimeProfile::PureLearned {
+            if !self.options.model_kind.is_osaval02() {
+                return Err("pure_learned requires an OSAVAL02 ModelKind".to_owned());
+            }
+            if self.options.expected_model_sha256.is_empty() {
+                return Err("pure_learned requires ExpectedModelSha256".to_owned());
+            }
+            if !self.options.opening_book_path.is_empty() || self.opening_book.is_some() {
+                return Err("pure_learned prohibits opening books".to_owned());
+            }
+        }
         if self.options.model_kind == ModelKind::Handcrafted {
             self.neural_evaluator = None;
             self.osaval02_evaluator = None;
             return Ok(());
         }
         if self.neural_evaluator.is_some() || self.osaval02_evaluator.is_some() {
+            return self.validate_runtime_profile_model();
+        }
+        self.load_configured_model()?;
+        self.validate_runtime_profile_model()
+    }
+
+    fn validate_runtime_profile_model(&self) -> Result<(), String> {
+        if self.options.runtime_profile != RuntimeProfile::PureLearned {
             return Ok(());
         }
-        self.load_configured_model()
+        let actual = self
+            .osaval02_evaluator
+            .as_ref()
+            .ok_or_else(|| "pure_learned requires a loaded OSAVAL02 model".to_owned())?
+            .identity()
+            .artifact_sha256
+            .as_str();
+        if actual != self.options.expected_model_sha256 {
+            return Err("pure_learned model SHA-256 mismatch".to_owned());
+        }
+        Ok(())
     }
 
     fn load_configured_model(&mut self) -> Result<(), String> {
@@ -853,9 +936,57 @@ fn finish_bounded_line(bytes: Vec<u8>, too_long: bool) -> io::Result<BoundedLine
 fn search_config(options: &UsiOptions) -> SearchConfig {
     SearchConfig {
         evaluation: options.evaluation,
+        runtime_profile: options.runtime_profile,
         transposition_entries: hash_entries(options.hash_megabytes),
         ..SearchConfig::default()
     }
+}
+
+/// Builds the search worker's engine. The pure-learned profile forces the strict
+/// OSAVAL02-only runtime; readiness already guaranteed a loaded, hash-matched evaluator.
+fn build_search_engine(
+    config: SearchConfig,
+    runtime_profile: RuntimeProfile,
+    expected_model_sha256: &str,
+    osaval02_evaluator: Option<Arc<Osaval02Evaluator>>,
+    neural_evaluator: Option<Arc<NeuralEvaluator>>,
+    model_semantics: NeuralEvaluationMode,
+) -> SearchEngine {
+    if runtime_profile == RuntimeProfile::PureLearned {
+        return SearchEngine::with_pure_learned(
+            config,
+            osaval02_evaluator.expect("profile readiness guarantees OSAVAL02"),
+            expected_model_sha256,
+        )
+        .expect("profile readiness guarantees model identity");
+    }
+    osaval02_evaluator.map_or_else(
+        || {
+            neural_evaluator.map_or_else(
+                || SearchEngine::new(config),
+                |evaluator| SearchEngine::with_neural_mode(config, evaluator, model_semantics),
+            )
+        },
+        |evaluator| SearchEngine::with_osaval02(config, evaluator),
+    )
+}
+
+fn format_runtime_proof(proof: &open_shogi_core::RuntimeProofCounters) -> String {
+    format!(
+        "info string runtime_proof profile={} schema={} learned_eval_calls={} handcrafted_eval_calls={} residual_eval_calls={} composite_eval_calls={} book_hits={} teacher_calls={} fallback_count={} model_sha256={} evaluator_profile_schema_hash={} valid={}",
+        proof.profile,
+        proof.profile_schema,
+        proof.learned_eval_calls,
+        proof.handcrafted_eval_calls,
+        proof.residual_eval_calls,
+        proof.composite_eval_calls,
+        proof.book_hits,
+        proof.teacher_calls,
+        proof.fallback_count,
+        proof.model_sha256,
+        proof.evaluator_profile_schema_hash,
+        proof.valid_pure_learned(),
+    )
 }
 
 fn hash_entries(megabytes: usize) -> usize {
@@ -1146,6 +1277,9 @@ mod tests {
             line == "option name ModelKind type combo default overall-champion var overall-champion var neural-float var neural-quantized var osaval02-float var osaval02-quantized"
         }));
         assert!(lines.iter().any(|line| {
+            line == "option name RuntimeProfile type combo default standard var standard var pure_learned"
+        }));
+        assert!(lines.iter().any(|line| {
             line == "option name TimeSafetyMarginMs type spin default 50 min 0 max 1000"
         }));
         assert!(lines.iter().any(|line| {
@@ -1254,6 +1388,43 @@ mod tests {
         assert!(lines[0].contains("ModelPath is required"));
         assert!(!lines.iter().any(|line| line == "readyok"));
         assert!(!lines.iter().any(|line| line.starts_with("bestmove ")));
+    }
+
+    #[test]
+    fn pure_learned_rejects_missing_hash_and_non_osaval02_before_game_start() {
+        let sink = Arc::new(MemorySink::default());
+        let mut session = UsiSession::new(sink.clone());
+        assert!(session.process_line("setoption name RuntimeProfile value pure_learned"));
+        assert!(!session.process_line("isready"));
+        assert!(
+            sink.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| { line.contains("pure_learned requires an OSAVAL02 ModelKind") })
+        );
+
+        let model = TemporaryModel::write(&model_bytes(NeuralQuantization::Float32));
+        let sink = Arc::new(MemorySink::default());
+        let mut session = UsiSession::new(sink.clone());
+        assert!(session.process_line("setoption name RuntimeProfile value pure_learned"));
+        assert!(session.process_line(&format!(
+            "setoption name ModelPath value {}",
+            model.display()
+        )));
+        assert!(session.process_line("setoption name ModelKind value osaval02-float"));
+        assert!(session.process_line(&format!(
+            "setoption name ExpectedModelSha256 value {}",
+            "a".repeat(64)
+        )));
+        assert!(!session.process_line("isready"));
+        let lines = sink.0.lock().unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("failed to load OSAVAL02 model"))
+        );
+        assert!(!lines.iter().any(|line| line == "readyok"));
     }
 
     #[cfg(unix)]

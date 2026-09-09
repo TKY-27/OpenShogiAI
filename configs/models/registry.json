@@ -1,0 +1,21 @@
+{
+  "schema": "open_shogiai_comparison_registry/v1",
+  "default_evaluator": "handcrafted-experimental",
+  "models": [
+    {
+      "id": "100k-w256-hard2",
+      "role": "frozen_comparison",
+      "path": "local/frozen/baseline/model.osaval03",
+      "format": "OSAVAL03",
+      "sha256": "859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480",
+      "bytes": 8679836,
+      "source_commit": "0203a847dc662b4f32404b30340905a953f42865",
+      "profile": "configs/runtime/pure_learned-v3.json",
+      "profile_sha256": "d2eec27887926ccc8a076552815cd54e34b85d6d23e65732ddba4989bf59c1e7",
+      "default": false,
+      "distributed": false,
+      "license_status": "pending-review"
+    }
+  ],
+  "local_exceptions_manifest": "local/frozen/manifest.json"
+}

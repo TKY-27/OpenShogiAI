@@ -1,0 +1,18 @@
+{
+  "schema": "open_shogiai_phase10v_runtime_successors/v1",
+  "base_commit": "9c289734822298bd93f8dbceb56564f71b132895",
+  "files": {
+    "engine/core/src/lib.rs": {
+      "before": "d1def1087ab89d22133b1720260fd1331664e47621fdd1e489179ee104fa39e6",
+      "after": "272b8cf51bb07791c704461c9b907739686f5528c11a276d4f92682ae2401ae1"
+    },
+    "engine/wasm/src/lib.rs": {
+      "before": "9794a4bbbfd564833fd836362207e55a3b496d7bb1a75a3b1eb7bf328538d412",
+      "after": "b88a6195dabab2ec8035b7a664e2f0b374951e9c664aa8e237a056611496cbd9"
+    },
+    "bindings/wasm/open_shogi_wasm_bg.wasm": {
+      "before": "d9f3043d1a73bc2300894c1094e10b8c51db911aec09cefed477e219b91f7f00",
+      "after": "13ea44c68bc8a239fbaeb87c80e5fac00ab2ae8faa017ea223f8a3deef1ccd52"
+    }
+  }
+}

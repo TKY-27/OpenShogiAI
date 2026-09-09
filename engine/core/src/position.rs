@@ -730,6 +730,7 @@ impl Position {
         })
     }
 
+    #[cfg(feature = "handcrafted")]
     pub(crate) fn pseudo_mobility(&self, side: Side) -> usize {
         let mut position = self.clone();
         position.side_to_move = side;

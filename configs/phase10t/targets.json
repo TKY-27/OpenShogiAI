@@ -1,0 +1,161 @@
+{
+  "schema": "open_shogiai_phase10t_targets/v1",
+  "status": "frozen_not_started",
+  "perspective": "side_to_move_of_represented_position",
+  "wdl_classes": [
+    "loss",
+    "draw",
+    "win"
+  ],
+  "score": {
+    "unit": "openshogiai_centipawn",
+    "target": "approved_teacher_cp_at_represented_position",
+    "training_scale_cp": 600,
+    "loss": "Huber(score_cp/600,target_cp/600,delta=1)",
+    "target_clip_cp": 3000,
+    "runtime_nonmate_clip_cp": 28999,
+    "mate_cp_conversion": false,
+    "outcome_minus_one_as_cp": false
+  },
+  "wdl": {
+    "loss": "masked_source_macro_cross_entropy_plus_0.1_brier",
+    "game_result_is_cp": false,
+    "missing_is_draw": false
+  },
+  "calibration": {
+    "fit_split": "non_final_calibration",
+    "fit_target": "teacher_cp",
+    "method": "positive_affine_direct_score_or_logit_expected_score",
+    "expected_score": "p_win+0.5*p_draw",
+    "epsilon": 1e-06,
+    "temperature_fit": "non_final_calibration_wdl_only",
+    "freeze_before_arena": true,
+    "per_source_metrics": true,
+    "default_mapping_allowed": false,
+    "audit": [
+      "unit",
+      "finite",
+      "positive_slope",
+      "distinct_integer_cp_outputs",
+      "teacher_scale_error",
+      "sign_agreement"
+    ]
+  },
+  "lanes": {
+    "factual": {
+      "targets": [
+        "played_legal_policy",
+        "outcome_wdl"
+      ],
+      "masked": [
+        "score",
+        "mate",
+        "ranking"
+      ]
+    },
+    "teacher_cp": {
+      "targets": [
+        "score",
+        "candidate_ranking"
+      ],
+      "masked": [
+        "factual_wdl",
+        "mate"
+      ]
+    },
+    "teacher_mate": {
+      "targets": [
+        "candidate_ranking_symbolic_mate_order"
+      ],
+      "metadata": [
+        "mate_kind",
+        "mate_distance"
+      ],
+      "masked": [
+        "score",
+        "factual_wdl"
+      ],
+      "absent_mate_head_loss": false
+    },
+    "qsearch_pv_leaf": {
+      "targets": [
+        "teacher_score_at_leaf",
+        "candidate_ranking_at_leaf"
+      ],
+      "root_score_reused": false
+    },
+    "crossplay": {
+      "targets": [
+        "approved_teacher_relabel"
+      ],
+      "handcrafted_score_as_target": false
+    }
+  },
+  "semantics_proof": [
+    "stm_flip",
+    "terminal_mate_namespace",
+    "mate_distance_sign",
+    "qsearch_leaf_sign",
+    "capture_promotion_drop",
+    "unknown_masks_zero_gradient",
+    "legal_policy_mask",
+    "unmake_and_king_rebuild",
+    "repetition_known_vs_unknown",
+    "python_native_actual_wasm_parity"
+  ],
+  "ranking": {
+    "same_teacher_same_position": true,
+    "multipv": 3,
+    "loss": "pairwise_logistic_on_legal_successor_score_negated_to_root",
+    "mate_ordering": "exact_labeled_mate_order_no_numeric_cp",
+    "requested_multipv_is_maximum": true,
+    "observed_candidates_only": true,
+    "missing_candidates_fabricated": false,
+    "minimum_candidates_for_pair": 2,
+    "ties_masked": true
+  },
+  "policy": {
+    "optional": true,
+    "legal_root_moves_only": true,
+    "loss": "source_macro_masked_ce",
+    "may_prune": false,
+    "partial_multipv_default": "masked",
+    "hard_bestmove": {
+      "allowed_only_with_recorded_justification": true,
+      "confidence": "strictly_between_0_and_1",
+      "requires_enabled_legal_policy_head": true,
+      "current_campaign_enabled": false
+    }
+  },
+  "architecture_masks": {
+    "c0": {
+      "direct_score_loss": false,
+      "teacher_cp": "calibration_and_ranking_only",
+      "wdl": "factual_outcome_only",
+      "mate_head_loss": false
+    },
+    "a1": {
+      "direct_score_loss": true,
+      "wdl": "factual_outcome_only",
+      "mate_head_loss": false
+    }
+  },
+  "partial_multipv": {
+    "acceptance": "at_least_one_legal_full_pv_legal_bestmove_consistent_valid_score",
+    "record": [
+      "requested_candidate_count",
+      "observed_candidate_count",
+      "observed_targets"
+    ],
+    "legacy_labels": "derive_metadata_in_new_manifest_preserve_original_bytes",
+    "wdl": "factual_outcome_only_never_infer_from_missing_candidates",
+    "mate": "symbolic_metadata_no_numeric_cp_or_absent_head_loss",
+    "quarantine": [
+      "zero_valid_candidate",
+      "illegal_pv",
+      "inconsistent_score",
+      "crash",
+      "corrupt_output"
+    ]
+  }
+}

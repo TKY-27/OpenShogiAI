@@ -13,10 +13,12 @@ from open_shogi_training.phase10r_execution import (
     _example_row,
     _legacy_rejection_evidence,
     _outcome_wdl,
+    _preparation_relative_path,
     _ReplayFeatureProcess,
     _source_statistics,
     _stream_rows,
     _validate_preparation_configuration_hashes,
+    preparation_manifest_path,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,11 +56,14 @@ def test_stream_rows_is_deterministic_and_applies_frozen_weights(tmp_path: Path)
     assert all(row["raw_targets"]["sampling_seed"] == 20_260_729 for row in first)
 
 
-def test_preparation_accepts_only_implementation_registry_drift() -> None:
+def test_preparation_rejects_retired_freeze_inventory(tmp_path: Path) -> None:
+    # Exercise the original acceptance rule against its exact historical runtime, not
+    # the separately authorized Phase 10T successor. No datasets are copied or opened.
     declared = _configuration_hashes(ROOT)
-    declared["configs/phase10r/frozen-controls.sha256"] = "0" * 64
-
     _validate_preparation_configuration_hashes(ROOT, declared)
+    declared["configs/phase10r/frozen-controls.sha256"] = "0" * 64
+    with pytest.raises(Phase10RExecutionError, match="configuration inventory is invalid"):
+        _validate_preparation_configuration_hashes(ROOT, declared)
 
 
 def test_preparation_rejects_data_affecting_configuration_drift() -> None:
@@ -71,13 +76,13 @@ def test_preparation_rejects_data_affecting_configuration_drift() -> None:
 
 def test_preparation_rejects_missing_configuration_identity() -> None:
     declared = _configuration_hashes(ROOT)
-    declared.pop("configs/phase10r/frozen-controls.sha256")
+    declared.pop(CONFIG_PATHS[0])
 
     with pytest.raises(Phase10RExecutionError, match="configuration inventory is invalid"):
         _validate_preparation_configuration_hashes(ROOT, declared)
 
 
-def test_legacy_preparation_is_marked_without_changing_its_manifest(tmp_path: Path) -> None:
+def _write_legacy_preparation_fixture(tmp_path: Path) -> tuple[Path, Path]:
     legacy = tmp_path / "phase10r-prepared/1m"
     legacy.mkdir(parents=True)
     manifest_path = legacy / "preparation-manifest.json"
@@ -94,21 +99,116 @@ def test_legacy_preparation_is_marked_without_changing_its_manifest(tmp_path: Pa
         },
         "files": {
             "train.jsonl": {
-                "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
-                "bytes": 3,
+                "sha256": hashlib.sha256(train_path.read_bytes()).hexdigest(),
+                "bytes": train_path.stat().st_size,
             }
         },
     }
-    canonical_body = json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n"
-    body["manifest_sha256"] = hashlib.sha256(canonical_body.encode()).hexdigest()
+    body["manifest_sha256"] = hashlib.sha256(
+        (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
     manifest_path.write_text(
         json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"
     )
-    original = manifest_path.read_bytes()
-    replacement = tmp_path / "phase10r-prepared/1m-mixture-v2/preparation-manifest.json"
+    return legacy, manifest_path
 
-    first = _legacy_rejection_evidence(tmp_path, MIXTURE, replacement)
-    second = _legacy_rejection_evidence(tmp_path, MIXTURE, replacement)
+
+def test_canonical_preparation_paths_are_scale_scoped() -> None:
+    assert preparation_manifest_path(ROOT, "1m").relative_to(ROOT / "local/phase10r-data") == Path(
+        "phase10r-prepared/1m-mixture-v2/preparation-manifest.json"
+    )
+    assert preparation_manifest_path(ROOT, "10m").relative_to(ROOT / "local/phase10r-data") == Path(
+        "phase10r-prepared/10m-mixture-v2/preparation-manifest.json"
+    )
+
+
+def test_legacy_rejection_marker_binds_the_canonical_1m_replacement(tmp_path: Path) -> None:
+    legacy, manifest_path = _write_legacy_preparation_fixture(tmp_path)
+    original = manifest_path.read_bytes()
+
+    first = _legacy_rejection_evidence(tmp_path, MIXTURE)
+    second = _legacy_rejection_evidence(tmp_path, MIXTURE)
+
+    assert first == second
+    assert first["status"] == "REJECTED_MIXTURE_CONTROL_CONFLICT"
+    assert first["marker"] == legacy / "REJECTED_MIXTURE_CONTROL_CONFLICT.json"
+    marker = json.loads(first["marker"].read_text(encoding="utf-8"))
+    assert marker["legacy_preparation_manifest"] == "phase10r-prepared/1m/preparation-manifest.json"
+    assert marker["replacement_preparation_manifest"] == (
+        "phase10r-prepared/1m-mixture-v2/preparation-manifest.json"
+    )
+    assert manifest_path.read_bytes() == original
+
+
+def test_canonical_mixture_supports_a_valid_10m_replacement() -> None:
+    assert MIXTURE["control_id"] == "phase10r-1m-mixture-v2"
+    assert _preparation_relative_path("10m", MIXTURE) == Path("phase10r-prepared/10m-mixture-v2")
+    assert _preparation_relative_path("1m", MIXTURE) != _preparation_relative_path("10m", MIXTURE)
+
+
+def test_preparation_rejects_an_incorrect_scale() -> None:
+    with pytest.raises(Phase10RExecutionError, match="unsupported preparation scale"):
+        _preparation_relative_path("20m", MIXTURE)
+
+
+def test_preparation_rejects_an_incorrect_mixture_version() -> None:
+    mixture = dict(MIXTURE)
+    mixture["control_id"] = "phase10r-1m-mixture-v3"
+
+    with pytest.raises(Phase10RExecutionError, match="mixture identity is unsupported"):
+        _preparation_relative_path("10m", mixture)
+
+
+def test_preparation_rejects_incorrect_source_shares() -> None:
+    mixture = dict(MIXTURE)
+    mixture["target_shares"] = {**MIXTURE["target_shares"], "wcsc": 0.46}
+
+    with pytest.raises(Phase10RExecutionError, match="source shares changed"):
+        _preparation_relative_path("10m", mixture)
+
+
+def test_legacy_rejection_evidence_rejects_an_incorrect_manifest_hash(tmp_path: Path) -> None:
+    _, manifest_path = _write_legacy_preparation_fixture(tmp_path)
+    body = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body["manifest_sha256"] = "0" * 64
+    manifest_path.write_text(
+        json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(Phase10RExecutionError, match="manifest digest is invalid"):
+        _legacy_rejection_evidence(tmp_path, MIXTURE)
+
+
+def test_legacy_rejection_evidence_rejects_a_corrupted_marker(tmp_path: Path) -> None:
+    _, _ = _write_legacy_preparation_fixture(tmp_path)
+    first = _legacy_rejection_evidence(tmp_path, MIXTURE)
+    marker_path = first["marker"]
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["replacement_preparation_manifest"] = (
+        "phase10r-prepared/10m-mixture-v2/preparation-manifest.json"
+    )
+    marker_path.write_text(
+        json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(Phase10RExecutionError, match="marker differs from current evidence"):
+        _legacy_rejection_evidence(tmp_path, MIXTURE)
+
+
+def test_preparation_rejects_reusing_the_1m_output_path_for_10m() -> None:
+    mixture = dict(MIXTURE)
+    mixture["output"] = {"path_template": "phase10r-prepared/1m-mixture-v2"}
+
+    with pytest.raises(Phase10RExecutionError, match="path identity changed"):
+        _preparation_relative_path("10m", mixture)
+
+
+def test_legacy_preparation_is_marked_without_changing_its_manifest(tmp_path: Path) -> None:
+    legacy, manifest_path = _write_legacy_preparation_fixture(tmp_path)
+    original = manifest_path.read_bytes()
+
+    first = _legacy_rejection_evidence(tmp_path, MIXTURE)
+    second = _legacy_rejection_evidence(tmp_path, MIXTURE)
 
     assert first == second
     assert first["status"] == "REJECTED_MIXTURE_CONTROL_CONFLICT"

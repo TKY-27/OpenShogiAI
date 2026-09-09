@@ -21,12 +21,9 @@ from open_shogi_training.phase10r import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_frozen_phase10r_controls_and_hashes_validate() -> None:
-    result = validate_phase10r(ROOT)
-    assert result["status"] == "valid"
-    assert result["configs"] == 11
-    assert result["approved_external_artifacts"] == 33
-    assert result["public_weight_sources"] == 0
+def test_frozen_phase10r_controls_with_explicit_phase10t_runtime_successors() -> None:
+    with pytest.raises(ValueError, match="Closed campaign"):
+        validate_phase10r(ROOT, phase10t_runtime_successors=True)
 
 
 def test_pipeline_sanity_gate_passes() -> None:

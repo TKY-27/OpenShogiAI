@@ -1,73 +1,59 @@
 # OpenShogiAI
 
-OpenShogiAI is an independently implemented shogi engine, model runtime, training stack, and
-reproducible evaluation toolkit. This repository is the AI-side clean-history release candidate;
-the browser application lives in the separate OpenShogiUI repository.
+OpenShogiAI is an independently implemented shogi engine with native and WebAssembly runtimes,
+model-format support, and research data/training tools. The browser application is maintained
+in the separate OpenShogiUI (OSUI) repository.
 
-## Included
+It provides legal move generation, SFEN/USI/CSA, bounded search, game-clock allocation,
+terminal play, analysis and opening-book interfaces. The default is the built-in
+`handcrafted-experimental` evaluator. Experimental learned formats are explicit opt-ins;
+no trained weights, datasets or external teacher binaries are distributed here.
+Amateur-dan strength and the next design's novelty have not been established.
 
-- complete shogi rules, legal move generation, SFEN/USI/CSA handling, and perft tooling;
-- handcrafted `OSAVAL01` evaluation and hash-bound Phase 10R `OSAVAL02` sparse inference with
-  Python/native/actual-Wasm parity;
-- deterministic bounded search, USI, terminal play, Arena, and opening-book tooling;
-- audited data acquisition/normalization, external-USI teacher adapters, training/export,
-  self-play, replay, promotion, and evaluation workflows;
-- a WebAssembly engine and versioned generated bindings under `bindings/wasm/`;
-- tests and provenance documentation for the included AI-side functionality.
+## Setup
 
-No browser GUI, teacher binary, teacher evaluation file, raw/processed dataset, checkpoint, or
-trained model weight is included.
-
-## Requirements
-
-- Rust 1.89 or newer on stable, with Clippy, Rustfmt, and `wasm32-unknown-unknown`;
-- Python 3.12 and `uv`;
-- GNU Make;
-- exact `wasm-bindgen-cli` 0.2.127 installed under
-  `local/tooling/wasm-bindgen-0.2.127/` for deterministic binding checks.
-
-The diagnostic bootstrap does not install software or request administrator privileges:
+Use stable Rust (minimum 1.89), Rustfmt, Clippy, `wasm32-unknown-unknown`, Python 3.12,
+`uv`, GNU Make, and Node.js for actual-Wasm checks. Inspect tools with
+`./scripts/bootstrap_macos.sh`. Then:
 
 ```sh
-./scripts/bootstrap_macos.sh
+uv sync --locked --group dev
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.127 --locked --root local/tooling/wasm-bindgen-0.2.127
+make build
 ```
 
-## Verification
+`Cargo.lock` and `uv.lock` pin dependencies. Existing local tools/environments may be reused.
 
-```sh
-make check
-```
-
-The gate syncs the locked Python environment, validates the local toolchain, audits repository
-and license boundaries, runs Rust/Python formatting and linting, executes all Rust/Python tests,
-builds the Rust workspace, and checks deterministic Wasm regeneration.
-
-Useful focused commands include:
+## Run and test
 
 ```sh
 cargo run --locked -p open-shogi-cli -- usi
 cargo run --locked -p open-shogi-cli -- perft --depth 3
-make model-validate
-make phase3-validate-registry
-make phase6-validate-config
-make phase10r-osaval02-parity
-make wasm-web-check
+cargo run --locked -p open-shogi-cli -- play --human black --profile overall-champion --black-time-ms 180000 --white-time-ms 180000
+make check
 ```
 
-Networked acquisition, external teacher execution, training, self-play, and evaluation commands
-remain bounded workflows with local ignored outputs. Read the relevant documents and configs
-before running them.
+Standard builds/tests use synthetic or small checked-in fixtures, not private training data.
+For the optional local frozen W256 comparison model, see [model handling](docs/model/handling.md).
+A working model loader is not evidence of playing strength. A known hard4 runtime-proof failure
+remains unresolved; neither complete game reliability nor OSUI integration is claimed by a smoke test.
 
-## Data and models
+## Documentation
 
-The exact 100-object AobaZero sample decision is documented in `DATASET_CARD.md` and
-`docs/source-audits/`. Other datasets are denied or pending unless separately approved.
-Generated model weights remain `pending-review` and are not licensed or distributed by this
-source repository. See `MODEL_CARD.md`, `PROVENANCE.md`, and `LICENSE_SCOPE.md`.
+- [Current state and next work](docs/status.md): the single handoff document.
+- [Development](docs/development.md): commands, storage and validation.
+- [Architecture](docs/architecture.md) and [interfaces](docs/interfaces.md).
+- [Data handling](docs/data/handling.md), [model handling](docs/model/handling.md).
+- [Source provenance](docs/provenance/source.md), [license scope](docs/license-scope.md),
+  and [third-party notices](THIRD_PARTY.md).
+
+`engine/`, `training/`, `bindings/`, `configs/`, and `tests/` retain their functional boundaries.
+Wasm bindings expose the engine contract; they do not contain a browser GUI. Copying artifacts
+into OSUI and verifying actual play is a separate integration task.
 
 ## License
 
-Project-owned source code in this clean-history candidate is licensed under
-`AGPL-3.0-only`. Dependencies, external teachers, datasets, generated-tool output, and model
-weights retain their own terms or pending status; see `THIRD_PARTY.md` and
-`LICENSE_SCOPE.md`.
+Project-owned source is **AGPL-3.0-only**; see [LICENSE](LICENSE). Dependencies, external
+teachers, datasets and model weights retain separate terms. Weight distribution remains
+pending review and is not authorized by this source license. This cleanup does not publish a release.

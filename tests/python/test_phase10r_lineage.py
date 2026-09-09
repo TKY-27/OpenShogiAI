@@ -14,7 +14,7 @@ from open_shogi_training.phase10r_lineage import (
     load_teacher_binding_control,
     validate_candidate_lineage,
 )
-from open_shogi_training.phase10r_model import VARIANT_PAIR, VARIANT_PRIMARY
+from open_shogi_training.phase10r_model import VARIANT_PAIR
 from open_shogi_training.phase10r_training import (
     CHECKPOINT_SCHEMA,
     Phase10RModel,
@@ -48,29 +48,14 @@ def _ref(root: Path, path: Path) -> dict[str, object]:
     }
 
 
-def test_live_teacher_binding_control_proves_case3_and_exact_parents() -> None:
-    control = load_teacher_binding_control(ROOT)
-
-    assert control["repair_case"] == "execution_sequence_skipped_existing_teacher_binding_stage"
-    assert control["teacher_binding_identity"]["identity_sha256"] == (
-        "781a45570ce6c88e29e4c9f7f3acb96e3981bb74d7da6fb10ff80cdd76f51cbf"
-    )
-    assert control["calibration"]["expected_rows"] == {
-        "train": 6570,
-        "validation": 1880,
-        "validation_cp_for_affine_fit": 1831,
-    }
-    assert control["calibration"]["label_budget"]["new_teacher_calls"] == 0
-    candidates = completed_teacher_bound_candidates(ROOT, "1m")
-    assert {candidate["variant_id"] for candidate in candidates} == {
-        VARIANT_PAIR,
-        VARIANT_PRIMARY,
-    }
-    assert all(
-        candidate["teacher_binding"]["identity_sha256"]
-        == control["teacher_binding_identity"]["identity_sha256"]
-        for candidate in candidates
-    )
+def test_missing_teacher_evidence_cannot_supply_completed_candidates(tmp_path: Path) -> None:
+    control_path = Path("configs/phase10r/teacher-binding.yaml")
+    (tmp_path / control_path).parent.mkdir(parents=True)
+    (tmp_path / control_path).write_bytes((ROOT / control_path).read_bytes())
+    with pytest.raises(Phase10RLineageError, match="unavailable"):
+        load_teacher_binding_control(tmp_path)
+    with pytest.raises(Phase10RLineageError, match="unavailable"):
+        completed_teacher_bound_candidates(tmp_path, "1m")
 
 
 def test_candidate_lineage_json_schema_is_closed_and_requires_teacher_evidence() -> None:

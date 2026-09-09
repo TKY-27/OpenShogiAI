@@ -1,0 +1,46 @@
+schema: open_shogiai_phase10s_model_matrix/v1
+frozen_as_of: "2026-09-07"
+status: frozen_not_started
+matrix_policy: one shared learned model with two attributable learned-only score mappings
+shared:
+  architecture: sparse-pair-policy-wdl
+  runtime_profile: pure_learned
+  model_format: OSAVAL02
+  policy_classes: 13689
+  policy_use: root_move_ordering_only
+  policy_may_directly_prune: false
+  terminal_and_mate_scores_owned_by_search: true
+  handcrafted_score: forbidden
+  calibration_fit: non_final_validation_with_approved_teacher_labels
+  paired_equal_wall_clock_primary: true
+variants:
+  - id: phase10s-c0-calibrated-wdl-log-odds
+    role: control
+    learned_outputs: [policy_logits, wdl_logits, uncertainty]
+    raw_search_score: log_of_pwin_plus_epsilon_over_ploss_plus_epsilon
+    draw_probability_usage: implicit_through_softmax_only
+    calibration: positive_monotonic_affine_required
+  - id: phase10s-v1-calibrated-expected-score-logit
+    role: evidence_justified_mapping_ablation
+    learned_outputs: [policy_logits, wdl_logits, uncertainty]
+    raw_search_score: logit_of_pwin_plus_half_pdraw
+    draw_probability_usage: explicit_half_point
+    probability_epsilon: 0.000001
+    calibration: positive_monotonic_affine_required
+    justification: current_10m_wdl_is_overconfident_and_draw_rates_are_source_specific
+selection:
+  maximum_variants: 2
+  same_training_checkpoint_required: true
+  first_selector: paired_equal_wall_clock_score
+  tie_break_order: [paired_bootstrap_lower, lower_calibration_ece, lower_latency]
+  offline_loss_alone_may_select: false
+  final_holdout_may_select: false
+ablations:
+  - id: policy-disabled
+    root_learned_policy: false
+    preserve_classical_move_ordering: true
+    requires_isolated_runtime_switch_and_full_width_equivalence_test: true
+  - id: move-ordering-only
+    root_learned_policy: true
+    learned_policy_effect: ordering_only
+    direct_policy_pruning: false

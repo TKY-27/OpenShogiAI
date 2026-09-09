@@ -64,31 +64,10 @@ def test_collision_precedence_preserves_final_holdout_and_is_deterministic() -> 
     assert decision["parser_normalization_collision"] is True
 
 
-def test_frozen_identity_config_and_wcsc_replay_manifest_are_closed() -> None:
+def test_identity_policy_and_replay_schema_protect_holdout() -> None:
     config = yaml.safe_load((ROOT / "configs/phase10r/identity.yaml").read_text())
     proof_schema = json.loads((ROOT / "docs/data/phase10r-replay-proof.schema.json").read_text())
-    manifest = json.loads(
-        (ROOT / "artifacts/phase10r/phase10r-wcsc-replay-manifest.json").read_text()
-    )
-    collisions = json.loads(
-        (ROOT / "artifacts/phase10r/phase10r-collision-resolution.json").read_text()
-    )
-
     assert config["schema"] == "open_shogiai_phase10r_identity/v2"
     assert proof_schema["properties"]["complete_legal_replay"]["const"] is True
     assert "history_ids" in proof_schema["required"]
     assert config["collision_resolution"]["protected_holdout_may_move_to_training"] is False
-    assert manifest["schema"] == "open_shogiai_phase10r_wcsc_replay_manifest/v2"
-    assert len(manifest["streams"]) == 31
-    assert len(manifest["previously_rejected_stream_ids"]) == 18
-    assert manifest["stream_exclusions"] == []
-    assert len(manifest["member_exclusions"]) == 5
-    assert collisions["canonical_cross_split_collision_count"] == 3_327
-    assert collisions["protected_final_holdout_collision_count"] == 310
-    assert collisions["parser_normalization_collision_count"] == 214
-    assert collisions["union_collision_count"] == len(collisions["decisions"]) == 3_363
-    assert collisions["protected_holdout_moved_to_training"] == 0
-    assert all(
-        stream["expected_artifact_sha256"] == stream["observed_artifact_sha256"]
-        for stream in manifest["streams"]
-    )

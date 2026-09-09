@@ -1,0 +1,105 @@
+{
+  "schema": "open_shogiai_phase10t_model/v1",
+  "status": "frozen_not_started",
+  "runtime_profile": "pure_learned",
+  "initialization": "random_all_learned_parameters",
+  "seed": 20260907,
+  "forbidden": [
+    "handcrafted",
+    "residual",
+    "composite",
+    "book",
+    "teacher_runtime",
+    "fallback",
+    "third_party_weights",
+    "KPP",
+    "KKP"
+  ],
+  "nonterminal_leaf": "learned_only",
+  "terminal": "exact_search_rules",
+  "architecture_selection_reopened": true,
+  "variants": [
+    {
+      "id": "c0-sparse-pair-policy-wdl",
+      "role": "retrained_architecture_control",
+      "implementation": "existing_phase10r",
+      "initialization": "random",
+      "calibration": "teacher_cp_only",
+      "policy": "off_then_root_ordering_ablation",
+      "training_heads": [
+        "factual_wdl",
+        "legal_policy",
+        "teacher_ranking"
+      ],
+      "direct_teacher_cp_loss": false,
+      "score": "existing_wdl_logodds_with_teacher_cp_affine_fit"
+    },
+    {
+      "id": "a1-king-relative-128",
+      "role": "primary_recovery_candidate",
+      "implementation": "independent_phase10t_accumulator",
+      "features": 8433,
+      "accumulator_width": 128,
+      "perspectives": 2,
+      "shared_table": true,
+      "hidden_width": 32,
+      "heads": [
+        "score_cp",
+        "wdl_loss_draw_win"
+      ],
+      "policy": "disabled"
+    },
+    {
+      "id": "a2-king-relative-pairs",
+      "role": "conditional_ablation_after_a1_microproof",
+      "base": "a1-king-relative-128",
+      "pair_features": 4096,
+      "pair_width": 32,
+      "pair_relation": "deterministic_local_piece_relation_hash_v1",
+      "maximum_active_relations": 64,
+      "activation": "only_if_a1_passes_100k_and_pair_feature_semantics_are_frozen_before_training"
+    }
+  ],
+  "selection": {
+    "same_unique_data": true,
+    "same_seed_set": [
+      20260907,
+      20260908,
+      20260909
+    ],
+    "no_legacy_weights": true,
+    "max_variants": 3,
+    "primary": "equal_wall_clock_against_handcrafted",
+    "secondary": "equal_nodes_against_handcrafted",
+    "quality_only_failure": "hard_relabel_retrain",
+    "policy_acceptance": {
+      "paired_wall_clock_delta_lower_strictly_above": 0,
+      "maximum_latency_fraction": 0.05,
+      "nodes_score_regression_max": 0.01,
+      "direct_pruning": false
+    }
+  },
+  "native_design": {
+    "quiet_vector_updates": 4,
+    "capture_max_vector_updates": 8,
+    "king_move": "rebuild_moved_king_perspective_update_other",
+    "unmake": "restore_saved_accumulators",
+    "leaf_dense_macs": 8320,
+    "runtime_feature_checksum": false,
+    "runtime_legal_generation_in_value_head": false,
+    "parameters_base": 1087908,
+    "float32_bytes_base": 4351632,
+    "int16_table_plus_float_heads_bytes": 2192784,
+    "quantization": "after_float_parity_only",
+    "vector_update_count_scope": "board_and_hand_only_history_deltas_additional"
+  },
+  "expected_cost": {
+    "status": "design_budget_not_measured_native_a1",
+    "p95_nonking_update_plus_leaf_us_target": 25,
+    "required_speedup_vs_c0": 3,
+    "king_rebuild_us_target": 100,
+    "measurement": "same_host_release_native_and_actual_wasm_separate",
+    "failure": "reduce_cost_or_disable_optional_heads_before_scale",
+    "history_delta_cost_included": true
+  }
+}

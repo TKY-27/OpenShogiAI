@@ -1,0 +1,97 @@
+{
+  "schema": "open_shogiai_phase10s_diagnostic_ladder/v1",
+  "frozenAsOf": "2026-09-07",
+  "status": "frozen_not_started",
+  "authorization": "diagnostic_supervised_crossplay_and_gated_selfplay_only",
+  "common": {
+    "pairedReversedColors": true,
+    "equalWallClock": true,
+    "movetimeMs": 10,
+    "depthCap": 8,
+    "hashMiBPerPlayer": 32,
+    "maxPlies": 128,
+    "openingBook": false,
+    "openingStyle": "unrestricted",
+    "startManifest": "artifacts/phase10/start-pool-manifest.json",
+    "startManifestSha256": "491a3d54d3d67002fc03fc3644c16b405f5b1dbb662e88e4af260bd45757a1f1",
+    "holdoutInspection": false,
+    "promotion": false
+  },
+  "rungs": [
+    {
+      "order": 1,
+      "id": "selected-1m-vs-handcrafted-baseline",
+      "games": 800,
+      "pairs": 400,
+      "playerA": "phase10r-1m-selected-sparse-pair-policy-wdl",
+      "playerB": "handcrafted-experimental",
+      "purpose": "missing_direct_baseline"
+    },
+    {
+      "order": 2,
+      "id": "10m-stage1-best-vs-selected-1m",
+      "games": 200,
+      "pairs": 100,
+      "checkpoint": "local/phase10r-data/checkpoints/phase10r/10m/sparse-pair-policy-wdl/representation_policy_pretraining/best.pt",
+      "checkpointSha256": "ccf0b99a66f9b822d83a833a3dd81789336ef8f2f8dc6877c3ec259211b24279"
+    },
+    {
+      "order": 3,
+      "id": "10m-stage1-last-vs-selected-1m",
+      "games": 200,
+      "pairs": 100,
+      "checkpoint": "local/phase10r-data/checkpoints/phase10r/10m/sparse-pair-policy-wdl/representation_policy_pretraining/last.pt",
+      "checkpointSha256": "ee01016d174f740db87124c161675d6dbaae077b63043b5b291cc993ab035288"
+    },
+    {
+      "order": 4,
+      "id": "10m-stage2-best-vs-selected-1m",
+      "games": 200,
+      "pairs": 100,
+      "checkpoint": "local/phase10r-data/checkpoints/phase10r/10m/sparse-pair-policy-wdl/source_specific_wdl_value_pretraining/best.pt",
+      "checkpointSha256": "ae05b31b503bf80f3d0741e397caef3e8a7b6a6e68252c600787f2404be06cb2"
+    },
+    {
+      "order": 5,
+      "id": "promising-checkpoint-vs-handcrafted",
+      "games": 400,
+      "pairs": 200,
+      "activation": "checkpoint_score_vs_selected_1m_at_least_0.45_and_all_offline_gates_pass",
+      "purpose": "20_and_35_percent_strength_targets"
+    },
+    {
+      "order": 6,
+      "id": "policy-disabled-vs-move-ordering-only",
+      "games": 200,
+      "pairs": 100,
+      "activation": "isolated_policy_switch_and_full_width_equivalence_test_pass",
+      "sameModelAndScoreMapping": true
+    },
+    {
+      "order": 7,
+      "id": "selfplay-entry-vs-handcrafted",
+      "games": 400,
+      "pairs": 200,
+      "scoreMinimum": 0.48,
+      "pairedBootstrapLowerMinimum": 0.43,
+      "activation": "all_prior_supervised_offline_runtime_and_crossplay_gates_pass"
+    },
+    {
+      "order": 8,
+      "id": "final-objective-vs-handcrafted",
+      "games": 1600,
+      "pairs": 800,
+      "scoreMinimum": 0.55,
+      "wilsonLowerStrictlyAbove": 0.50,
+      "pairedBootstrapLowerStrictlyAbove": 0.50,
+      "activation": "later_gated_selfplay_campaign_completed"
+    }
+  ],
+  "intermediateCheckpointRule": {
+    "exportTemporaryOsaval02": true,
+    "bindCheckpointAndExportHashes": true,
+    "calibrationMustBeFitBeforeArena": true,
+    "trainingBatchLossMayNotChooseCheckpoint": true
+  },
+  "stopBefore": ["final_promotion", "final_holdout_use", "push", "merge", "release", "deploy"]
+}

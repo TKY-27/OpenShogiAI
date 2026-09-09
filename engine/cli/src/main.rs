@@ -1,6 +1,12 @@
 #![forbid(unsafe_code)]
 
+#[cfg(all(feature = "handcrafted", feature = "pure-only"))]
+compile_error!("handcrafted and pure-only are mutually exclusive");
+#[cfg(not(any(feature = "handcrafted", feature = "pure-only")))]
+compile_error!("select exactly one build class: handcrafted or pure-only");
+
 use std::process::ExitCode;
+mod arena_player;
 
 // The filesystem workflows depend on the exact syscall surface reviewed in
 // `open_shogi_core::secure_file`. `unix` alone also includes targets such as QNX/QURT for which
@@ -9,7 +15,7 @@ use std::process::ExitCode;
 macro_rules! secure_unix_items {
     ($($item:item)*) => {
         $(
-            #[cfg(any(
+            #[cfg(all(feature = "handcrafted", any(
                 target_os = "macos",
                 target_os = "ios",
                 target_os = "tvos",
@@ -17,7 +23,7 @@ macro_rules! secure_unix_items {
                 target_os = "visionos",
                 target_os = "linux",
                 target_os = "android"
-            ))]
+            )))]
             $item
         )*
     };
@@ -70,6 +76,7 @@ secure_unix_items! {
             "export-csa-jsonl" => dataset::run(&arguments[1..]),
             "play" => play::run(&arguments[1..]),
             "arena" => arena::run(&arguments[1..]),
+            "arena-player" => arena_player::run(&arguments[1..]),
             "analysis" => analysis::run(&arguments[1..]),
             "opening-book" => opening::run(&arguments[1..]),
             "model" => model::run(&arguments[1..]),
@@ -115,18 +122,35 @@ secure_unix_items! {
     }
 }
 
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "visionos",
-    target_os = "linux",
-    target_os = "android"
-)))]
+#[cfg(all(
+    feature = "handcrafted",
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "linux",
+        target_os = "android"
+    ))
+))]
 fn main() -> ExitCode {
     eprintln!(
         "error: open-shogi-cli filesystem workflows require a supported secure directory-descriptor boundary"
     );
     ExitCode::from(2)
+}
+
+#[cfg(feature = "pure-only")]
+mod pure;
+
+#[cfg(feature = "pure-only")]
+fn main() -> ExitCode {
+    match pure::run(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(2)
+        }
+    }
 }

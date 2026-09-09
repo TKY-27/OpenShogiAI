@@ -1,3 +1,4 @@
+# Historical comparison fixture; candidate weights removed. Supply a new explicitly reviewed config for future runs.
 schema = "open_shogi_overall_champion_gate/v1"
 
 [arena]

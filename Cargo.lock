@@ -299,6 +299,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-shogi-phase10t"
+version = "0.0.0"
+dependencies = [
+ "open-shogi-core",
+ "sha2",
+]
+
+[[package]]
 name = "open-shogi-usi"
 version = "0.0.0"
 dependencies = [

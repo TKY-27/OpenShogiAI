@@ -28,14 +28,14 @@ leakage_rules:
 inspection:
   validation: allowed_for_checkpoint_and_curriculum_selection
   source_held_out: allowed_only_at_frozen_scale_boundaries
-  phase3_legacy_final_holdout: one_finalist_inspection_after_all_arena_selection
+  phase3_legacy_final_holdout: requires_separate_explicit_authorization
   reserved_or_public_test: forbidden
   final_result_may_select_or_retrain: false
   log_append_only: true
   required_log_fields: [holdout_id, artifact_sha256, candidate_sha256, purpose, timestamp_utc, git_commit, result_sha256]
 final_arena_policy:
   start_pool_is_not_final_holdout: true
-  frozen_start_manifest: artifacts/phase10/start-pool-manifest.json
+  frozen_start_manifest: tests/fixtures/start-pool/start-pool-manifest.json.gz
   no_final_holdout_inspection_before_final_1600: true
 source_held_out:
   every_active_external_source: true

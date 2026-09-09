@@ -1,0 +1,256 @@
+{
+  "schema": "open_shogiai_phase10u_incumbent/v1",
+  "status": "STOP_CLOSED",
+  "selection_rule": "all_attempts_reported_select_by_equal_clock_handcrafted_conservative_then_lower_then_equal_node_conservative",
+  "fully_verified_sunday_candidate": null,
+  "measured_pure_incumbent": {
+    "id": "phase10r-1m-selected-sparse-pair-policy-wdl",
+    "path": "local/phase10r-data/checkpoints/phase10r/1m/sparse-pair-policy-wdl/teacher-bound-v1/teacher-bound-v1.osaval02",
+    "sha256": "41ce44a93219b0bcee0270677104c379029999050524fe99c1a560bb5cc05060",
+    "payload_sha256": "6f37bf988133a18d08b67c34a5a9fb164571f7db3d1ec64f16c6164ab8f5c37a",
+    "bytes": 9657380,
+    "format": "OSAVAL02",
+    "architecture": "phase10r-c0-sparse-pair-policy-wdl",
+    "architecture_version": 2,
+    "quantization": "float32",
+    "runtime_profile": "pure_learned",
+    "profile_sha256": "291cccea2056bee039fe4c84185304b3681ad6361df2ca1ba821a80d3645698c",
+    "training_lineage_commit": "b7bfc7419cdb892152b482b00f1df2cbbd1096a7",
+    "pure_core_eligible": true,
+    "current_pure_only_playing_adapters_supported": true,
+    "selection_tuple": [
+      0.03,
+      0.01,
+      0.105
+    ],
+    "selection_scope": "historically_measured_candidates_pending_arena_certification"
+  },
+  "blockers": [
+    "Arena frozen controls and binary/source provenance are not certified; historical reconciliation is closed; see docs/status.md",
+    "Arena used a shared handcrafted-enabled development binary; aggregate binary identity is hardcoded, launch path mutable, per-launch attestation absent",
+    "Replacement Arena is READY_FOR_REVIEW_NOT_EXECUTED; no execution authorization or new strength evidence exists."
+  ],
+  "other_checkpoints": [
+    {
+      "id": "a1-100k-attempt-0002",
+      "sha256": "09f02be8c821417cc9a1edf0d6058bce9904ab41533997c11b300f6cce19ec22",
+      "selection_tuple": [
+        0.03,
+        0.01,
+        0.0325
+      ]
+    },
+    {
+      "id": "a1-hard1",
+      "sha256": "88a1e7d46aac5584e535f39d157ea60003ce77c264ff2ee9a1654d87651f119c",
+      "selection_tuple": [
+        0.0275,
+        0.0075,
+        0.0225
+      ]
+    }
+  ],
+  "historical_scores": [
+    {
+      "variant": "candidate-vs-handcrafted-equal-nodes",
+      "wins": 6,
+      "draws": 1,
+      "losses": 192,
+      "max_plies_excluded": 1,
+      "finished_games": 199,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.0325,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.01,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.0575
+      },
+      "evidence": "local/phase10u-runs/arena/100k/diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "candidate-vs-handcrafted-equal-clock",
+      "wins": 5,
+      "draws": 2,
+      "losses": 193,
+      "max_plies_excluded": 0,
+      "finished_games": 200,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.03,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.01,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.0525
+      },
+      "evidence": "local/phase10u-runs/arena/100k/diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "candidate-vs-prior-equal-nodes",
+      "wins": 45,
+      "draws": 7,
+      "losses": 143,
+      "max_plies_excluded": 5,
+      "finished_games": 195,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.2425,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.1775,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.3075
+      },
+      "evidence": "local/phase10u-runs/arena/100k/diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "candidate-vs-prior-equal-clock",
+      "wins": 70,
+      "draws": 3,
+      "losses": 123,
+      "max_plies_excluded": 4,
+      "finished_games": 196,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.3575,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.285,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.43
+      },
+      "evidence": "local/phase10u-runs/arena/100k/diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "prior-vs-handcrafted-equal-nodes",
+      "wins": 21,
+      "draws": 0,
+      "losses": 179,
+      "max_plies_excluded": 0,
+      "finished_games": 200,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.105,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.065,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.15
+      },
+      "evidence": "local/phase10u-runs/arena/100k/diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "prior-vs-handcrafted-equal-clock",
+      "wins": 6,
+      "draws": 0,
+      "losses": 194,
+      "max_plies_excluded": 0,
+      "finished_games": 200,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.03,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.01,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.055
+      },
+      "evidence": "local/phase10u-runs/arena/100k/diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "hard-candidate-vs-handcrafted-equal-nodes",
+      "wins": 2,
+      "draws": 5,
+      "losses": 193,
+      "max_plies_excluded": 0,
+      "finished_games": 200,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.0225,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.0075,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.0425
+      },
+      "evidence": "local/phase10u-runs/arena/100k/hard-relabel-diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "hard-candidate-vs-handcrafted-equal-clock",
+      "wins": 5,
+      "draws": 1,
+      "losses": 194,
+      "max_plies_excluded": 0,
+      "finished_games": 200,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.0275,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.0075,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.05
+      },
+      "evidence": "local/phase10u-runs/arena/100k/hard-relabel-diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "hard-candidate-vs-prior-equal-nodes",
+      "wins": 43,
+      "draws": 3,
+      "losses": 150,
+      "max_plies_excluded": 4,
+      "finished_games": 196,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.2225,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.1625,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.2875
+      },
+      "evidence": "local/phase10u-runs/arena/100k/hard-relabel-diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    },
+    {
+      "variant": "hard-candidate-vs-prior-equal-clock",
+      "wins": 82,
+      "draws": 6,
+      "losses": 112,
+      "max_plies_excluded": 0,
+      "finished_games": 200,
+      "scheduled_games": 200,
+      "conservative_score_all_scheduled": 0.425,
+      "paired_bootstrap": {
+        "lower_2_5_percentile": 0.365,
+        "replicates": 10000,
+        "seed": 20260907,
+        "upper_97_5_percentile": 0.4875
+      },
+      "evidence": "local/phase10u-runs/arena/100k/hard-relabel-diagnostic-200-v1/aggregate.json",
+      "classification": "historical_diagnostic_not_certified_gate"
+    }
+  ],
+  "round2_prefix": {
+    "source": "local/phase10u-runs/hard-relabel/attempt-0002/hard-labels.jsonl",
+    "certified_rows": 600,
+    "certified_prefix_sha256": "68da42b23eda4f1238990de0dbddae88cb4a9518f7abb5366b7d1b2f99fbd4c4",
+    "observed_rows": 686,
+    "observed_full_sha256": "05a28d01bce7cc955b16b730458830786bf3300a2cf48660e90235c0b88fd2a0",
+    "unreceipted_tail_rows": 86,
+    "reuse": "preserve original; only certified prefix eligible after independent gates; tail requires reconciliation"
+  },
+  "authorization": {
+    "long_jobs": false,
+    "selfplay": false,
+    "final_holdout": false,
+    "promotion": false,
+    "push": false,
+    "release": false
+  },
+  "current_adapter_audit": {
+    "path": "artifacts/phase10u/prior-adapter/adapter-audit-final.json",
+    "sha256": "24ee743121dc4f9f43046f5d23ee3231542159c1facc99324db24df1c6cca468"
+  }
+}

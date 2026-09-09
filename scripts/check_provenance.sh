@@ -28,15 +28,15 @@ required_provenance = {
 expected_bindings = {
     "open_shogi_wasm.d.ts": "8b899de7246585f5c7ccafe0b5b2dde012eec0af12a8032d5d4e5741be9cf063",
     "open_shogi_wasm.js": "8d36745850bb91e90f93436a9c40d833686cca6c1232ab2c7c9346a59e109023",
-    "open_shogi_wasm_bg.wasm": "1e4291d611fa029d1414d88b434fb80b1fbc73407d2c019a99f76861adc1fb0c",
+    "open_shogi_wasm_bg.wasm": "13ea44c68bc8a239fbaeb87c80e5fac00ab2ae8faa017ea223f8a3deef1ccd52",
     "open_shogi_wasm_bg.wasm.d.ts": "efb20b72f02808e77a8baed92fc80fa2f3e1c9b8ce0709f2cd49ed7259933068",
 }
 failures: list[str] = []
-text = (root / "PROVENANCE.md").read_text(encoding="utf-8")
+text = (root / "docs/provenance/source.md").read_text(encoding="utf-8")
 
 for required in sorted(required_provenance):
     if required not in text:
-        failures.append(f"PROVENANCE.md is missing required evidence: {required}")
+        failures.append(f"docs/provenance/source.md is missing required evidence: {required}")
 
 for name, expected in expected_bindings.items():
     observed = hashlib.sha256((root / "bindings/wasm" / name).read_bytes()).hexdigest()

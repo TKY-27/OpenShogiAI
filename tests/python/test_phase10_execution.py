@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -131,8 +132,14 @@ def test_unknown_variant_is_rejected() -> None:
         validate_frozen_variant("residual-v0")
 
 
-def test_frozen_start_pool_has_distinct_reserves_and_zero_holdout_overlap() -> None:
-    manifest = load_phase10_start_pool_manifest(ROOT / "artifacts/phase10/start-pool-manifest.json")
+def test_frozen_start_pool_has_distinct_reserves_and_zero_holdout_overlap(tmp_path: Path) -> None:
+    source = tmp_path / "start-pool.json"
+    source.write_bytes(
+        gzip.decompress(
+            (ROOT / "tests/fixtures/start-pool/start-pool-manifest.json.gz").read_bytes()
+        )
+    )
+    manifest = load_phase10_start_pool_manifest(source)
     positions = manifest["positions"]
     assert len(positions) == 800
     assert len({row["positionId"] for row in positions}) == 800
@@ -144,15 +151,17 @@ def test_frozen_start_pool_has_distinct_reserves_and_zero_holdout_overlap() -> N
         "hard_middlegame_endgame": 3886,
     }
     overlap = json.loads(
-        (ROOT / "artifacts/phase10/start-pool-overlap-report.json").read_text(encoding="utf-8")
+        gzip.decompress(
+            (ROOT / "tests/fixtures/start-pool/start-pool-overlap-report.json.gz").read_bytes()
+        )
     )
     assert overlap["splitLeakage"]["legacyFinalHoldoutCanonicalOverlap"] == 0
     assert overlap["splitLeakage"]["legacyFinalHoldoutHistoryGroupOverlap"] == 0
 
 
 def test_start_pool_loader_keeps_the_fifty_unique_integrity_gate(tmp_path: Path) -> None:
-    source = ROOT / "artifacts/phase10/start-pool-manifest.json"
-    manifest = json.loads(source.read_text(encoding="utf-8"))
+    source = ROOT / "tests/fixtures/start-pool/start-pool-manifest.json.gz"
+    manifest = json.loads(gzip.decompress(source.read_bytes()))
     manifest["groups"]["general_opening"]["uniqueEligible"] = 49
     mutated = tmp_path / "short-start-pool.json"
     mutated.write_text(json.dumps(manifest), encoding="utf-8")

@@ -1,0 +1,51 @@
+{
+  "schema": "open_shogiai_pure_learned_a1_profile/v1",
+  "profile": "pure_learned",
+  "modelFormat": "OSAT10A1",
+  "leafEvaluation": "selected_learned_model_only",
+  "handcraftedEvaluation": false,
+  "residualEvaluation": false,
+  "compositeEvaluation": false,
+  "openingBook": false,
+  "openingStyleRestriction": false,
+  "teacherDuringPlay": false,
+  "handcraftedFallback": false,
+  "modelHashRequiredBeforeGameStart": true,
+  "terminalMateAndRuleHandling": "exact",
+  "allowedSearchFacilities": [
+    "ordinary_search",
+    "time_management",
+    "transposition_tables",
+    "move_ordering",
+    "legal_move_generation"
+  ],
+  "requiredProofCounters": [
+    "learned_eval_calls",
+    "handcrafted_eval_calls",
+    "residual_eval_calls",
+    "composite_eval_calls",
+    "book_hits",
+    "teacher_calls",
+    "fallback_count",
+    "model_sha256",
+    "evaluator_profile_schema_hash"
+  ],
+  "validity": {
+    "learnedEvalCallsMinimum": 1,
+    "prohibitedCounterMaximum": 0
+  },
+  "architecture": "a1-king-relative-128",
+  "featureSchemaVersion": 1,
+  "features": 8433,
+  "accumulatorWidth": 128,
+  "hiddenWidth": 32,
+  "heads": [
+    "score_cp",
+    "wdl_loss_draw_win"
+  ],
+  "policy": "disabled",
+  "scorePerspective": "side_to_move",
+  "nonmateScoreBound": 28999,
+  "modelCompatibility": "OSAT10A1 is distinct from OSAVAL02; no format fallback",
+  "historySemantics": "OSAVAL02 availability, repetition count 1..4 and relative continuous-check ownership"
+}

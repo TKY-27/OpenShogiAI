@@ -21,8 +21,8 @@ working_memory_limit_gib = 20
 default_parallel_jobs = 4
 
 [paths]
-raw_data = "data/raw"
-processed_data = "data/processed"
-weights = "weights"
-artifacts = "artifacts"
+raw_data = "local/runs/data/raw"
+processed_data = "local/runs/data/processed"
+weights = "local/runs/models"
+artifacts = "local/runs"
 local = "local"

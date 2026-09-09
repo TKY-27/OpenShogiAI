@@ -389,9 +389,8 @@ apply `min-count` at query time. Dataset directories, SQLite files, and exports 
 atomically without overwriting an existing destination.
 
 The portable dataset manifest deliberately does not infer repository or runtime state.
-`PHASE_3_REPORT.md` is the authoritative external binding from its registry/catalog and
-acquisition-manifest hashes to the clean implementation commits, runtime versions, observed
-artifact hashes, and independent-output comparison.
+Separate run metadata must bind registry/catalog and acquisition-manifest hashes to the
+implementation commit, runtime versions, output hashes and independent-output comparisons.
 
 ## Phase 8 browser Worker boundary
 

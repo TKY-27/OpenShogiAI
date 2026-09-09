@@ -16,7 +16,7 @@ use open_shogi_core::{
     MAX_SECURE_CLEANUP_QUARANTINE_ENTRIES, NeuralEvaluationMode, NeuralEvaluator,
     NeuralQuantization, Osaval02Evaluator, Osaval02Quantization, Position, RandomMoveSelector,
     RepetitionOutcome, SearchConfig, SearchEngine, SearchLimits, SearchStats, SearchTermination,
-    Side,
+    Phase10TEvaluator, Side,
     parse_csa_game, parse_sfen, to_csa_game, to_sfen,
 };
 
@@ -30,7 +30,7 @@ use crate::{
 };
 
 const SCHEMA: &str = "phase2_arena_report/v2";
-const STATE_SCHEMA: &str = "phase2_arena_state/v4";
+const STATE_SCHEMA: &str = "phase2_arena_state/v5";
 const MAX_GAMES: u32 = 10_000;
 const DEFAULT_GAMES: u32 = 20;
 const DEFAULT_MAX_PLIES: u32 = 512;
@@ -40,6 +40,8 @@ const DEFAULT_NODES: u64 = 5_000;
 const MAX_NODES_PER_MOVE: u64 = 1_000_000_000;
 const MAX_MOVETIME_MS: u64 = 3_600_000;
 const MAX_PLIES: u32 = 10_000;
+const PHASE10T_HEADER_BYTES: usize = 44;
+const PHASE10T_CHECKSUM_BYTES: usize = 32;
 const MAX_STATE_BYTES: usize = 5_242_880;
 const MAX_REPORT_BYTES: usize = 5_242_880;
 const MAX_REPORT_FIXED_BYTES: usize = 65_536;
@@ -67,6 +69,7 @@ enum PlayerKind {
     Neural,
     Residual,
     Composite,
+    PureLearned,
 }
 
 impl PlayerKind {
@@ -81,8 +84,9 @@ impl PlayerKind {
             "neural" => Ok(Self::Neural),
             "residual" => Ok(Self::Residual),
             "composite" => Ok(Self::Composite),
+            "pure_learned" => Ok(Self::PureLearned),
             _ => Err(
-                "player type must be random, material, handcrafted-baseline, handcrafted-experimental, neural, residual, or composite"
+                "player type must be random, material, handcrafted-baseline, handcrafted-experimental, neural, residual, composite, or pure_learned"
                     .to_owned(),
             ),
         }
@@ -93,12 +97,15 @@ impl PlayerKind {
     }
 
     const fn uses_model(self) -> bool {
-        matches!(self, Self::Neural | Self::Residual | Self::Composite)
+        matches!(
+            self,
+            Self::Neural | Self::Residual | Self::Composite | Self::PureLearned
+        )
     }
 
     const fn neural_mode(self) -> Option<NeuralEvaluationMode> {
         match self {
-            Self::Neural => Some(NeuralEvaluationMode::PureValue),
+            Self::Neural | Self::PureLearned => Some(NeuralEvaluationMode::PureValue),
             Self::Residual => Some(NeuralEvaluationMode::Residual),
             Self::Composite => Some(NeuralEvaluationMode::Composite),
             _ => None,
@@ -114,6 +121,7 @@ impl PlayerKind {
             Self::Neural => "neural",
             Self::Residual => "residual",
             Self::Composite => "composite",
+            Self::PureLearned => "pure_learned",
         }
     }
 }
@@ -136,6 +144,17 @@ struct PlayerSpec {
 enum LoadedModel {
     Osaval01(Arc<NeuralEvaluator>),
     Osaval02(Arc<Osaval02Evaluator>),
+    Phase10T {
+        evaluator: Arc<Phase10TEvaluator>,
+        payload_sha256: String,
+    },
+}
+
+/// The report's fixed player A/B slots, which swap colors between paired games.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlayerSlot {
+    A,
+    B,
 }
 
 impl PlayerSpec {
@@ -148,6 +167,7 @@ impl PlayerSpec {
             PlayerKind::Neural => self.search_label("neural"),
             PlayerKind::Residual => self.search_label("residual"),
             PlayerKind::Composite => self.search_label("composite-50-50"),
+            PlayerKind::PureLearned => self.search_label("pure_learned"),
         }
     }
 
@@ -173,6 +193,7 @@ impl PlayerSpec {
         self.model.as_ref().map(|model| match model {
             LoadedModel::Osaval01(model) => model.identity().sha256_hex(),
             LoadedModel::Osaval02(model) => model.identity().weight_payload_sha256.clone(),
+            LoadedModel::Phase10T { payload_sha256, .. } => payload_sha256.clone(),
         })
     }
 
@@ -180,6 +201,7 @@ impl PlayerSpec {
         self.model.as_ref().map(|model| match model {
             LoadedModel::Osaval01(model) => model.identity().architecture_version,
             LoadedModel::Osaval02(model) => model.identity().format_version,
+            LoadedModel::Phase10T { evaluator, .. } => evaluator.identity().version,
         })
     }
 
@@ -193,6 +215,7 @@ impl PlayerSpec {
                 Osaval02Quantization::Float32 => "float32",
                 Osaval02Quantization::Int8 => "int8",
             },
+            LoadedModel::Phase10T { .. } => "float32",
         })
     }
 }
@@ -322,6 +345,18 @@ struct GameSummary {
     player_b_searches: u64,
     player_b_neural_inference_calls: u64,
     player_b_neural_inference_time_ns: u64,
+    player_a_learned_eval_calls: u64,
+    player_a_handcrafted_eval_calls: u64,
+    player_a_residual_eval_calls: u64,
+    player_a_composite_eval_calls: u64,
+    player_a_fallback_count: u64,
+    player_a_book_hits: u64,
+    player_b_learned_eval_calls: u64,
+    player_b_handcrafted_eval_calls: u64,
+    player_b_residual_eval_calls: u64,
+    player_b_composite_eval_calls: u64,
+    player_b_fallback_count: u64,
+    player_b_book_hits: u64,
     illegal_moves: u64,
     search_winner: bool,
     player_a_winner: bool,
@@ -341,6 +376,12 @@ struct SearchTotals {
     pruned_moves: u64,
     neural_inference_calls: u64,
     neural_inference_time_ns: u64,
+    learned_eval_calls: u64,
+    handcrafted_eval_calls: u64,
+    residual_eval_calls: u64,
+    composite_eval_calls: u64,
+    fallback_count: u64,
+    book_hits: u64,
 }
 
 struct GameOutcome {
@@ -531,6 +572,14 @@ fn parse_arguments(arguments: &[String]) -> Result<ArenaConfig, String> {
             "--b-model" => {
                 player_b.model_path = Some(path_next(arguments, &mut index, "--b-model")?);
             }
+            "--a-model-sha256" => {
+                player_a.model_sha256 =
+                    Some(next_value(arguments, &mut index, "--a-model-sha256")?.to_owned());
+            }
+            "--b-model-sha256" => {
+                player_b.model_sha256 =
+                    Some(next_value(arguments, &mut index, "--b-model-sha256")?.to_owned());
+            }
             "--a-opening" => player_a.opening = true,
             "--b-opening" => player_b.opening = true,
             "--a-opening-profile" => {
@@ -632,12 +681,48 @@ fn validate_player(name: &str, player: &PlayerSpec) -> Result<(), String> {
         (_, false) => {}
         (_, true) => return Err(format!("--{name}-model requires a model-backed player {name}")),
     }
+    if let Some(hash) = player.model_sha256.as_deref()
+        && (hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    {
+        return Err(format!("--{name}-model-sha256 must be 64 lowercase hexadecimal characters"));
+    }
+    if player.kind == PlayerKind::PureLearned {
+        if player.model_sha256.is_none() {
+            return Err(format!(
+                "pure_learned player {name} requires --{name}-model-sha256"
+            ));
+        }
+        if player.opening {
+            return Err(format!("pure_learned player {name} prohibits opening books"));
+        }
+        if player.opening_profile != OpeningProfile::Unrestricted {
+            return Err(format!(
+                "pure_learned player {name} requires --{name}-opening-profile unrestricted"
+            ));
+        }
+    }
     Ok(())
 }
 
 fn resolve_models(player_a: &mut PlayerSpec, player_b: &mut PlayerSpec) -> Result<(), String> {
     resolve_model_identity("a", player_a)?;
     if player_a.model_path.is_some() && player_a.model_path == player_b.model_path {
+        if let Some(expected) = player_b.model_sha256.as_deref()
+            && Some(expected) != player_a.model_sha256.as_deref()
+        {
+            return Err("--b-model SHA-256 mismatch".to_owned());
+        }
+        if player_b.kind == PlayerKind::PureLearned
+            && !matches!(
+                player_a.model,
+                Some(LoadedModel::Osaval02(_) | LoadedModel::Phase10T { .. })
+            )
+        {
+            return Err("pure_learned player b requires an OSAVAL02 or OSAT10A1 model".to_owned());
+        }
         player_b.model_sha256.clone_from(&player_a.model_sha256);
         player_b.model_size = player_a.model_size;
         player_b.model.clone_from(&player_a.model);
@@ -654,7 +739,21 @@ fn resolve_model_identity(name: &str, player: &mut PlayerSpec) -> Result<(), Str
         path,
         u64::try_from(MAX_NEURAL_MODEL_BYTES).unwrap_or(u64::MAX),
     )?;
-    let model = if artifact.bytes.starts_with(b"OSAVAL02") {
+    let model = if artifact.bytes.starts_with(b"OSAT10A1") {
+        if player.kind != PlayerKind::PureLearned {
+            return Err(format!(
+                "--{name}-model OSAT10A1 is only supported by pure_learned"
+            ));
+        }
+        Phase10TEvaluator::from_bytes(&artifact.bytes)
+            .map(|model| LoadedModel::Phase10T {
+                evaluator: Arc::new(model),
+                payload_sha256: sha256_bytes(
+                    &artifact.bytes[PHASE10T_HEADER_BYTES..artifact.bytes.len() - PHASE10T_CHECKSUM_BYTES],
+                ),
+            })
+            .map_err(|error| format!("cannot load --{name}-model {}: {error}", path.display()))?
+    } else if artifact.bytes.starts_with(b"OSAVAL02") {
         Osaval02Evaluator::from_bytes(&artifact.bytes)
             .map(|model| LoadedModel::Osaval02(Arc::new(model)))
             .map_err(|error| format!("cannot load --{name}-model {}: {error}", path.display()))?
@@ -663,6 +762,18 @@ fn resolve_model_identity(name: &str, player: &mut PlayerSpec) -> Result<(), Str
             .map(|model| LoadedModel::Osaval01(Arc::new(model)))
             .map_err(|error| format!("cannot load --{name}-model {}: {error}", path.display()))?
     };
+    if let Some(expected) = player.model_sha256.as_deref()
+        && expected != artifact.sha256
+    {
+        return Err(format!("--{name}-model SHA-256 mismatch"));
+    }
+    if player.kind == PlayerKind::PureLearned
+        && !matches!(model, LoadedModel::Osaval02(_) | LoadedModel::Phase10T { .. })
+    {
+        return Err(format!(
+            "pure_learned player {name} requires an OSAVAL02 or OSAT10A1 model"
+        ));
+    }
     player.model_sha256 = Some(artifact.sha256);
     player.model_size = Some(artifact.size);
     player.model = Some(model);
@@ -799,6 +910,8 @@ fn play_game(
                     profile: black_spec.opening_profile,
                     ..OpeningPolicy::default()
                 },
+                &config.initial_position,
+                game.moves(),
                 &mut black_totals,
             ),
             Side::White => white_player.select(
@@ -809,6 +922,8 @@ fn play_game(
                     profile: white_spec.opening_profile,
                     ..OpeningPolicy::default()
                 },
+                &config.initial_position,
+                game.moves(),
                 &mut white_totals,
             ),
         };
@@ -883,6 +998,18 @@ fn play_game(
         player_b_searches: player_b_totals.searches,
         player_b_neural_inference_calls: player_b_totals.neural_inference_calls,
         player_b_neural_inference_time_ns: player_b_totals.neural_inference_time_ns,
+        player_a_learned_eval_calls: player_a_totals.learned_eval_calls,
+        player_a_handcrafted_eval_calls: player_a_totals.handcrafted_eval_calls,
+        player_a_residual_eval_calls: player_a_totals.residual_eval_calls,
+        player_a_composite_eval_calls: player_a_totals.composite_eval_calls,
+        player_a_fallback_count: player_a_totals.fallback_count,
+        player_a_book_hits: player_a_totals.book_hits,
+        player_b_learned_eval_calls: player_b_totals.learned_eval_calls,
+        player_b_handcrafted_eval_calls: player_b_totals.handcrafted_eval_calls,
+        player_b_residual_eval_calls: player_b_totals.residual_eval_calls,
+        player_b_composite_eval_calls: player_b_totals.composite_eval_calls,
+        player_b_fallback_count: player_b_totals.fallback_count,
+        player_b_book_hits: player_b_totals.book_hits,
         illegal_moves,
         search_winner: winner_classification.0,
         player_a_winner: winner_classification.1,
@@ -908,6 +1035,20 @@ fn combine_search_totals(left: SearchTotals, right: SearchTotals) -> SearchTotal
         neural_inference_time_ns: left
             .neural_inference_time_ns
             .saturating_add(right.neural_inference_time_ns),
+        learned_eval_calls: left
+            .learned_eval_calls
+            .saturating_add(right.learned_eval_calls),
+        handcrafted_eval_calls: left
+            .handcrafted_eval_calls
+            .saturating_add(right.handcrafted_eval_calls),
+        residual_eval_calls: left
+            .residual_eval_calls
+            .saturating_add(right.residual_eval_calls),
+        composite_eval_calls: left
+            .composite_eval_calls
+            .saturating_add(right.composite_eval_calls),
+        fallback_count: left.fallback_count.saturating_add(right.fallback_count),
+        book_hits: left.book_hits.saturating_add(right.book_hits),
     }
 }
 
@@ -943,7 +1084,11 @@ fn final_outcome(outcome: Option<GameOutcome>, game_end: Option<GameEnd>) -> Gam
 
 enum Player {
     Random(RandomMoveSelector),
-    Search { engine: SearchEngine, depth: u8 },
+    Search {
+        engine: Box<SearchEngine>,
+        depth: u8,
+        a1_history: bool,
+    },
 }
 
 impl Player {
@@ -957,52 +1102,91 @@ impl Player {
                     ..SearchConfig::default()
                 };
                 config.evaluation = evaluation_config(evaluator);
-                let engine = if let Some(mode) = evaluator.neural_mode() {
-                    let model = spec
-                        .model
-                        .as_ref()
-                        .ok_or_else(|| "model-backed player lacks a loaded model".to_owned())?;
-                    match model {
-                        LoadedModel::Osaval01(model) => {
-                            SearchEngine::with_neural_mode(config, Arc::clone(model), mode)
-                        }
-                        LoadedModel::Osaval02(model) => {
-                            if mode != NeuralEvaluationMode::PureValue {
-                                return Err(
-                                    "OSAVAL02 only supports pure-value semantics; score blending is forbidden"
-                                        .to_owned(),
-                                );
+                let (engine, a1_history) = if let Some(model) = spec.model.as_ref() {
+                    if let LoadedModel::Phase10T { evaluator: model, .. } = model {
+                        (
+                            SearchEngine::with_phase10t(
+                                config,
+                                Arc::clone(model),
+                                spec.model_sha256.as_deref().ok_or_else(|| {
+                                    "pure_learned a1 player lacks a model SHA-256".to_owned()
+                                })?,
+                            )?,
+                            true,
+                        )
+                    } else {
+                        let mode = evaluator.neural_mode().ok_or_else(|| {
+                            "model-backed player lacks a neural evaluation mode".to_owned()
+                        })?;
+                        let engine = match model {
+                            LoadedModel::Osaval01(model) => {
+                                SearchEngine::with_neural_mode(config, Arc::clone(model), mode)
                             }
-                            SearchEngine::with_osaval02(config, Arc::clone(model))
-                        }
+                            LoadedModel::Osaval02(model) => {
+                                if mode != NeuralEvaluationMode::PureValue {
+                                    return Err(
+                                        "OSAVAL02 only supports pure-value semantics; score blending is forbidden"
+                                            .to_owned(),
+                                    );
+                                }
+                                if evaluator == PlayerKind::PureLearned {
+                                    SearchEngine::with_pure_learned(
+                                        config,
+                                        Arc::clone(model),
+                                        spec.model_sha256.as_deref().ok_or_else(|| {
+                                            "pure_learned player lacks a model SHA-256".to_owned()
+                                        })?,
+                                    )?
+                                } else {
+                                    SearchEngine::with_osaval02(config, Arc::clone(model))
+                                }
+                            }
+                            LoadedModel::Phase10T { .. } => unreachable!("a1 model handled above"),
+                        };
+                        (engine, false)
                     }
                 } else {
-                    SearchEngine::new(config)
+                    (SearchEngine::new(config), false)
                 };
                 Ok(Self::Search {
-                    engine,
+                    engine: Box::new(engine),
                     depth: spec.depth,
+                    a1_history,
                 })
             }
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a move selection carries the fixed game history and the measured totals"
+    )]
     fn select(
         &mut self,
         position: &Position,
         budget: &Budget,
         opening_book: Option<&OpeningBook>,
         opening_policy: OpeningPolicy,
+        initial: &Position,
+        moves: &[Move],
         totals: &mut SearchTotals,
     ) -> Option<Move> {
         if let Some(choice) =
             opening_book.and_then(|book| book.select_with_policy(position, opening_policy))
         {
+            totals.book_hits = totals.book_hits.saturating_add(1);
             return Some(choice.movement);
         }
         match self {
             Self::Random(random) => random.select(position),
-            Self::Search { engine, depth } => {
+            Self::Search {
+                engine,
+                depth,
+                a1_history,
+            } => {
+                if *a1_history && engine.set_phase10t_history(initial, moves).is_err() {
+                    return None;
+                }
                 let limits = match budget {
                     Budget::Nodes(nodes) => SearchLimits {
                         max_depth: *depth,
@@ -1057,6 +1241,7 @@ const fn evaluation_config(kind: PlayerKind) -> EvaluationConfig {
         | PlayerKind::Random => {
             EvaluationConfig::handcrafted_experimental()
         }
+        PlayerKind::PureLearned => EvaluationConfig::disabled(),
     }
 }
 
@@ -1072,6 +1257,19 @@ fn add_stats(totals: &mut SearchTotals, stats: SearchStats) {
     totals.neural_inference_time_ns = totals
         .neural_inference_time_ns
         .saturating_add(u64::try_from(stats.neural_inference_time.as_nanos()).unwrap_or(u64::MAX));
+    totals.learned_eval_calls = totals
+        .learned_eval_calls
+        .saturating_add(stats.learned_eval_calls);
+    totals.handcrafted_eval_calls = totals
+        .handcrafted_eval_calls
+        .saturating_add(stats.handcrafted_eval_calls);
+    totals.residual_eval_calls = totals
+        .residual_eval_calls
+        .saturating_add(stats.residual_eval_calls);
+    totals.composite_eval_calls = totals
+        .composite_eval_calls
+        .saturating_add(stats.composite_eval_calls);
+    totals.fallback_count = totals.fallback_count.saturating_add(stats.fallback_count);
 }
 
 fn outcome_from_end(end: GameEnd) -> GameOutcome {
@@ -1834,6 +2032,18 @@ fn game_state_row(game: &GameSummary) -> String {
         game.player_b_searches.to_string(),
         game.player_b_neural_inference_calls.to_string(),
         game.player_b_neural_inference_time_ns.to_string(),
+        game.player_a_learned_eval_calls.to_string(),
+        game.player_a_handcrafted_eval_calls.to_string(),
+        game.player_a_residual_eval_calls.to_string(),
+        game.player_a_composite_eval_calls.to_string(),
+        game.player_a_fallback_count.to_string(),
+        game.player_a_book_hits.to_string(),
+        game.player_b_learned_eval_calls.to_string(),
+        game.player_b_handcrafted_eval_calls.to_string(),
+        game.player_b_residual_eval_calls.to_string(),
+        game.player_b_composite_eval_calls.to_string(),
+        game.player_b_fallback_count.to_string(),
+        game.player_b_book_hits.to_string(),
     ]
     .join("\t")
 }
@@ -1893,7 +2103,7 @@ fn read_state(root: &AnchoredDir, signature: &str) -> Result<(String, Vec<GameSu
 
 fn parse_game_state_row(line: &str, expected_id: u32) -> Result<GameSummary, String> {
     let fields = line.split('\t').collect::<Vec<_>>();
-    if fields.len() != 37 || fields[0] != "game" {
+    if fields.len() != 49 || fields[0] != "game" {
         return Err("malformed arena resume game row".to_owned());
     }
     let id = parse_state(fields[1], "game id")?;
@@ -1949,6 +2159,24 @@ fn parse_game_state_row(line: &str, expected_id: u32) -> Result<GameSummary, Str
             fields[36],
             "player B neural inference time",
         )?,
+        player_a_learned_eval_calls: parse_state(fields[37], "player A learned eval calls")?,
+        player_a_handcrafted_eval_calls: parse_state(
+            fields[38],
+            "player A handcrafted eval calls",
+        )?,
+        player_a_residual_eval_calls: parse_state(fields[39], "player A residual eval calls")?,
+        player_a_composite_eval_calls: parse_state(fields[40], "player A composite eval calls")?,
+        player_a_fallback_count: parse_state(fields[41], "player A fallback count")?,
+        player_a_book_hits: parse_state(fields[42], "player A book hits")?,
+        player_b_learned_eval_calls: parse_state(fields[43], "player B learned eval calls")?,
+        player_b_handcrafted_eval_calls: parse_state(
+            fields[44],
+            "player B handcrafted eval calls",
+        )?,
+        player_b_residual_eval_calls: parse_state(fields[45], "player B residual eval calls")?,
+        player_b_composite_eval_calls: parse_state(fields[46], "player B composite eval calls")?,
+        player_b_fallback_count: parse_state(fields[47], "player B fallback count")?,
+        player_b_book_hits: parse_state(fields[48], "player B book hits")?,
     })
 }
 
@@ -2498,11 +2726,14 @@ fn preflight_report_size(config: &ArenaConfig) -> Result<(), String> {
 fn maximum_report_game_bytes(config: &ArenaConfig, id: u32) -> usize {
     let game = maximum_game_summary(config, id);
     let mut output = String::new();
+    let maximum_proof = ProofCounters::maximum();
     write_report_game(
         &mut output,
         &game,
         MAX_JSON_SAFE_INTEGER,
         MAX_JSON_SAFE_INTEGER,
+        (&config.player_a, &maximum_proof),
+        (&config.player_b, &maximum_proof),
     );
     output.len()
 }
@@ -2543,6 +2774,18 @@ fn maximum_game_summary(config: &ArenaConfig, id: u32) -> GameSummary {
         player_b_searches: maximum,
         player_b_neural_inference_calls: maximum,
         player_b_neural_inference_time_ns: maximum,
+        player_a_learned_eval_calls: maximum,
+        player_a_handcrafted_eval_calls: maximum,
+        player_a_residual_eval_calls: maximum,
+        player_a_composite_eval_calls: maximum,
+        player_a_fallback_count: maximum,
+        player_a_book_hits: maximum,
+        player_b_learned_eval_calls: maximum,
+        player_b_handcrafted_eval_calls: maximum,
+        player_b_residual_eval_calls: maximum,
+        player_b_composite_eval_calls: maximum,
+        player_b_fallback_count: maximum,
+        player_b_book_hits: maximum,
         illegal_moves: maximum,
         search_winner: false,
         player_a_winner: false,
@@ -2723,6 +2966,54 @@ fn render_report(
             .iter()
             .map(|game| game.player_b_neural_inference_time_ns),
     );
+    let player_a_proof = ProofCounters {
+        learned_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_a_learned_eval_calls),
+        ),
+        handcrafted_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_a_handcrafted_eval_calls),
+        ),
+        residual_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_a_residual_eval_calls),
+        ),
+        composite_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_a_composite_eval_calls),
+        ),
+        fallback_count: saturating_sum(games.iter().map(|game| game.player_a_fallback_count)),
+        book_hits: saturating_sum(games.iter().map(|game| game.player_a_book_hits)),
+    };
+    let player_b_proof = ProofCounters {
+        learned_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_b_learned_eval_calls),
+        ),
+        handcrafted_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_b_handcrafted_eval_calls),
+        ),
+        residual_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_b_residual_eval_calls),
+        ),
+        composite_eval_calls: saturating_sum(
+            games
+                .iter()
+                .map(|game| game.player_b_composite_eval_calls),
+        ),
+        fallback_count: saturating_sum(games.iter().map(|game| game.player_b_fallback_count)),
+        book_hits: saturating_sum(games.iter().map(|game| game.player_b_book_hits)),
+    };
     let illegal = saturating_sum(games.iter().map(|game| game.illegal_moves));
     let draws = games
         .iter()
@@ -2825,13 +3116,21 @@ fn render_report(
     write_opening_identity(&mut output, config);
     write!(
         output,
-        "}},\"metrics\":{{\"games\":{},\"finishedGames\":{},\"playerAWins\":{},\"playerBWins\":{},\"searchWins\":{},\"draws\":{},\"nodesPerSecond\":{nps},\"averageDepth\":{average_depth},\"ttHitRate\":{tt_hit_rate},\"cutoffRate\":{cutoff_rate},\"pruningRate\":{pruning_rate},\"millisecondsPerMove\":{milliseconds_per_move},\"neuralInferenceCalls\":{neural_inference_calls},\"neuralInferenceTimeNs\":{neural_inference_time_ns},\"playerASearchNodes\":{player_a_search_nodes},\"playerASearchElapsedMs\":{player_a_search_elapsed_ms},\"playerADepthSum\":{player_a_depth_sum},\"playerASearches\":{player_a_searches},\"playerANeuralInferenceCalls\":{player_a_neural_inference_calls},\"playerANeuralInferenceTimeNs\":{player_a_neural_inference_time_ns},\"playerBSearchNodes\":{player_b_search_nodes},\"playerBSearchElapsedMs\":{player_b_search_elapsed_ms},\"playerBDepthSum\":{player_b_depth_sum},\"playerBSearches\":{player_b_searches},\"playerBNeuralInferenceCalls\":{player_b_neural_inference_calls},\"playerBNeuralInferenceTimeNs\":{player_b_neural_inference_time_ns},\"peakMemoryBytes\":null,\"illegalMoves\":{illegal}}},\"games\":[",
+        "}},\"metrics\":{{\"games\":{},\"finishedGames\":{},\"playerAWins\":{},\"playerBWins\":{},\"searchWins\":{},\"draws\":{},\"nodesPerSecond\":{nps},\"averageDepth\":{average_depth},\"ttHitRate\":{tt_hit_rate},\"cutoffRate\":{cutoff_rate},\"pruningRate\":{pruning_rate},\"millisecondsPerMove\":{milliseconds_per_move},\"neuralInferenceCalls\":{neural_inference_calls},\"neuralInferenceTimeNs\":{neural_inference_time_ns},\"playerASearchNodes\":{player_a_search_nodes},\"playerASearchElapsedMs\":{player_a_search_elapsed_ms},\"playerADepthSum\":{player_a_depth_sum},\"playerASearches\":{player_a_searches},\"playerANeuralInferenceCalls\":{player_a_neural_inference_calls},\"playerANeuralInferenceTimeNs\":{player_a_neural_inference_time_ns},\"playerBSearchNodes\":{player_b_search_nodes},\"playerBSearchElapsedMs\":{player_b_search_elapsed_ms},\"playerBDepthSum\":{player_b_depth_sum},\"playerBSearches\":{player_b_searches},\"playerBNeuralInferenceCalls\":{player_b_neural_inference_calls},\"playerBNeuralInferenceTimeNs\":{player_b_neural_inference_time_ns},\"playerARuntimeProof\":",
         games.len(),
         finished,
         player_wins.0,
         player_wins.1,
         search_wins,
         draws
+    )
+    .expect("writing to String cannot fail");
+    write_runtime_proof(&mut output, &config.player_a, &player_a_proof);
+    output.push_str(",\"playerBRuntimeProof\":");
+    write_runtime_proof(&mut output, &config.player_b, &player_b_proof);
+    write!(
+        output,
+        ",\"peakMemoryBytes\":null,\"illegalMoves\":{illegal}}},\"games\":["
     )
     .expect("writing to String cannot fail");
     for (index, game) in games.iter().enumerate() {
@@ -2843,6 +3142,8 @@ fn render_report(
             game,
             player_a_elapsed_ms[index],
             player_b_elapsed_ms[index],
+            (&config.player_a, &game_proof(game, PlayerSlot::A)),
+            (&config.player_b, &game_proof(game, PlayerSlot::B)),
         );
     }
     output.push_str("]}");
@@ -2861,10 +3162,12 @@ fn write_report_game(
     game: &GameSummary,
     player_a_elapsed_ms: u64,
     player_b_elapsed_ms: u64,
+    player_a: (&PlayerSpec, &ProofCounters),
+    player_b: (&PlayerSpec, &ProofCounters),
 ) {
     write!(
         output,
-        "{{\"id\":{},\"black\":{},\"white\":{},\"result\":\"{}\",\"moves\":{},\"csaPath\":{},\"csaSha256\":{},\"csaSize\":{},\"neuralInferenceCalls\":{},\"neuralInferenceTimeNs\":{},\"playerASearchNodes\":{},\"playerASearchElapsedMs\":{},\"playerADepthSum\":{},\"playerASearches\":{},\"playerANeuralInferenceCalls\":{},\"playerANeuralInferenceTimeNs\":{},\"playerBSearchNodes\":{},\"playerBSearchElapsedMs\":{},\"playerBDepthSum\":{},\"playerBSearches\":{},\"playerBNeuralInferenceCalls\":{},\"playerBNeuralInferenceTimeNs\":{}}}",
+        "{{\"id\":{},\"black\":{},\"white\":{},\"result\":\"{}\",\"moves\":{},\"csaPath\":{},\"csaSha256\":{},\"csaSize\":{},\"neuralInferenceCalls\":{},\"neuralInferenceTimeNs\":{},\"playerASearchNodes\":{},\"playerASearchElapsedMs\":{},\"playerADepthSum\":{},\"playerASearches\":{},\"playerANeuralInferenceCalls\":{},\"playerANeuralInferenceTimeNs\":{},\"playerARuntimeProof\":",
         game.id,
         json_string(&game.black),
         json_string(&game.white),
@@ -2881,6 +3184,14 @@ fn write_report_game(
         game.player_a_searches,
         game.player_a_neural_inference_calls,
         game.player_a_neural_inference_time_ns,
+    )
+    .expect("writing to String cannot fail");
+    write_runtime_proof(output, player_a.0, player_a.1);
+    output.push_str(",\"playerBRuntimeProof\":");
+    write_runtime_proof(output, player_b.0, player_b.1);
+    write!(
+        output,
+        ",\"playerBSearchNodes\":{},\"playerBSearchElapsedMs\":{},\"playerBDepthSum\":{},\"playerBSearches\":{},\"playerBNeuralInferenceCalls\":{},\"playerBNeuralInferenceTimeNs\":{}}}",
         game.player_b_search_nodes,
         player_b_elapsed_ms,
         game.player_b_depth_sum,
@@ -2891,8 +3202,42 @@ fn write_report_game(
     .expect("writing to String cannot fail");
 }
 
+/// Per-game measured proof counters for one fixed report slot.
+fn game_proof(game: &GameSummary, slot: PlayerSlot) -> ProofCounters {
+    match slot {
+        PlayerSlot::A => ProofCounters {
+            learned_eval_calls: game.player_a_learned_eval_calls,
+            handcrafted_eval_calls: game.player_a_handcrafted_eval_calls,
+            residual_eval_calls: game.player_a_residual_eval_calls,
+            composite_eval_calls: game.player_a_composite_eval_calls,
+            fallback_count: game.player_a_fallback_count,
+            book_hits: game.player_a_book_hits,
+        },
+        PlayerSlot::B => ProofCounters {
+            learned_eval_calls: game.player_b_learned_eval_calls,
+            handcrafted_eval_calls: game.player_b_handcrafted_eval_calls,
+            residual_eval_calls: game.player_b_residual_eval_calls,
+            composite_eval_calls: game.player_b_composite_eval_calls,
+            fallback_count: game.player_b_fallback_count,
+            book_hits: game.player_b_book_hits,
+        },
+    }
+}
+
 fn validate_report_config_identity(config: &ArenaConfig) -> Result<(), String> {
     for (name, player) in [("A", &config.player_a), ("B", &config.player_b)] {
+        if player.kind == PlayerKind::PureLearned
+            && (!matches!(
+                player.model,
+                Some(LoadedModel::Osaval02(_) | LoadedModel::Phase10T { .. })
+            )
+                || player.opening
+                || player.opening_profile != OpeningProfile::Unrestricted)
+        {
+            return Err(format!(
+                "arena pure_learned player {name} violates its runtime profile"
+            ));
+        }
         let model_identity_parts = [
             player.model_sha256.is_some(),
             player.model_size.is_some(),
@@ -2963,9 +3308,14 @@ fn write_budget_identity(output: &mut String, budget: &Budget) {
 fn write_player_identity(output: &mut String, player: &PlayerSpec) {
     write!(
         output,
-        "{{\"label\":{},\"evaluatorKind\":{},\"searchDepth\":",
+        "{{\"label\":{},\"evaluatorKind\":{},\"runtimeProfile\":{},\"searchDepth\":",
         json_string(&player.label()),
         json_string(player.kind.report_name()),
+        json_string(if player.kind == PlayerKind::PureLearned {
+            open_shogi_core::PURE_LEARNED_PROFILE_NAME
+        } else {
+            "standard"
+        }),
     )
     .expect("writing to String cannot fail");
     if player.kind.is_search() {
@@ -3003,6 +3353,61 @@ fn write_player_identity(output: &mut String, player: &PlayerSpec) {
         output,
         ",\"openingEnabled\":{}}}",
         if player.opening { "true" } else { "false" }
+    )
+    .expect("writing to String cannot fail");
+}
+
+/// Measured per-player runtime proof counters accumulated from every search the player
+/// performed. The arena process owns no teacher call path, so `teacher_calls` is a
+/// structural zero; every other prohibited counter is reported from measured totals.
+struct ProofCounters {
+    learned_eval_calls: u64,
+    handcrafted_eval_calls: u64,
+    residual_eval_calls: u64,
+    composite_eval_calls: u64,
+    fallback_count: u64,
+    book_hits: u64,
+}
+
+impl ProofCounters {
+    fn maximum() -> Self {
+        Self {
+            learned_eval_calls: MAX_JSON_SAFE_INTEGER,
+            handcrafted_eval_calls: MAX_JSON_SAFE_INTEGER,
+            residual_eval_calls: MAX_JSON_SAFE_INTEGER,
+            composite_eval_calls: MAX_JSON_SAFE_INTEGER,
+            fallback_count: MAX_JSON_SAFE_INTEGER,
+            book_hits: MAX_JSON_SAFE_INTEGER,
+        }
+    }
+}
+
+fn write_runtime_proof(output: &mut String, player: &PlayerSpec, proof: &ProofCounters) {
+    if player.kind != PlayerKind::PureLearned {
+        output.push_str("null");
+        return;
+    }
+    write!(
+        output,
+        "{{\"profile\":\"{}\",\"profile_schema\":\"{}\",\"learned_eval_calls\":{},\"handcrafted_eval_calls\":{},\"residual_eval_calls\":{},\"composite_eval_calls\":{},\"book_hits\":{},\"teacher_calls\":0,\"fallback_count\":{},\"model_sha256\":{},\"evaluator_profile_schema_hash\":\"{}\"}}",
+        open_shogi_core::PURE_LEARNED_PROFILE_NAME,
+        if matches!(player.model, Some(LoadedModel::Phase10T { .. })) {
+            open_shogi_core::PHASE10T_PROFILE_SCHEMA
+        } else {
+            open_shogi_core::PURE_LEARNED_PROFILE_SCHEMA
+        },
+        proof.learned_eval_calls,
+        proof.handcrafted_eval_calls,
+        proof.residual_eval_calls,
+        proof.composite_eval_calls,
+        proof.book_hits,
+        proof.fallback_count,
+        json_string(player.model_sha256.as_deref().expect("pure profile model hash")),
+        if matches!(player.model, Some(LoadedModel::Phase10T { .. })) {
+            open_shogi_core::PHASE10T_PROFILE_SCHEMA_SHA256
+        } else {
+            open_shogi_core::PURE_LEARNED_PROFILE_SCHEMA_SHA256
+        },
     )
     .expect("writing to String cannot fail");
 }
@@ -3412,15 +3817,14 @@ mod tests {
 
     use super::{
         ArenaConfig, ArenaResult, Budget, GameOutcome, GameSummary, LOCK_FILE_NAME, MAX_GAMES,
-        MAX_STATE_BYTES, OpeningProfile, PendingGame, Player, PlayerKind, PlayerSpec, atomic_write,
-        atomic_write_new, classify_winner, commit_pending_game_with_hooks, config_signature,
-        encode_csa, encode_game_journal, expected_resume_search_counts, final_outcome, hex_decode,
-        hex_encode, is_utc_timestamp, json_string, load_opening_book, parse_arguments, parse_state,
-        preflight_report_size, prepare_output_directory, read_state, recover_game_journal,
-        recover_game_journal_with_hooks,
-        recover_owned_temporary_files, render_report, replayed_csa_result, run,
-        timestamp_from_unix, validate_resume_artifacts, validate_resume_report, write_report,
-        write_state, ResumeReportState,
+        MAX_STATE_BYTES, OpeningProfile, PendingGame, Player, PlayerKind, PlayerSpec, ProofCounters,
+        atomic_write, atomic_write_new, classify_winner, commit_pending_game_with_hooks,
+        config_signature, encode_csa, encode_game_journal, expected_resume_search_counts,
+        final_outcome, hex_decode, hex_encode, is_utc_timestamp, json_string, load_opening_book,
+        parse_arguments, parse_state, preflight_report_size, prepare_output_directory, read_state,
+        recover_game_journal, recover_game_journal_with_hooks, recover_owned_temporary_files,
+        render_report, replayed_csa_result, run, timestamp_from_unix, validate_resume_artifacts,
+        validate_resume_report, write_report, write_runtime_proof, write_state, ResumeReportState,
     };
 
     #[test]
@@ -3462,6 +3866,87 @@ mod tests {
             canonical.initial_sfen,
             "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
         );
+    }
+
+    #[test]
+    fn runtime_proof_emits_measured_counters_without_hardcoded_zeros() {
+        let player = PlayerSpec {
+            kind: PlayerKind::PureLearned,
+            depth: 4,
+            hash_megabytes: 16,
+            transposition: true,
+            model_path: None,
+            model_sha256: Some("a".repeat(64)),
+            model_size: Some(128),
+            model: None,
+            opening: false,
+            opening_profile: OpeningProfile::Unrestricted,
+        };
+        let measured = ProofCounters {
+            learned_eval_calls: 7,
+            handcrafted_eval_calls: 2,
+            residual_eval_calls: 1,
+            composite_eval_calls: 3,
+            fallback_count: 2,
+            book_hits: 5,
+        };
+        let mut output = String::new();
+        write_runtime_proof(&mut output, &player, &measured);
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["profile"], "pure_learned");
+        assert_eq!(value["learned_eval_calls"], 7);
+        assert_eq!(value["handcrafted_eval_calls"], 2);
+        assert_eq!(value["residual_eval_calls"], 1);
+        assert_eq!(value["composite_eval_calls"], 3);
+        assert_eq!(value["book_hits"], 5);
+        assert_eq!(value["fallback_count"], 2);
+        assert_eq!(value["model_sha256"], "a".repeat(64));
+        // The arena owns no teacher call path, so this counter is the only structural zero.
+        assert_eq!(value["teacher_calls"], 0);
+    }
+
+    #[test]
+    fn pure_learned_requires_hash_and_unrestricted_no_book_profile() {
+        let missing_hash = parse_arguments(&[
+            "--player-a".into(),
+            "pure_learned".into(),
+            "--a-model".into(),
+            "missing.osaval02".into(),
+            "--a-opening-profile".into(),
+            "unrestricted".into(),
+        ])
+        .err()
+        .unwrap();
+        assert!(missing_hash.contains("requires --a-model-sha256"));
+
+        let restricted = parse_arguments(&[
+            "--player-a".into(),
+            "pure_learned".into(),
+            "--a-model".into(),
+            "missing.osaval02".into(),
+            "--a-model-sha256".into(),
+            "a".repeat(64),
+        ])
+        .err()
+        .unwrap();
+        assert!(restricted.contains("requires --a-opening-profile unrestricted"));
+
+        let book = parse_arguments(&[
+            "--player-a".into(),
+            "pure_learned".into(),
+            "--a-model".into(),
+            "missing.osaval02".into(),
+            "--a-model-sha256".into(),
+            "a".repeat(64),
+            "--a-opening-profile".into(),
+            "unrestricted".into(),
+            "--a-opening".into(),
+            "--opening-book".into(),
+            "missing.gz".into(),
+        ])
+        .err()
+        .unwrap();
+        assert!(book.contains("prohibits opening books"));
     }
 
     #[test]
@@ -3548,6 +4033,18 @@ mod tests {
             player_b_searches: 0,
             player_b_neural_inference_calls: 0,
             player_b_neural_inference_time_ns: 0,
+            player_a_learned_eval_calls: 0,
+            player_a_handcrafted_eval_calls: 0,
+            player_a_residual_eval_calls: 0,
+            player_a_composite_eval_calls: 0,
+            player_a_fallback_count: 0,
+            player_a_book_hits: 0,
+            player_b_learned_eval_calls: 0,
+            player_b_handcrafted_eval_calls: 0,
+            player_b_residual_eval_calls: 0,
+            player_b_composite_eval_calls: 0,
+            player_b_fallback_count: 0,
+            player_b_book_hits: 0,
             illegal_moves: 0,
             search_winner: true,
             player_a_winner: true,
@@ -3850,6 +4347,18 @@ mod tests {
             player_b_searches: 0,
             player_b_neural_inference_calls: 0,
             player_b_neural_inference_time_ns: 0,
+            player_a_learned_eval_calls: 0,
+            player_a_handcrafted_eval_calls: 0,
+            player_a_residual_eval_calls: 0,
+            player_a_composite_eval_calls: 0,
+            player_a_fallback_count: 0,
+            player_a_book_hits: 0,
+            player_b_learned_eval_calls: 0,
+            player_b_handcrafted_eval_calls: 0,
+            player_b_residual_eval_calls: 0,
+            player_b_composite_eval_calls: 0,
+            player_b_fallback_count: 0,
+            player_b_book_hits: 0,
             illegal_moves: 0,
             search_winner: false,
             player_a_winner: false,
@@ -4543,6 +5052,18 @@ mod tests {
                 player_b_searches: 0,
                 player_b_neural_inference_calls: 0,
                 player_b_neural_inference_time_ns: 0,
+                player_a_learned_eval_calls: 0,
+                player_a_handcrafted_eval_calls: 0,
+                player_a_residual_eval_calls: 0,
+                player_a_composite_eval_calls: 0,
+                player_a_fallback_count: 0,
+                player_a_book_hits: 0,
+                player_b_learned_eval_calls: 0,
+                player_b_handcrafted_eval_calls: 0,
+                player_b_residual_eval_calls: 0,
+                player_b_composite_eval_calls: 0,
+                player_b_fallback_count: 0,
+                player_b_book_hits: 0,
                 illegal_moves: 0,
                 search_winner: false,
                 player_a_winner: false,
@@ -4755,6 +5276,18 @@ mod tests {
             player_b_searches: 0,
             player_b_neural_inference_calls: 0,
             player_b_neural_inference_time_ns: 0,
+            player_a_learned_eval_calls: 0,
+            player_a_handcrafted_eval_calls: 0,
+            player_a_residual_eval_calls: 0,
+            player_a_composite_eval_calls: 0,
+            player_a_fallback_count: 0,
+            player_a_book_hits: 0,
+            player_b_learned_eval_calls: 0,
+            player_b_handcrafted_eval_calls: 0,
+            player_b_residual_eval_calls: 0,
+            player_b_composite_eval_calls: 0,
+            player_b_fallback_count: 0,
+            player_b_book_hits: 0,
             illegal_moves: 0,
             search_winner: false,
             player_a_winner: false,
@@ -4816,6 +5349,7 @@ mod tests {
             "modelPayloadSha256",
             "openingEnabled",
             "quantization",
+            "runtimeProfile",
             "searchDepth",
             "transposition",
         ]);
@@ -4856,6 +5390,7 @@ mod tests {
                 "playerADepthSum",
                 "playerANeuralInferenceCalls",
                 "playerANeuralInferenceTimeNs",
+                "playerARuntimeProof",
                 "playerASearchElapsedMs",
                 "playerASearchNodes",
                 "playerASearches",
@@ -4863,6 +5398,7 @@ mod tests {
                 "playerBDepthSum",
                 "playerBNeuralInferenceCalls",
                 "playerBNeuralInferenceTimeNs",
+                "playerBRuntimeProof",
                 "playerBSearchElapsedMs",
                 "playerBSearchNodes",
                 "playerBSearches",
@@ -4886,12 +5422,14 @@ mod tests {
                 "playerADepthSum",
                 "playerANeuralInferenceCalls",
                 "playerANeuralInferenceTimeNs",
+                "playerARuntimeProof",
                 "playerASearchElapsedMs",
                 "playerASearchNodes",
                 "playerASearches",
                 "playerBDepthSum",
                 "playerBNeuralInferenceCalls",
                 "playerBNeuralInferenceTimeNs",
+                "playerBRuntimeProof",
                 "playerBSearchElapsedMs",
                 "playerBSearchNodes",
                 "playerBSearches",
@@ -5001,6 +5539,200 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect()
+    }
+
+    // A standalone wire fixture keeps these Arena identity tests independent of training artifacts.
+    fn a1_model_bytes() -> Vec<u8> {
+        let payload = vec![0_u8; (8433 * 128 + 128 + 256 * 32 + 32 + 32 * 4 + 4) * 4];
+        let mut bytes = b"OSAT10A1".to_vec();
+        for value in [1_u32, 1, 8433, 128, 32, 4] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1.0_f32.to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        bytes.extend_from_slice(&Sha256::digest(&payload));
+        bytes
+    }
+
+    fn a1_spec(path: PathBuf, bytes: &[u8]) -> PlayerSpec {
+        let mut spec = parse_arguments(&[]).unwrap().player_a;
+        spec.kind = PlayerKind::PureLearned;
+        spec.depth = 2;
+        spec.hash_megabytes = 1;
+        spec.opening_profile = OpeningProfile::Unrestricted;
+        spec.model_path = Some(path);
+        spec.model_sha256 = Some(crate::checksum::sha256_bytes(bytes));
+        spec
+    }
+
+    #[test]
+    fn a1_arena_identity_shares_verified_model_and_distinguishes_payload_hash() {
+        let directory = temporary_arena_directory("a1-identity");
+        std::fs::create_dir_all(&directory).unwrap();
+        let bytes = a1_model_bytes();
+        let path = directory.join("fixture.osat10a1");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut a = a1_spec(path, &bytes);
+        let mut b = a.clone();
+        super::resolve_models(&mut a, &mut b).unwrap();
+        let payload_hash = crate::checksum::sha256_bytes(&bytes[44..bytes.len() - 32]);
+        assert_eq!(
+            a.model_payload_sha256().as_deref(),
+            Some(payload_hash.as_str())
+        );
+        assert_ne!(a.model_payload_sha256(), a.model_sha256);
+        assert_eq!(a.model_size, Some(u64::try_from(bytes.len()).unwrap()));
+        assert_eq!(a.model_architecture_version(), Some(1));
+        assert_eq!(a.model_quantization(), Some("float32"));
+        let (
+            Some(super::LoadedModel::Phase10T { evaluator: ea, .. }),
+            Some(super::LoadedModel::Phase10T { evaluator: eb, .. }),
+        ) = (&a.model, &b.model)
+        else {
+            panic!("expected a1 models")
+        };
+        assert!(std::sync::Arc::ptr_eq(ea, eb));
+        assert_eq!(a.model_sha256, b.model_sha256);
+        let measured = ProofCounters {
+            learned_eval_calls: 7,
+            handcrafted_eval_calls: 2,
+            residual_eval_calls: 3,
+            composite_eval_calls: 4,
+            fallback_count: 5,
+            book_hits: 6,
+        };
+        let mut json = String::new();
+        write_runtime_proof(&mut json, &a, &measured);
+        let proof: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            proof["profile_schema"],
+            open_shogi_core::PHASE10T_PROFILE_SCHEMA
+        );
+        assert_eq!(
+            proof["evaluator_profile_schema_hash"],
+            open_shogi_core::PHASE10T_PROFILE_SCHEMA_SHA256
+        );
+        assert_eq!(proof["model_sha256"], a.model_sha256.as_deref().unwrap());
+        for (field, count) in [
+            ("learned_eval_calls", 7),
+            ("handcrafted_eval_calls", 2),
+            ("residual_eval_calls", 3),
+            ("composite_eval_calls", 4),
+            ("fallback_count", 5),
+            ("book_hits", 6),
+        ] {
+            assert_eq!(proof[field], count);
+        }
+        b.model_sha256 = Some("0".repeat(64));
+        assert!(
+            super::resolve_models(&mut a, &mut b)
+                .unwrap_err()
+                .contains("SHA-256 mismatch")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a1_arena_loader_rejects_wrong_hash_truncation_and_nonpure_player() {
+        let directory = temporary_arena_directory("a1-rejections");
+        std::fs::create_dir_all(&directory).unwrap();
+        let bytes = a1_model_bytes();
+        let path = directory.join("fixture.osat10a1");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut wrong = a1_spec(path.clone(), &bytes);
+        wrong.model_sha256 = Some("0".repeat(64));
+        assert!(
+            super::resolve_model_identity("a", &mut wrong)
+                .unwrap_err()
+                .contains("SHA-256 mismatch")
+        );
+        let mut nonpure = a1_spec(path.clone(), &bytes);
+        nonpure.kind = PlayerKind::HandcraftedExperimental;
+        assert!(
+            super::resolve_model_identity("a", &mut nonpure)
+                .unwrap_err()
+                .contains("only supported by pure_learned")
+        );
+        std::fs::write(&path, b"OSAT10A1").unwrap();
+        let mut truncated = a1_spec(path, b"OSAT10A1");
+        assert!(super::resolve_model_identity("a", &mut truncated).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a1_arena_select_matches_direct_history_search_and_fails_closed_on_bad_history() {
+        let directory = temporary_arena_directory("a1-history");
+        std::fs::create_dir_all(&directory).unwrap();
+        let bytes = a1_model_bytes();
+        let path = directory.join("fixture.osat10a1");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut spec = a1_spec(path, &bytes);
+        super::resolve_model_identity("a", &mut spec).unwrap();
+        let initial = parse_arguments(&[]).unwrap().initial_position;
+        let movement = open_shogi_core::parse_usi_move("7g7f").unwrap();
+        let mut position = initial.clone();
+        position.make_move(movement).unwrap();
+        let mut arena = Player::new(&spec, 0).unwrap();
+        let Player::Search {
+            mut engine,
+            a1_history,
+            ..
+        } = Player::new(&spec, 0).unwrap()
+        else {
+            panic!("expected search")
+        };
+        assert!(a1_history);
+        engine.set_phase10t_history(&initial, &[movement]).unwrap();
+        let direct = engine.search(
+            &position,
+            open_shogi_core::SearchLimits {
+                max_depth: spec.depth,
+                max_nodes: Some(4),
+                movetime: None,
+            },
+            &open_shogi_core::CancellationToken::new(),
+        );
+        let mut totals = super::SearchTotals::default();
+        let selected = arena.select(
+            &position,
+            &Budget::Nodes(4),
+            None,
+            super::OpeningPolicy::default(),
+            &initial,
+            &[movement],
+            &mut totals,
+        );
+        assert_eq!(selected, direct.best_move);
+        assert_eq!(totals.nodes, direct.nodes);
+        assert_eq!(totals.learned_eval_calls, direct.stats.learned_eval_calls);
+        assert!(totals.learned_eval_calls > 0);
+        assert_eq!(
+            (
+                totals.handcrafted_eval_calls,
+                totals.residual_eval_calls,
+                totals.composite_eval_calls,
+                totals.fallback_count,
+                totals.book_hits
+            ),
+            (0, 0, 0, 0, 0)
+        );
+        let searches = totals.searches;
+        assert!(
+            arena
+                .select(
+                    &position,
+                    &Budget::Nodes(4),
+                    None,
+                    super::OpeningPolicy::default(),
+                    &initial,
+                    &[movement, movement],
+                    &mut totals
+                )
+                .is_none()
+        );
+        assert_eq!(totals.searches, searches);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     fn model_bytes() -> Vec<u8> {
