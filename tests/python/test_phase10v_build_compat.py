@@ -31,13 +31,15 @@ def test_explicit_successor_requires_exact_prior_and_current_hash(tmp_path, monk
     assert not runtime_successor_matches(tmp_path, name, legacy, current, prior)
 
 
-def test_current_chain_retains_phase10u_baseline():
+def test_closed_campaign_chain_does_not_certify_the_new_main_runtime():
     from open_shogi_training.phase10t_build_compat import runtime_successor_matches as matches
 
     root = Path(__file__).resolve().parents[2]
     prior = json.loads((root / "configs/phase10t/runtime-successors.json").read_text())
+    # Content integration intentionally does not import the private experimental ancestry.
+    # The closed frozen manifests must not certify a new main/prototype runtime.
     for name in ALLOWED:
-        assert matches(
+        assert not matches(
             root,
             name,
             prior["files"][name]["before"],
