@@ -20,7 +20,11 @@ private history全体のfast-forwardではなく内容統合を選んだ。
 `codex/oss-minimal-freeze` は未公開履歴の唯一のlocal保存先として残した。
 remote側には指定旧枝が存在しなかった。別worktreeや他人の枝は操作していない。
 両repoにworkflow・main保護規則・公開連携は確認されず、remote CIは未設定。
-試作PRはmainへmergeしない。
+試作は両repoの `origin/codex/core-prototype` へpush済み。
+レビュー用draftは [OSAI PR #1](https://github.com/TKY-27/OpenShogiAI/pull/1) と
+[OSUI PR #1](https://github.com/TKY-27/OpenShogiUI/pull/1)。engine実装commitは `db4fa8e`、
+UI commitは `852875e`。両PRとも未merge、自動mergeなし、remote check/reviewは未設定・未提出。
+独立ローカルレビューと検証の結果は以下に記録する。試作PRはmainへmergeしない。
 
 ## hard4 停止の確定原因と修正
 
@@ -128,7 +132,7 @@ OSUIの必要dependency。巨大データ取得やcheckpoint蓄積はしてい�
 
 push前にソース・新規blobを検査し、標準Wasmに埋め込まれた端末パスをbuild時remapで除去した。
 再生成hashと来歴を更新し、標準native/Wasm parity 13 testsも成功した。
-重量物・私有資産・認証情報を含めず、ソースの試作branchとレビューPRだけを送る。
+重量物・私有資産・認証情報を含めず、ソースの試作branchとレビューPRだけを送信済み。
 production buildからローカル試作とモデルendpointが除外されることを確認した。
 
 ## 次の明示承認
