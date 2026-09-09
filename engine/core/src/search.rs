@@ -18,16 +18,17 @@ use crate::{
 #[cfg(feature = "handcrafted")]
 use crate::{EvaluationConfig, NeuralEvaluator, evaluate};
 
-/// Base score used for checkmates. Distance in plies is subtracted from this value.
+/// Base score for forced rule wins/losses, including mate, no legal moves and perpetual check.
+/// Distance in plies is subtracted; the root outcome distinguishes the adjudication reason.
 pub const MATE_SCORE: i32 = 30_000;
-/// Scores beyond this threshold encode a forced mate rather than a static evaluation.
+/// Scores beyond this threshold encode a forced rule win/loss rather than a static evaluation.
 pub const MATE_THRESHOLD: i32 = MATE_SCORE - 1_000;
 
 const INFINITY: i32 = 32_000;
 const MAX_SEARCH_PLY: usize = 256;
 const MOVE_BUCKETS: usize = 13_689;
 
-/// Returns whether a score encodes a forced mate.
+/// Returns whether a score is in the forced rule win/loss namespace.
 #[must_use]
 pub const fn is_mate_score(score: i32) -> bool {
     score >= MATE_THRESHOLD || score <= -MATE_THRESHOLD
@@ -164,6 +165,38 @@ pub enum SearchTermination {
     EvaluationError,
 }
 
+/// Why a returned score exists, or why evaluation did not start.
+/// Terminal rule results never require a model call; interrupted nonterminal searches do not
+/// have a score until an evaluator was actually called.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchOutcome {
+    Evaluated,
+    Checkmate,
+    NoLegalMoves,
+    Repetition,
+    PerpetualCheck,
+    CancelledBeforeEvaluation,
+    NodeLimitBeforeEvaluation,
+    TimeLimitBeforeEvaluation,
+    EvaluationError,
+}
+
+impl SearchOutcome {
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Checkmate | Self::NoLegalMoves | Self::Repetition | Self::PerpetualCheck
+        )
+    }
+
+    #[must_use]
+    pub const fn has_score(self) -> bool {
+        matches!(self, Self::Evaluated) || self.is_terminal()
+    }
+}
+
 /// Completed evidence for one root move at the latest fully searched depth.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RootMoveStat {
@@ -238,6 +271,7 @@ pub struct SearchResult {
     pub root_moves: Vec<RootMoveStat>,
     pub stats: SearchStats,
     pub termination: SearchTermination,
+    pub outcome: SearchOutcome,
 }
 
 /// Result of the bounded checking-move mate search.
@@ -317,6 +351,10 @@ impl NodeValue {
 /// Reusable search state with a bounded direct-mapped transposition table.
 pub struct SearchEngine {
     config: SearchConfig,
+    computation: Option<Arc<crate::ComputationModel>>,
+    computation_enabled: bool,
+    compute_summary: Option<crate::ComputeControlSummary>,
+    computation_order: Vec<Move>,
     phase10v: Option<Arc<crate::Phase10VEvaluator>>,
     v3_state: Option<crate::Phase10VAccumulator>,
     v3_updates: u64,
@@ -368,6 +406,89 @@ impl NeuralEvaluationMode {
 }
 
 impl SearchEngine {
+    /// Attach a computation policy bound to the unchanged OSAVAL03 leaf model.
+    /// # Errors
+    /// Rejects a missing/different leaf rather than silently running another evaluator.
+    pub fn set_computation_model(
+        &mut self,
+        model: Arc<crate::ComputationModel>,
+    ) -> Result<(), String> {
+        self.computation = None;
+        self.computation_enabled = false;
+        if self
+            .phase10v
+            .as_ref()
+            .is_none_or(|leaf| leaf.identity().artifact_sha256 != model.leaf_sha256())
+        {
+            return Err("computation policy requires its exact OSAVAL03 leaf model".into());
+        }
+        self.computation = Some(model);
+        self.computation_enabled = true;
+        Ok(())
+    }
+
+    /// Explicit ablation on the same engine and loaded identities.
+    /// # Errors
+    /// Enabling without a loaded trained model is an error.
+    pub fn set_computation_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled && self.computation.is_none() {
+            return Err("no learned computation policy loaded".into());
+        }
+        self.computation_enabled = enabled;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn compute_control_summary(&self) -> Option<&crate::ComputeControlSummary> {
+        self.compute_summary.as_ref()
+    }
+
+    fn update_computation(
+        &mut self,
+        position: &Position,
+        info: &SearchInfo,
+        previous: Option<&SearchInfo>,
+        plan: Option<TimePlan>,
+        previous_iteration_ms: f64,
+    ) -> bool {
+        let Some(model) = self
+            .computation
+            .as_ref()
+            .filter(|_| self.computation_enabled)
+        else {
+            return false;
+        };
+        let (risk, priorities) = model.assess(position, info, previous);
+        self.computation_order = priorities
+            .into_iter()
+            .map(|(movement, _)| movement)
+            .collect();
+        let target = plan
+            .filter(|p| {
+                matches!(
+                    p.mode,
+                    crate::TimeControlMode::Clock | crate::TimeControlMode::Casual
+                )
+            })
+            .and_then(|p| model.target_ms(risk, p));
+        if let Some(summary) = &mut self.compute_summary {
+            summary.decisions += 1;
+            summary.predicted_risk = risk;
+            summary.target_ms = target.unwrap_or(0.0);
+        }
+        let elapsed = info.elapsed.as_secs_f64() * 1000.0;
+        let iteration_ms = elapsed - previous.map_or(0.0, |p| p.elapsed.as_secs_f64() * 1000.0);
+        let growth = if previous_iteration_ms > 0.0 {
+            (iteration_ms / previous_iteration_ms).clamp(1.5, 8.0)
+        } else {
+            2.0
+        };
+        // Preserve at least two completed depths. Predicted next-iteration cost is a spending
+        // estimate, never a relaxation of the recursive hard deadline or a mate certificate.
+        target.is_some_and(|target| {
+            info.depth >= 2 && elapsed >= target * 0.2 && elapsed + iteration_ms * growth >= target
+        })
+    }
     #[must_use]
     #[cfg(feature = "handcrafted")]
     pub fn new(config: SearchConfig) -> Self {
@@ -384,6 +505,10 @@ impl SearchEngine {
     fn empty(config: SearchConfig, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             config,
+            computation: None,
+            computation_enabled: false,
+            compute_summary: None,
+            computation_order: Vec::new(),
             phase10v: None,
             v3_state: None,
             v3_updates: 0,
@@ -412,7 +537,7 @@ impl SearchEngine {
 
     /// Builds a search engine that uses one immutable neural evaluator for static scores.
     ///
-    /// Mate and stalemate scores continue to be assigned by search and never by the model.
+    /// Rule-terminal scores continue to be assigned by search and never by the model.
     #[must_use]
     #[cfg(feature = "handcrafted")]
     pub fn with_neural(config: SearchConfig, neural: Arc<NeuralEvaluator>) -> Self {
@@ -933,6 +1058,17 @@ impl SearchEngine {
         mut callback: impl FnMut(&SearchInfo),
     ) -> SearchResult {
         self.reset_for_search(clear_transpositions);
+        self.computation_order.clear();
+        self.compute_summary =
+            self.computation
+                .as_ref()
+                .map(|model| crate::ComputeControlSummary {
+                    model_sha256: model.sha256().to_owned(),
+                    enabled: self.computation_enabled,
+                    ..crate::ComputeControlSummary::default()
+                });
+        let mut computation_previous: Option<SearchInfo> = None;
+        let mut previous_iteration_ms = 0.0;
         self.v3_updates = 0;
         self.v3_refreshes = 0;
         self.leaf_trace.borrow_mut().clear();
@@ -955,6 +1091,7 @@ impl SearchEngine {
                 root_moves: Vec::new(),
                 stats: SearchStats::default(),
                 termination: SearchTermination::EvaluationError,
+                outcome: SearchOutcome::EvaluationError,
             };
         }
         if self.phase10t.is_some() || self.config.runtime_profile == RuntimeProfile::PureLearned {
@@ -971,17 +1108,6 @@ impl SearchEngine {
                 self.a1_positions = vec![position.clone()];
                 self.a1_checks.clear();
             }
-            if let Some(evaluator) = &self.phase10v {
-                self.v3_state = Some(evaluator.accumulator(position).expect("validated position"));
-                self.v3_refreshes = 2;
-            }
-            if let Some(evaluator) = &self.phase10t {
-                self.a1_state = Some(
-                    evaluator
-                        .accumulator(position, self.a1_history())
-                        .expect("validated search history"),
-                );
-            }
         }
         let clock = Arc::clone(&self.clock);
         let started = clock.now();
@@ -993,20 +1119,61 @@ impl SearchEngine {
         };
         let fallback = legal_moves.first().copied();
         let mut context = SearchContext::new(limits, cancellation, started, clock.as_ref());
-        let mut completed = NodeValue {
-            score: if let Some(repetition) = root_repetition {
-                repetition.score
-            } else if legal_moves.is_empty() {
-                if position.is_in_check(position.side_to_move()) {
-                    -MATE_SCORE
+        let root_terminal = if let Some(repetition) = &root_repetition {
+            Some((
+                if repetition.score == 0 {
+                    SearchOutcome::Repetition
                 } else {
-                    0
-                }
-            } else if context.check_termination().is_err() {
+                    SearchOutcome::PerpetualCheck
+                },
+                repetition.score,
+            ))
+        } else if legal_moves.is_empty() {
+            Some((
+                if position.is_in_check(position.side_to_move()) {
+                    SearchOutcome::Checkmate
+                } else {
+                    SearchOutcome::NoLegalMoves
+                },
+                -MATE_SCORE,
+            ))
+        } else {
+            None
+        };
+        if let Some((outcome, score)) = root_terminal {
+            return SearchResult {
+                best_move: None,
+                score,
+                depth: 0,
+                seldepth: 0,
+                nodes: 0,
+                elapsed: context.elapsed(),
+                nps: 0,
+                pv: Vec::new(),
+                root_moves: Vec::new(),
+                stats: context.stats,
+                termination: SearchTermination::Completed,
+                outcome,
+            };
+        }
+        let mut completed = NodeValue {
+            score: if context.check_termination().is_err() {
                 // A legal fallback still lets callers emit a protocol-compliant move, but a
                 // cancelled/zero-budget search must not run an uncounted neural inference.
                 0
             } else {
+                if let Some(evaluator) = &self.phase10v {
+                    self.v3_state =
+                        Some(evaluator.accumulator(position).expect("validated position"));
+                    self.v3_refreshes = 2;
+                }
+                if let Some(evaluator) = &self.phase10t {
+                    self.a1_state = Some(
+                        evaluator
+                            .accumulator(position, self.a1_history())
+                            .expect("validated search history"),
+                    );
+                }
                 if limits.max_depth > 0 {
                     self.prepare_osaval02_root_policy(position, &mut context);
                 }
@@ -1051,6 +1218,9 @@ impl SearchEngine {
                 };
 
                 let iteration = loop {
+                    // An aspiration retry replaces incomplete/bounded root evidence from
+                    // the previous attempt; duplicate candidates are not separate moves.
+                    context.root_moves.clear();
                     let result =
                         self.negamax(&mut position.clone(), depth, alpha, beta, 0, &mut context);
                     let Ok(value) = result else {
@@ -1085,6 +1255,23 @@ impl SearchEngine {
                 if is_mate_score(completed.score) {
                     break;
                 }
+                if self.update_computation(
+                    position,
+                    &info,
+                    computation_previous.as_ref(),
+                    managed,
+                    previous_iteration_ms,
+                ) {
+                    context.termination = Some(SearchTermination::Stable);
+                    break;
+                }
+                if self.computation_enabled {
+                    previous_iteration_ms = info.elapsed.as_secs_f64() * 1000.0
+                        - computation_previous
+                            .as_ref()
+                            .map_or(0.0, |p| p.elapsed.as_secs_f64() * 1000.0);
+                    computation_previous = Some(info);
+                }
                 if managed.is_some_and(|plan| {
                     context.should_stop_stable(position, &completed, plan, elapsed)
                 }) {
@@ -1095,6 +1282,21 @@ impl SearchEngine {
         }
 
         let elapsed = context.elapsed();
+        let termination = context.termination.unwrap_or(SearchTermination::Completed);
+        let outcome = if termination == SearchTermination::EvaluationError {
+            SearchOutcome::EvaluationError
+        } else if context.stats.neural_inference_calls > 0
+            || context.stats.handcrafted_eval_calls > 0
+        {
+            SearchOutcome::Evaluated
+        } else {
+            match termination {
+                SearchTermination::Cancelled => SearchOutcome::CancelledBeforeEvaluation,
+                SearchTermination::NodeLimit => SearchOutcome::NodeLimitBeforeEvaluation,
+                SearchTermination::TimeLimit => SearchOutcome::TimeLimitBeforeEvaluation,
+                _ => SearchOutcome::EvaluationError,
+            }
+        };
         SearchResult {
             best_move: completed.pv.first().copied().or(fallback),
             score: completed.score,
@@ -1106,7 +1308,8 @@ impl SearchEngine {
             pv: completed.pv,
             root_moves: context.last_completed_root_moves,
             stats: context.stats,
-            termination: context.termination.unwrap_or(SearchTermination::Completed),
+            termination,
+            outcome,
         }
     }
 
@@ -1176,7 +1379,7 @@ impl SearchEngine {
         }
 
         // Legal terminal classification must precede every horizon/static evaluation. Besides
-        // preserving mate and stalemate semantics when quiescence is disabled, this guarantees
+        // preserving rule-loss semantics when quiescence is disabled, this guarantees
         // that terminal nodes never invoke the optional neural evaluator.
         if depth == 0 || ply >= MAX_SEARCH_PLY {
             let moves = position.legal_moves();
@@ -1234,6 +1437,25 @@ impl SearchEngine {
         }
         if self.config.enable_move_ordering {
             self.order_moves(position, &mut moves, tt_move, ply);
+        }
+        if ply == 0 && !self.computation_order.is_empty() {
+            let previous = moves.clone();
+            moves.sort_by_key(|movement| {
+                self.computation_order
+                    .iter()
+                    .position(|m| m == movement)
+                    .unwrap_or(usize::MAX)
+            });
+            if let Some(summary) = &mut self.compute_summary {
+                summary.reordered_moves += u64::try_from(
+                    moves
+                        .iter()
+                        .zip(previous.iter())
+                        .filter(|(a, b)| a != b)
+                        .count(),
+                )
+                .unwrap_or(u64::MAX);
+            }
         }
         context.stats.candidate_moves = context
             .stats
@@ -1359,11 +1581,7 @@ impl SearchEngine {
         let in_check = position.is_in_check(position.side_to_move());
         let mut moves = position.legal_moves();
         if moves.is_empty() {
-            return Ok(NodeValue::leaf(if in_check {
-                -MATE_SCORE + i32::try_from(ply).unwrap_or(i32::MAX)
-            } else {
-                0
-            }));
+            return Ok(terminal_node(position, ply));
         }
         // Checked nodes have no legal stand-pat; skip unused inference and metrics.
         let stand_pat = if in_check {
@@ -1990,12 +2208,8 @@ fn nodes_per_second(nodes: u64, elapsed: Duration) -> u64 {
     u64::try_from(rate).unwrap_or(u64::MAX)
 }
 
-fn terminal_node(position: &Position, ply: usize) -> NodeValue {
-    NodeValue::leaf(if position.is_in_check(position.side_to_move()) {
-        -MATE_SCORE + i32::try_from(ply).unwrap_or(i32::MAX)
-    } else {
-        0
-    })
+fn terminal_node(_position: &Position, ply: usize) -> NodeValue {
+    NodeValue::leaf(-MATE_SCORE + i32::try_from(ply).unwrap_or(i32::MAX))
 }
 
 fn score_to_transposition(score: i32, ply: usize) -> i32 {
@@ -2148,7 +2362,10 @@ mod tests {
     #[test]
     fn completed_depth_exposes_sorted_legal_root_evidence() {
         let position = Position::startpos();
-        let mut engine = SearchEngine::new(SearchConfig::default());
+        let mut engine = SearchEngine::new(SearchConfig {
+            aspiration_window: 1,
+            ..SearchConfig::default()
+        });
         let result = engine.search(
             &position,
             SearchLimits {
@@ -2160,6 +2377,14 @@ mod tests {
         );
 
         assert!(!result.root_moves.is_empty());
+        let unique: std::collections::HashSet<_> =
+            result.root_moves.iter().map(|stat| stat.movement).collect();
+        assert_eq!(
+            unique.len(),
+            result.root_moves.len(),
+            "aspiration retries must replace evidence"
+        );
+        assert_eq!(unique.len(), position.legal_moves().len());
         assert!(
             result
                 .root_moves
@@ -2228,17 +2453,14 @@ mod tests {
     #[test]
     fn disabled_quiescence_classifies_terminal_horizon_without_neural_inference() {
         let terminal_positions = [
-            ("3lkl3/3pRp3/4G4/9/9/9/9/9/K8 w - 1", -MATE_SCORE),
-            ("4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1", 0),
+            ("3lkl3/3pRp3/4G4/9/9/9/9/9/K8 w - 1", true),
+            ("4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1", false),
         ];
 
-        for (sfen, expected_score) in terminal_positions {
+        for (sfen, in_check) in terminal_positions {
             let mut position = crate::parse_sfen(sfen).expect("terminal position");
             assert!(position.legal_moves().is_empty());
-            assert_eq!(
-                position.is_in_check(position.side_to_move()),
-                expected_score != 0
-            );
+            assert_eq!(position.is_in_check(position.side_to_move()), in_check);
             let cancellation = CancellationToken::new();
             let clock = SystemMonotonicClock::default();
             let mut context =
@@ -2255,7 +2477,7 @@ mod tests {
                 .negamax(&mut position, 0, -INFINITY, INFINITY, 0, &mut context)
                 .expect("terminal horizon node");
 
-            assert_eq!(result.score, expected_score);
+            assert_eq!(result.score, -MATE_SCORE);
             assert_eq!(context.stats.neural_inference_calls, 0);
         }
     }
@@ -2919,6 +3141,120 @@ mod pure_history_tests {
     }
 
     #[test]
+    fn pure_search_distinguishes_terminal_evaluated_and_unstarted_results() {
+        let mut engine = engine();
+        for (sfen, outcome) in [
+            (
+                "3lkl3/3pRp3/4G4/9/9/9/9/9/K8 w - 1",
+                SearchOutcome::Checkmate,
+            ),
+            (
+                "4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1",
+                SearchOutcome::NoLegalMoves,
+            ),
+        ] {
+            let position = crate::parse_sfen(sfen).unwrap();
+            let result = engine.search(
+                &position,
+                SearchLimits {
+                    max_depth: 64,
+                    max_nodes: Some(2000),
+                    movetime: None,
+                },
+                &CancellationToken::new(),
+            );
+            assert_eq!(result.outcome, outcome);
+            assert_eq!(result.score, -MATE_SCORE);
+            assert_eq!(result.best_move, None);
+            assert_eq!(result.nodes, 0);
+            let proof = engine.runtime_proof(result.stats, "");
+            assert!(proof.valid_pure_search(&result));
+            assert!(!proof.valid_pure_learned());
+            let mut forbidden = proof.clone();
+            forbidden.book_hits = 1;
+            assert!(!forbidden.valid_pure_search(&result));
+            let mut misleading = result.clone();
+            misleading.outcome = SearchOutcome::Evaluated;
+            assert!(!proof.valid_pure_search(&misleading));
+        }
+        let position = initial();
+        let result = engine.search(&position, limits(), &CancellationToken::new());
+        assert_eq!(result.outcome, SearchOutcome::Evaluated);
+        assert!(result.outcome.has_score());
+        let proof = engine.runtime_proof(result.stats, "");
+        assert!(proof.valid_pure_search(&result));
+        assert!(proof.valid_pure_learned());
+
+        for (nodes, movetime, cancelled, expected) in [
+            (
+                Some(0),
+                None,
+                false,
+                SearchOutcome::NodeLimitBeforeEvaluation,
+            ),
+            (
+                Some(32),
+                Some(Duration::ZERO),
+                false,
+                SearchOutcome::TimeLimitBeforeEvaluation,
+            ),
+            (
+                Some(32),
+                None,
+                true,
+                SearchOutcome::CancelledBeforeEvaluation,
+            ),
+        ] {
+            let token = CancellationToken::new();
+            if cancelled {
+                token.cancel();
+            }
+            let result = engine.search(
+                &position,
+                SearchLimits {
+                    max_depth: 4,
+                    max_nodes: nodes,
+                    movetime,
+                },
+                &token,
+            );
+            assert_eq!(result.outcome, expected);
+            assert!(!result.outcome.has_score());
+            assert!(position.is_legal_move(result.best_move.unwrap()));
+            let proof = engine.runtime_proof(result.stats, "");
+            assert!(!proof.valid_pure_learned());
+            assert!(proof.valid_pure_search(&result));
+            let mut wrong_reason = result.clone();
+            wrong_reason.outcome = SearchOutcome::Checkmate;
+            assert!(!proof.valid_pure_search(&wrong_reason));
+        }
+    }
+
+    #[test]
+    fn pure_perpetual_check_result_needs_no_inference() {
+        let initial = crate::parse_sfen("4k4/5R3/9/9/9/9/9/9/K8 b - 1").unwrap();
+        let moves: Vec<_> = ["4b5b", "5a4a", "5b4b", "4a5a"]
+            .repeat(3)
+            .iter()
+            .map(|m| crate::parse_usi_move(m).unwrap())
+            .collect();
+        let mut position = initial.clone();
+        for movement in &moves {
+            position.make_move(*movement).unwrap();
+        }
+        let mut engine = engine();
+        engine.set_pure_history(&initial, &moves).unwrap();
+        let result = engine.search(&position, limits(), &CancellationToken::new());
+        assert_eq!(result.outcome, SearchOutcome::PerpetualCheck);
+        assert_eq!(result.score, -MATE_SCORE);
+        assert!(
+            engine
+                .runtime_proof(result.stats, "")
+                .valid_pure_search(&result)
+        );
+    }
+
+    #[test]
     fn osaval02_search_history_changes_leaf_score_and_unmakes_exactly() {
         let mut engine = engine();
         let root = initial();
@@ -2966,6 +3302,12 @@ mod pure_history_tests {
         assert_eq!(terminal.best_move, None);
         assert_eq!(terminal.score, 0);
         assert_eq!(terminal.stats.learned_eval_calls, 0);
+        assert_eq!(terminal.outcome, SearchOutcome::Repetition);
+        assert!(
+            engine
+                .runtime_proof(terminal.stats, "")
+                .valid_pure_search(&terminal)
+        );
         engine.set_pure_history(&root, &[]).unwrap();
         engine.search(&root, limits(), &CancellationToken::new());
         engine.store_transposition(&root, 20, 12345, Bound::Exact, None);
@@ -3002,6 +3344,12 @@ mod pure_history_tests {
         assert_eq!(rejected.termination, SearchTermination::EvaluationError);
         assert_eq!(rejected.best_move, None);
         assert_eq!(rejected.stats.learned_eval_calls, 0);
+        assert_eq!(rejected.outcome, SearchOutcome::EvaluationError);
+        assert!(
+            !engine
+                .runtime_proof(rejected.stats, "")
+                .valid_pure_search(&rejected)
+        );
         assert!(
             engine
                 .set_pure_history(&root, &[crate::parse_usi_move("5i5a").unwrap()])

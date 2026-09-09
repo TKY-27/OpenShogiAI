@@ -68,7 +68,6 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
         || Ok(open_shogi_core::Osaval02History::default()),
         |json| parse_history(json),
     )?;
-    let inference = model.infer(&position, history)?;
     let trace_limit = options.get("--leaf-trace-limit").map_or(Ok(0), |value| {
         value.parse::<usize>().map_err(|error| error.to_string())
     })?;
@@ -89,9 +88,17 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
         return Err("pure-only inference failed; no result is available".to_owned());
     }
     let proof = engine.runtime_proof(result.stats, hash);
+    if !proof.valid_pure_search(&result) {
+        return Err("pure runtime proof failed".to_owned());
+    }
+    let inference = if result.outcome == open_shogi_core::SearchOutcome::Evaluated {
+        model.infer(&position, history)?
+    } else {
+        serde_json::Value::Null
+    };
     println!(
         "{}",
-        serde_json::json!({"schema":"open_shogiai_phase10t_pure_runtime/v1", "compiled_evaluators":open_shogi_core::COMPILED_EVALUATORS, "profile":"pure_learned", "model_sha256":hash, "history":history, "model_format":model.format(), "sfen":open_shogi_core::to_sfen(&position), "cp":inference["cp"], "wdl_logits":inference.get("wdl_logits"), "inference":inference, "best_move":result.best_move.map(to_usi_move), "score":result.score,"depth":result.depth,"nodes":result.nodes,"proof":proof,"leaf_trace":engine.take_leaf_trace()})
+        serde_json::json!({"schema":"open_shogiai_phase10t_pure_runtime/v1", "compiled_evaluators":open_shogi_core::COMPILED_EVALUATORS, "profile":"pure_learned", "model_sha256":hash, "history":history, "model_format":model.format(), "sfen":open_shogi_core::to_sfen(&position), "cp":inference["cp"], "wdl_logits":inference.get("wdl_logits"), "inference":inference, "best_move":result.best_move.map(to_usi_move), "score":result.outcome.has_score().then_some(result.score),"outcome":result.outcome,"depth":result.depth,"nodes":result.nodes,"proof":proof,"leaf_trace":engine.take_leaf_trace()})
     );
     Ok(())
 }

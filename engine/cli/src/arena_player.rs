@@ -118,7 +118,9 @@ fn search(
         game.play(movement).map_err(|e| e.to_string())?;
         moves.push(movement);
     }
-    if game.end().is_some() {
+    // The standard evaluator's search does not consume exact repetition history. Preserve
+    // its existing rejection rather than returning a move for an already adjudicated game.
+    if model.is_none() && matches!(game.end(), Some(open_shogi_core::GameEnd::Repetition(_))) {
         return Err("cannot search a terminal game".into());
     }
     let config = search_config(request.hash_mb);
@@ -158,7 +160,7 @@ fn search(
         result.stats,
         model.map_or("", PurePlayingEvaluator::artifact_sha256),
     );
-    if model.is_some() && !proof.valid_pure_learned() {
+    if model.is_some() && !proof.valid_pure_search(&result) {
         return Err("pure runtime proof failed".into());
     }
     let deadline = serde_json::json!({"clock":"monotonic", "scope":"request_parse_replay_setup_search", "requested_movetime_ms":request.movetime_ms, "hard_timeout_ms":request.hard_timeout_ms, "setup_elapsed_ns":setup_elapsed.as_nanos(), "search_start_ns":search_started.as_nanos(), "search_budget_ns":remaining.as_nanos(), "search_elapsed_ns":result.elapsed.as_nanos(), "elapsed_ns":elapsed.as_nanos(), "soft_budget_ns":request.movetime_ms.map(|ms| u128::from(ms) * 1_000_000), "hard_budget_ns":hard_limit.as_nanos(), "soft_budget_exhausted_in_setup":soft_budget_exhausted_in_setup, "hard_deadline_safety_margin_ns":hard_deadline_safety_margin.as_nanos(), "soft_compliant":request.movetime_ms.map(|_| elapsed <= full_budget), "hard_compliant":elapsed <= hard_limit, "compliant":elapsed <= hard_limit});
@@ -166,7 +168,7 @@ fn search(
         return Err(format!("per-search hard deadline exceeded: {deadline}"));
     }
     Ok(
-        serde_json::json!({"schema":"open_shogiai_arena_player/v1", "model_format":model.map_or("HANDCRAFTED", PurePlayingEvaluator::format), "model_sha256":model.map_or("", PurePlayingEvaluator::artifact_sha256), "sfen":to_sfen(game.position()), "final_sfen":to_sfen(game.position()), "requested_controls":request, "best_move":result.best_move.map(to_usi_move), "score":result.score, "depth":result.depth, "nodes":result.nodes, "termination":format!("{:?}",result.termination), "proof":proof, "deadline":deadline, "timing":deadline, "threads":1, "hash_mb":request.hash_mb, "transposition_entries":config.transposition_entries, "depth_limit":request.depth, "node_limit":request.nodes}),
+        serde_json::json!({"schema":"open_shogiai_arena_player/v1", "model_format":model.map_or("HANDCRAFTED", PurePlayingEvaluator::format), "model_sha256":model.map_or("", PurePlayingEvaluator::artifact_sha256), "sfen":to_sfen(game.position()), "final_sfen":to_sfen(game.position()), "requested_controls":request, "best_move":result.best_move.map(to_usi_move), "score":result.outcome.has_score().then_some(result.score), "outcome":result.outcome, "depth":result.depth, "nodes":result.nodes, "termination":format!("{:?}",result.termination), "proof":proof, "deadline":deadline, "timing":deadline, "threads":1, "hash_mb":request.hash_mb, "transposition_entries":config.transposition_entries, "depth_limit":request.depth, "node_limit":request.nodes}),
     )
 }
 
@@ -212,6 +214,53 @@ fn search_config(hash_mb: usize) -> SearchConfig {
 #[cfg(test)]
 mod tests {
     use super::Request;
+    #[cfg(feature = "handcrafted")]
+    #[test]
+    fn pure_transport_returns_rule_terminal_without_weakening_normal_proof() {
+        use std::{io::Read, sync::Arc};
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../../../tests/fixtures/osaval02/pure-history.osaval02.gz")[..],
+        )
+        .read_to_end(&mut bytes)
+        .unwrap();
+        let evaluator = open_shogi_core::Osaval02Evaluator::from_bytes(&bytes).unwrap();
+        let model = open_shogi_core::PurePlayingEvaluator::Osaval02(Arc::new(evaluator));
+        let mut request = Request {
+            initial_sfen: "4k4/3P1P3/5K3/9/9/9/9/9/9 b - 1".into(),
+            moves: vec!["4c5c".into()],
+            depth: 64,
+            nodes: Some(2000),
+            movetime_ms: None,
+            hard_timeout_ms: 30000,
+            hash_mb: 32,
+        };
+        let terminal = super::search(Some(&model), &request, std::time::Instant::now()).unwrap();
+        assert_eq!(terminal["outcome"], "no_legal_moves");
+        assert_eq!(terminal["best_move"], serde_json::Value::Null);
+        assert_eq!(terminal["score"], -open_shogi_core::MATE_SCORE);
+        assert_eq!(terminal["nodes"], 0);
+        assert_eq!(terminal["proof"]["learned_eval_calls"], 0);
+        request.initial_sfen = "4k4/9/9/9/9/9/9/9/4K4 b - 1".into();
+        request.moves.clear();
+        request.depth = 1;
+        request.nodes = Some(8);
+        let normal = super::search(Some(&model), &request, std::time::Instant::now()).unwrap();
+        assert_eq!(normal["outcome"], "evaluated");
+        assert!(normal["proof"]["learned_eval_calls"].as_u64().unwrap() > 0);
+        for response in [&terminal, &normal] {
+            for counter in [
+                "handcrafted_eval_calls",
+                "residual_eval_calls",
+                "composite_eval_calls",
+                "book_hits",
+                "teacher_calls",
+                "fallback_count",
+            ] {
+                assert_eq!(response["proof"][counter], 0);
+            }
+        }
+    }
     #[cfg(feature = "handcrafted")]
     #[test]
     fn experimental_player_uses_the_named_evaluator_configuration() {

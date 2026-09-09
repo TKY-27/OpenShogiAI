@@ -6593,6 +6593,11 @@ fn validate_phase2_csa_terminal(
             CsaResultValidation::Verified,
             0,
         ),
+        (CsaSpecialMove::Other(code), Some(GameEnd::NoLegalMoves { loser }))
+            if code == "NO_LEGAL_MOVES" =>
+        {
+            (phase2_side_result(loser.opposite()), CsaResultValidation::Verified, 0)
+        }
         (
             CsaSpecialMove::Repetition,
             Some(GameEnd::Repetition(RepetitionOutcome::NoContest)),
@@ -8890,6 +8895,10 @@ fn format_hand(position: &Position, side: Side) -> String {
 fn special_from_end(end: GameEnd) -> (CsaSpecialMove, CsaResultValidation) {
     match end {
         GameEnd::Checkmate { .. } => (CsaSpecialMove::Checkmate, CsaResultValidation::Verified),
+        GameEnd::NoLegalMoves { .. } => (
+            CsaSpecialMove::Other("NO_LEGAL_MOVES".to_owned()),
+            CsaResultValidation::Verified,
+        ),
         GameEnd::Repetition(RepetitionOutcome::NoContest) => {
             (CsaSpecialMove::Repetition, CsaResultValidation::Verified)
         }
@@ -9342,6 +9351,9 @@ fn validate_human_play_terminal(
         .ok_or_else(|| "human-play CSA lacks a terminal result".to_owned())?;
     let valid = match special {
         CsaSpecialMove::Checkmate => matches!(replayed_end, Some(GameEnd::Checkmate { .. })),
+        CsaSpecialMove::Other(code) if code == "NO_LEGAL_MOVES" => {
+            matches!(replayed_end, Some(GameEnd::NoLegalMoves { .. }))
+        }
         CsaSpecialMove::Repetition => matches!(
             replayed_end,
             Some(GameEnd::Repetition(RepetitionOutcome::NoContest))

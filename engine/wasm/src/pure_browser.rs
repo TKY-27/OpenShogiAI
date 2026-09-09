@@ -9,7 +9,7 @@ use open_shogi_core::{
     parse_usi_move, to_sfen, to_usi_move,
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 const SNAPSHOT_SCHEMA: &str = "open_shogi_browser_snapshot/v1";
@@ -189,6 +189,8 @@ pub struct BrowserEngine {
     initial_sfen: String,
     game: Game,
     model: Option<PurePlayingEvaluator>,
+    computation: Option<Arc<open_shogi_core::ComputationModel>>,
+    computation_enabled: bool,
     analysis: Option<AnalysisService>,
     analysis_identity: Option<(String, String)>,
     analysis_side: Option<Side>,
@@ -209,6 +211,8 @@ impl BrowserEngine {
             initial_sfen: to_sfen(&position),
             game: Game::new(position),
             model: None,
+            computation: None,
+            computation_enabled: false,
             analysis: None,
             analysis_identity: None,
             analysis_side: None,
@@ -280,6 +284,8 @@ impl BrowserEngine {
     ) -> Result<String, String> {
         // An unsuccessful replacement must not leave old weights available for accidental play.
         self.model = None;
+        self.computation = None;
+        self.computation_enabled = false;
         self.clear_analysis();
         let hash = expected_artifact_sha256
             .ok_or("pure-only browser requires an explicit model SHA-256")?;
@@ -295,8 +301,44 @@ impl BrowserEngine {
     /// Returns a snapshot serialization error.
     pub fn unload_model(&mut self) -> Result<String, String> {
         self.model = None;
+        self.computation = None;
+        self.computation_enabled = false;
         self.clear_analysis();
         self.snapshot_json()
+    }
+
+    /// Load a local learned computation policy, bound to the loaded leaf hash.
+    /// # Errors
+    /// Rejects missing leaf, malformed data and hash mismatch. Failed replacement revokes it.
+    pub fn load_compute_model(&mut self, bytes: &[u8], expected: &str) -> Result<String, String> {
+        self.computation = None;
+        self.computation_enabled = false;
+        self.clear_analysis();
+        let leaf = self
+            .model
+            .as_ref()
+            .ok_or("load the leaf before the computation model")?;
+        let model =
+            open_shogi_core::ComputationModel::from_bytes(bytes, expected, leaf.artifact_sha256())?;
+        let identity = serde_json::json!({
+            "schema":"open_shogiai_computation_identity/v1", "artifactSha256":model.sha256(),
+            "leafModelSha256":model.leaf_sha256(), "expectedHashVerified":true
+        });
+        self.computation = Some(Arc::new(model));
+        self.computation_enabled = true;
+        Ok(identity.to_string())
+    }
+
+    /// Toggle the mechanism for an explicit comparison on the identical leaf/runtime.
+    /// # Errors
+    /// Enabling before loading a trained computation model is rejected.
+    pub fn set_compute_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled && self.computation.is_none() {
+            return Err("no learned computation model loaded".into());
+        }
+        self.computation_enabled = enabled;
+        self.clear_analysis();
+        Ok(())
     }
     /// Opening books are unavailable in the pure-only build.
     /// # Errors
@@ -380,9 +422,9 @@ impl BrowserEngine {
             &CancellationToken::new(),
         );
         ensure_search_success(&result)?;
-        let runtime_proof = self.runtime_proof(&engine, evaluator, result.stats);
+        let runtime_proof = self.runtime_proof(&engine, &result)?;
         let lines = Self::multi_pv_lines(&result, multi_pv);
-        let response = SearchResponse::new(
+        let mut response = SearchResponse::new(
             profile,
             evaluator,
             self.game.position().side_to_move(),
@@ -391,6 +433,7 @@ impl BrowserEngine {
             "profile-nodes",
             runtime_proof,
         );
+        response.compute_control = engine.compute_control_summary().cloned();
         serde_json::to_string(&response).map_err(|error| error.to_string())
     }
 
@@ -435,9 +478,9 @@ impl BrowserEngine {
         let mut engine = self.search_engine(config, evaluator)?;
         let result = engine.search_managed(self.game.position(), plan, &CancellationToken::new());
         ensure_search_success(&result)?;
-        let runtime_proof = self.runtime_proof(&engine, evaluator, result.stats);
+        let runtime_proof = self.runtime_proof(&engine, &result)?;
         let lines = Self::multi_pv_lines(&result, multi_pv);
-        let response = SearchResponse::new(
+        let mut response = SearchResponse::new(
             profile,
             evaluator,
             self.game.position().side_to_move(),
@@ -446,6 +489,7 @@ impl BrowserEngine {
             mode,
             runtime_proof,
         );
+        response.compute_control = engine.compute_control_summary().cloned();
         serde_json::to_string(&response).map_err(|error| error.to_string())
     }
 
@@ -623,15 +667,23 @@ impl BrowserEngine {
             &parse_canonical_sfen(&self.initial_sfen)?,
             self.game.moves(),
         )?;
+        if let Some(computation) = &self.computation {
+            engine.set_computation_model(Arc::clone(computation))?;
+            engine.set_computation_enabled(self.computation_enabled)?;
+        }
         Ok(engine)
     }
     fn runtime_proof(
         &self,
         engine: &SearchEngine,
-        _evaluator: EvaluatorChoice,
-        stats: SearchStats,
-    ) -> Option<RuntimeProofCounters> {
-        Some(engine.runtime_proof(stats, self.model.as_ref()?.artifact_sha256().to_owned()))
+        result: &SearchResult,
+    ) -> Result<Option<RuntimeProofCounters>, String> {
+        let model = self.model.as_ref().ok_or("pure search requires a model")?;
+        let proof = engine.runtime_proof(result.stats, model.artifact_sha256());
+        if !proof.valid_pure_search(result) {
+            return Err("pure runtime proof failed".to_owned());
+        }
+        Ok(Some(proof))
     }
     fn clear_analysis(&mut self) {
         self.analysis = None;
@@ -651,6 +703,9 @@ impl BrowserEngine {
             })
     }
     fn multi_pv_lines(principal: &SearchResult, multi_pv: u8) -> Vec<SearchLineSummary> {
+        if !principal.outcome.has_score() {
+            return Vec::new();
+        }
         let mut lines = principal
             .root_moves
             .iter()
@@ -836,6 +891,7 @@ impl From<GameEnd> for TerminalSummary {
     fn from(end: GameEnd) -> Self {
         match end {
             GameEnd::Checkmate { winner } => Self::decisive("checkmate", winner),
+            GameEnd::NoLegalMoves { loser } => Self::decisive("no-legal-moves", loser.opposite()),
             GameEnd::Resignation { loser } => Self::decisive("resignation", loser.opposite()),
             GameEnd::Repetition(RepetitionOutcome::NoContest) => Self::neutral("repetition"),
             GameEnd::Repetition(RepetitionOutcome::PerpetualCheckLoss(loser)) => {
@@ -889,6 +945,7 @@ struct EvaluatorSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchResponse {
+    compute_control: Option<open_shogi_core::ComputeControlSummary>,
     schema: &'static str,
     time_control_schema: &'static str,
     time_control_mode: &'static str,
@@ -897,7 +954,8 @@ struct SearchResponse {
     perspective: &'static str,
     source: &'static str,
     best_move: Option<String>,
-    score_cp: i32,
+    score_cp: Option<i32>,
+    outcome: open_shogi_core::SearchOutcome,
     depth: u8,
     seldepth: u8,
     nodes: u64,
@@ -1060,6 +1118,7 @@ impl SearchResponse {
     ) -> Self {
         Self {
             schema: SEARCH_SCHEMA,
+            compute_control: None,
             time_control_schema: open_shogi_core::TIME_CONTROL_SCHEMA,
             time_control_mode,
             profile: profile.name(),
@@ -1067,7 +1126,8 @@ impl SearchResponse {
             perspective: side_name(perspective),
             source: "search",
             best_move: result.best_move.map(to_usi_move),
-            score_cp: result.score,
+            score_cp: result.outcome.has_score().then_some(result.score),
+            outcome: result.outcome,
             depth: result.depth,
             seldepth: result.seldepth,
             nodes: result.nodes,
@@ -1363,6 +1423,26 @@ impl WasmBrowserEngine {
     pub fn unload_model(&mut self) -> Result<String, JsError> {
         self.inner
             .unload_model()
+            .map_err(|error| JsError::new(&error))
+    }
+
+    #[wasm_bindgen(js_name = loadComputeModel)]
+    /// Load a local hash-bound computation artifact.
+    /// # Errors
+    /// Returns an identity, schema, leaf binding or numeric-validation failure.
+    pub fn load_compute_model(&mut self, bytes: &[u8], expected: &str) -> Result<String, JsError> {
+        self.inner
+            .load_compute_model(bytes, expected)
+            .map_err(|error| JsError::new(&error))
+    }
+
+    #[wasm_bindgen(js_name = setComputeEnabled)]
+    /// Explicitly select the learned controller or its ablation.
+    /// # Errors
+    /// Rejects enabling an unloaded policy.
+    pub fn set_compute_enabled(&mut self, enabled: bool) -> Result<(), JsError> {
+        self.inner
+            .set_compute_enabled(enabled)
             .map_err(|error| JsError::new(&error))
     }
 

@@ -767,6 +767,18 @@ fn classify_csa_result(
     special: &CsaSpecialMove,
 ) -> Result<CsaResultValidation, String> {
     match special {
+        // Local lossless extension: no legal move without check is a rule loss, not a
+        // fabricated resignation or checkmate. Unknown extensions still stay unverified.
+        CsaSpecialMove::Other(code) if code == "NO_LEGAL_MOVES" => {
+            if repetition.is_none()
+                && !position.is_in_check(position.side_to_move())
+                && position.legal_moves().is_empty()
+            {
+                Ok(CsaResultValidation::Verified)
+            } else {
+                Err("terminal result `%NO_LEGAL_MOVES` is inconsistent with replay".to_owned())
+            }
+        }
         CsaSpecialMove::Checkmate if position.is_checkmate() => Ok(CsaResultValidation::Verified),
         CsaSpecialMove::Checkmate => {
             Err("terminal result `%TSUMI` is inconsistent with the replayed position".to_owned())

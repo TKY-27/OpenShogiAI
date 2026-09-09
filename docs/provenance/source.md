@@ -29,9 +29,10 @@ commits in this clean history.
 ## Current generated interface
 
 The development bindings are generated from this repository's Rust source and Cargo.lock
-with wasm-bindgen 0.2.127. `make wasm-web-check` verifies all four files byte-for-byte.
+with wasm-bindgen 0.2.127. Source paths in standard distributed bindings are remapped to
+`/user`, `/cargo` and `/open-shogi` at compile time; no host account path is retained. `make wasm-web-check` verifies all four files byte-for-byte.
 The current Wasm SHA-256 is
-`13ea44c68bc8a239fbaeb87c80e5fac00ab2ae8faa017ea223f8a3deef1ccd52`.
+`8a07d7261447b23fcce1e72937b8190e7f54f7c34ee98fd45bfd009de7981962`.
 `scripts/check_provenance.sh` also checks their identities and private-history exclusion.
 Older generation hashes remain historical Git evidence, not current freeze gates.
 

@@ -1050,6 +1050,7 @@ impl From<GameEnd> for TerminalSummary {
     fn from(end: GameEnd) -> Self {
         match end {
             GameEnd::Checkmate { winner } => Self::decisive("checkmate", winner),
+            GameEnd::NoLegalMoves { loser } => Self::decisive("no-legal-moves", loser.opposite()),
             GameEnd::Resignation { loser } => Self::decisive("resignation", loser.opposite()),
             GameEnd::Repetition(RepetitionOutcome::NoContest) => Self::neutral("repetition"),
             GameEnd::Repetition(RepetitionOutcome::PerpetualCheckLoss(loser)) => {

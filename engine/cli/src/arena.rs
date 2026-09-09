@@ -1279,6 +1279,11 @@ fn outcome_from_end(end: GameEnd) -> GameOutcome {
             special: CsaSpecialMove::Checkmate,
             validation: CsaResultValidation::Verified,
         },
+        GameEnd::NoLegalMoves { loser } => GameOutcome {
+            result: winner_result(loser.opposite()),
+            special: CsaSpecialMove::Other("NO_LEGAL_MOVES".to_owned()),
+            validation: CsaResultValidation::Verified,
+        },
         GameEnd::Repetition(RepetitionOutcome::NoContest) => GameOutcome {
             result: ArenaResult::Draw,
             special: CsaSpecialMove::Repetition,
@@ -2461,6 +2466,9 @@ fn validate_resumed_game(
         return Err("arena resume CSA terminal identity mismatch".to_owned());
     }
     let expected_validation = match special {
+        CsaSpecialMove::Other(code) if code == "NO_LEGAL_MOVES" => {
+            CsaResultValidation::Verified
+        }
         CsaSpecialMove::Checkmate | CsaSpecialMove::Repetition | CsaSpecialMove::PerpetualCheck => {
             CsaResultValidation::Verified
         }
@@ -2612,6 +2620,11 @@ fn replayed_csa_result(game: &CsaGame) -> Result<ArenaResult, String> {
     match (special, end) {
         (CsaSpecialMove::Checkmate, Some(GameEnd::Checkmate { winner })) => {
             Ok(winner_result(winner))
+        }
+        (CsaSpecialMove::Other(code), Some(GameEnd::NoLegalMoves { loser }))
+            if code == "NO_LEGAL_MOVES" =>
+        {
+            Ok(winner_result(loser.opposite()))
         }
         (CsaSpecialMove::Repetition, Some(GameEnd::Repetition(RepetitionOutcome::NoContest))) => {
             Ok(ArenaResult::Draw)
@@ -5449,6 +5462,25 @@ mod tests {
         );
         assert_eq!(outcome.result, ArenaResult::WhiteWin);
         assert_eq!(outcome.special, open_shogi_core::CsaSpecialMove::Checkmate);
+    }
+
+    #[test]
+    fn no_legal_move_loss_round_trips_without_claiming_checkmate_or_resignation() {
+        let initial = open_shogi_core::parse_sfen(
+            "4k4/3P1P3/5K3/9/9/9/9/9/9 b - 1",
+        ).unwrap();
+        let movement = open_shogi_core::parse_usi_move("4c5c").unwrap();
+        let mut game = open_shogi_core::Game::new(initial.clone());
+        let end = game.play(movement).unwrap().unwrap();
+        let outcome = super::outcome_from_end(end);
+        let (_, csa) = encode_csa(&initial, &[movement], "a", "b", &outcome).unwrap();
+        assert!(csa.contains("%NO_LEGAL_MOVES"));
+        let parsed = open_shogi_core::parse_csa_game(&csa).unwrap();
+        assert_eq!(parsed.result_validation, open_shogi_core::CsaResultValidation::Verified);
+        assert_eq!(super::replayed_csa_result(&parsed).unwrap(), ArenaResult::BlackWin);
+        let mut wrong = parsed;
+        wrong.moves.clear();
+        assert!(open_shogi_core::to_csa_game(&wrong).is_err());
     }
 
     #[test]

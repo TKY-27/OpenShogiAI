@@ -43,6 +43,7 @@ fn run() -> Result<(), String> {
     }
     let (termination, result) = match game.end() {
         Some(GameEnd::Checkmate { winner }) => ("checkmate", side(winner)),
+        Some(GameEnd::NoLegalMoves { loser }) => ("no_legal_moves", side(loser.opposite())),
         Some(GameEnd::Repetition(RepetitionOutcome::NoContest)) => ("repetition", "draw"),
         Some(GameEnd::Repetition(RepetitionOutcome::PerpetualCheckLoss(loser))) => {
             ("perpetual_check", side(loser.opposite()))

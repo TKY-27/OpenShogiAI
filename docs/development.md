@@ -44,3 +44,57 @@ only a small fixed search and explicit failure-on-bad-model checks; they do not 
 
 No CI workflow is configured in this tree. Local passes do not claim remote CI, device/browser UI,
 publication, training recovery or large-evaluation availability.
+
+## Local computation-control prototype
+
+The trained controller and frozen W256 stay local. Their expected identities and aggregate
+training counts are in `configs/core-prototype.json`; detailed machine-readable evidence is in
+`local/core-prototype/`. No download of a large archive or teacher is needed for this prototype.
+
+Build the pure native/Wasm runtime once after a source change:
+
+```sh
+make pure-build
+```
+
+With the existing local artifacts, open the adjacent UI checkout:
+
+```sh
+cd ../OpenShogiUI
+npm ci --ignore-scripts
+npm run dev -- --host 127.0.0.1 --port 5176 --strictPort
+```
+
+Visit `http://127.0.0.1:5176/#/core-prototype`. Choose your side and computation control ON/OFF,
+then start. Both sides have three minutes sudden death and no opening book. Stop preserves the
+confirmed position and clocks; Resume reloads the same assets. Rematch permits a new side/control
+choice. The controller, W256 and pure Wasm are served only by loopback development middleware.
+The existing public default evaluator, pinned standard UI bindings and production build are
+unchanged. Accordingly, the legacy `npm run integration:ai` checks a different standard artifact
+snapshot and is not the prototype integration check. See the UI README for that contract.
+
+The native collection driver uses qdepth 4, TT 2 MiB and one thread, matching the prototype's
+Wasm eco profile. To inspect or reproduce the bounded experiment, use new output directories;
+the scripts refuse replacement. These commands are documentation, not startup requirements:
+
+```sh
+cargo build --release --locked -p open-shogi-core --example core_probe --no-default-features --features pure-only
+python3.12 scripts/collect_core_prototype.py --probe target/release/examples/core_probe \
+  --leaf local/frozen/baseline/model.osaval03 \
+  --leaf-sha256 859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480 \
+  --output local/core-prototype/reproduction-cohort
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.core_prototype \
+  local/core-prototype/reproduction-cohort/records.jsonl local/core-prototype/reproduction-fit \
+  --leaf-sha256 859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480 \
+  --split-guard local/frozen/metadata/split-guard.json
+node scripts/check_core_prototype.mjs target/pure/bindings/open_shogi_wasm.js \
+  local/frozen/baseline/model.osaval03 859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480 \
+  local/core-prototype/controller.json 66110bae4ef5fbedd6a3c5537813f0fae5b9276b576a745b2364b4a093141b63 \
+  local/core-prototype/wasm-contract.json
+```
+
+Collection is capped at 24 trajectories × 8 samples, depth 4 / 20,000 nodes / 1 second;
+training is one full-batch logistic fit, 300 updates, one best checkpoint and one resume state.
+The saved original label probe is `local/core-prototype/label-probe`. Time-limited collection
+and compiler changes can change later traces, so reproduction creates a new identity rather
+than claiming byte equality with the original data. Do not automatically rerun or enlarge it.

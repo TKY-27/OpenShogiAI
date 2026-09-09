@@ -12,6 +12,11 @@ compile_error!("handcrafted and pure-only are mutually exclusive");
 compile_error!("select exactly one of handcrafted or pure-only");
 
 mod analysis;
+mod computation;
+pub use computation::{
+    COMPUTATION_FEATURES, COMPUTATION_SCHEMA, ComputationModel, ComputeControlSummary,
+    computation_features,
+};
 #[cfg(feature = "handcrafted")]
 mod champion;
 #[cfg(feature = "handcrafted")]
@@ -112,7 +117,8 @@ pub use runtime_profile::{
 pub use search::{
     CancellationToken, MATE_SCORE, MATE_THRESHOLD, MateSearchResult, MonotonicClock,
     RandomMoveSelector, RootMoveStat, SearchConfig, SearchEngine, SearchInfo, SearchLimits,
-    SearchResult, SearchStats, SearchTermination, SystemMonotonicClock, is_mate_score,
+    SearchOutcome, SearchResult, SearchStats, SearchTermination, SystemMonotonicClock,
+    is_mate_score,
 };
 #[doc(hidden)]
 #[cfg(any(

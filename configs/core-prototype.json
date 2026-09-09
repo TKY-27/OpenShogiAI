@@ -1,0 +1,61 @@
+{
+  "schema": "open_shogiai_core_prototype_summary/v1",
+  "scope": "one local computation-control prototype; no strength certification",
+  "main_base": "8670880c692b3040b7974160ef42aa114d33aa36",
+  "leaf_sha256": "859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480",
+  "controller_sha256": "66110bae4ef5fbedd6a3c5537813f0fae5b9276b576a745b2364b4a093141b63",
+  "label_probe_sha256": "362867d270af4bc0a9baf8667caa5a7c2b8b0adde93ac01b69b3cf39ae82f9af",
+  "records_sha256": "0eb7325dd45c9e017e0e78bb520b1a9fb68ca16033c5f7e0f1587f2d52d670d1",
+  "source": "24 own legal game trajectories, seed 930200; no external acquisition",
+  "acquired_positions": 182,
+  "deduplicated_positions": 182,
+  "usable_positions": 180,
+  "source_games_by_split": {
+    "train": 16,
+    "validation": 4,
+    "development_test": 4
+  },
+  "positions_by_split": {
+    "train": 123,
+    "validation": 32,
+    "development_test": 25
+  },
+  "training_examples": 13028,
+  "updates": 300,
+  "example_exposures": 3908400,
+  "position_exposures": 36900,
+  "retained_checkpoints": 1,
+  "resume_states": 1,
+  "development_log_loss": {
+    "learned": 0.08338533048995808,
+    "role_conditioned_train_prior": 0.08299187374764387
+  },
+  "final_holdout_opened": false,
+  "weights_distributed": false,
+  "local_controller": "local/core-prototype/controller.json",
+  "limitations": [
+    "Shared opening ancestry and one weak self-generated source limit independence.",
+    "Alpha-beta score bounds and deeper choices are noisy references, not objective truth.",
+    "Learned risk does not outperform a simple role-conditioned prior; no strength claim."
+  ],
+  "execution_identity": {
+    "native_probe_sha256": "4e57db5c21eb36ae1981a75b878dbcb55d62f0fec1d8cbd985f56770a6710575",
+    "pure_wasm_sha256": "68d1df47dd27440e48f795e9fc367a92d892f5780c8d49fc384e14ecaed30877",
+    "pure_js_sha256": "5d6edb186ee91720deca6363b2324d184a31d211ac2030a4752dbfc08d49c6c0",
+    "historical_hard4_native_sha256": "7cf039542aa5e9ff3055afbd2d04bdf04bd959f7e440f381646fe7753892ed49"
+  },
+  "comparison": {
+    "games": 2,
+    "clock_ms_each": 20000,
+    "color_reversed": true,
+    "controller_on_wins": 2,
+    "plies": [
+      133,
+      134
+    ],
+    "invalid": 0,
+    "unfinished": 0,
+    "deadline_violations": 0,
+    "strength_claim": false
+  }
+}

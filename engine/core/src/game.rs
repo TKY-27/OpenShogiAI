@@ -15,8 +15,16 @@ pub enum RepetitionOutcome {
 /// Terminal state recorded by the rules layer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GameEnd {
-    Checkmate { winner: Side },
-    Resignation { loser: Side },
+    Checkmate {
+        winner: Side,
+    },
+    /// Loss without check when the side to move has no legal move (CSA rule 27.1.1).
+    NoLegalMoves {
+        loser: Side,
+    },
+    Resignation {
+        loser: Side,
+    },
     Repetition(RepetitionOutcome),
     Impasse(ImpasseOutcome),
     EnteringKing(EnteringKingDeclaration),
@@ -112,9 +120,7 @@ impl Game {
     /// Starts a game from an arbitrary validated position.
     #[must_use]
     pub fn new(position: Position) -> Self {
-        let end = position.is_checkmate().then_some(GameEnd::Checkmate {
-            winner: position.side_to_move().opposite(),
-        });
+        let end = no_legal_move_end(&position);
         Self {
             positions: vec![position.clone()],
             position,
@@ -150,7 +156,6 @@ impl Game {
             return Err(crate::IllegalMove::GameAlreadyEnded);
         }
 
-        let mover = self.position.side_to_move();
         let undo = self.position.make_move(mv)?;
         let checked_side = self.position.side_to_move();
         let check = self.position.is_in_check(checked_side);
@@ -161,10 +166,8 @@ impl Game {
 
         self.end = if let Some(repetition) = self.repetition_outcome() {
             Some(GameEnd::Repetition(repetition))
-        } else if self.position.is_checkmate() {
-            Some(GameEnd::Checkmate { winner: mover })
         } else {
-            None
+            no_legal_move_end(&self.position)
         };
         Ok(self.end)
     }
@@ -410,6 +413,22 @@ pub(crate) fn repetition_outcome_from_history(
     Some(RepetitionOutcome::NoContest)
 }
 
+fn no_legal_move_end(position: &Position) -> Option<GameEnd> {
+    if !position.legal_moves().is_empty() {
+        return None;
+    }
+    let loser = position.side_to_move();
+    Some(if position.is_in_check(loser) {
+        GameEnd::Checkmate {
+            winner: loser.opposite(),
+        }
+    } else {
+        // Shogi has no pass or chess-style stalemate draw. Keep this separate from checkmate.
+        // https://www.computer-shogi.org/wcsc36/rule.pdf, article 27, paragraph 1, item 1.
+        GameEnd::NoLegalMoves { loser }
+    })
+}
+
 fn in_enemy_camp(side: Side, rank: u8) -> bool {
     match side {
         Side::Black => rank <= 3,
@@ -479,6 +498,26 @@ const fn piece_points(kind: PieceKind) -> u8 {
 mod tests {
     use super::{Game, ImpasseCondition, RepetitionOutcome, repetition_outcome_from_moves};
     use crate::{Move, Side, Square, parse_sfen, parse_usi_move};
+
+    #[test]
+    fn no_legal_moves_without_check_is_a_loss_and_undo_restores_play() {
+        let position = parse_sfen("4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1").unwrap();
+        assert!(!position.is_in_check(Side::White));
+        assert!(position.legal_moves().is_empty());
+        let expected = Some(super::GameEnd::NoLegalMoves { loser: Side::White });
+        assert_eq!(Game::new(position).end(), expected);
+
+        let initial = parse_sfen("4k4/3P1P3/5K3/9/9/9/9/9/9 b - 1").unwrap();
+        let mut game = Game::new(initial.clone());
+        assert_eq!(
+            game.play(parse_usi_move("4c5c").unwrap()).unwrap(),
+            expected
+        );
+        assert!(game.play(parse_usi_move("5a4a").unwrap()).is_err());
+        assert!(game.undo());
+        assert_eq!(game.end(), None);
+        assert_eq!(game.position(), &initial);
+    }
 
     #[test]
     fn ordinary_fourfold_repetition_is_detected() {

@@ -36,8 +36,10 @@ make check
 
 Standard builds/tests use synthetic or small checked-in fixtures, not private training data.
 For the optional local frozen W256 comparison model, see [model handling](docs/model/handling.md).
-A working model loader is not evidence of playing strength. A known hard4 runtime-proof failure
-remains unresolved; neither complete game reliability nor OSUI integration is claimed by a smoke test.
+The hard4 terminal/runtime-proof failure is fixed. The local core prototype learns root-work
+ordering and game-clock spending while keeping W256 frozen. It is available through an explicit
+development-only OSUI choice; it is not a playing-strength or model-promotion claim. See the
+[prototype status](docs/status.md) and [local play instructions](docs/development.md).
 
 ## Documentation
 

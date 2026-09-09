@@ -26,7 +26,32 @@ if [ "$($wasm_bindgen --version)" != "wasm-bindgen 0.2.127" ]; then
   exit 1
 fi
 
-cargo build --locked --release -p open-shogi-wasm --target wasm32-unknown-unknown
+# Keep source-location strings reproducible and free of host account paths.
+# Encoded flags preserve paths containing spaces and existing caller flags.
+python3.12 - "$project_root" <<'PY_BUILD'
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+environment = os.environ.copy()
+separator = chr(31)
+encoded = environment.get("CARGO_ENCODED_RUSTFLAGS")
+flags = encoded.split(separator) if encoded else shlex.split(environment.get("RUSTFLAGS", ""))
+for source, target in (
+    (Path.home(), "/user"),
+    (Path(environment.get("CARGO_HOME", str(Path.home() / ".cargo"))), "/cargo"),
+    (Path(sys.argv[1]), "/open-shogi"),
+):
+    flags.append(f"--remap-path-prefix={source.resolve()}={target}")
+environment["CARGO_ENCODED_RUSTFLAGS"] = separator.join(flags)
+subprocess.run(
+    ["cargo", "build", "--locked", "--release", "-p", "open-shogi-wasm",
+     "--target", "wasm32-unknown-unknown"],
+    env=environment, check=True,
+)
+PY_BUILD
 
 temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/open-shogi-wasm-web.XXXXXX")
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM

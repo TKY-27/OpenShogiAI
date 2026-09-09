@@ -139,7 +139,10 @@ impl PureEngine {
         let proof = self
             .engine
             .runtime_proof(result.stats, self.model.artifact_sha256().to_owned());
-        Ok(serde_json::json!({"schema":"open_shogiai_phase10t_pure_runtime/v1", "compiled_evaluators":open_shogi_core::COMPILED_EVALUATORS, "best_move":result.best_move.map(to_usi_move), "score":result.score,"depth":result.depth,"nodes":result.nodes,"proof":proof}).to_string())
+        if !proof.valid_pure_search(&result) {
+            return Err("pure runtime proof failed".to_owned());
+        }
+        Ok(serde_json::json!({"schema":"open_shogiai_phase10t_pure_runtime/v1", "compiled_evaluators":open_shogi_core::COMPILED_EVALUATORS, "best_move":result.best_move.map(to_usi_move), "score":result.outcome.has_score().then_some(result.score),"outcome":result.outcome,"depth":result.depth,"nodes":result.nodes,"proof":proof}).to_string())
     }
 }
 
@@ -153,6 +156,40 @@ fn parse_history(json: &str) -> Result<open_shogi_core::Osaval02History, String>
 #[cfg(test)]
 mod tests {
     use super::{PureEngine, parse_history};
+    #[test]
+    fn pure_wasm_boundary_reports_no_legal_moves_and_still_evaluates_normal_roots() {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../../../tests/fixtures/osaval02/pure-history.osaval02.gz")[..],
+        )
+        .read_to_end(&mut bytes)
+        .unwrap();
+        let model = open_shogi_core::Osaval02Evaluator::from_bytes(&bytes).unwrap();
+        let mut engine = PureEngine::new_with_format(
+            &bytes,
+            &model.identity().artifact_sha256,
+            "pure_learned",
+            "OSAVAL02",
+        )
+        .unwrap();
+        let terminal: serde_json::Value = serde_json::from_str(
+            &engine
+                .search_history("4k4/3P1P3/5K3/9/9/9/9/9/9 b - 1", r#"["4c5c"]"#, 64, 2000)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(terminal["outcome"], "no_legal_moves");
+        assert_eq!(terminal["best_move"], serde_json::Value::Null);
+        assert_eq!(terminal["score"], -open_shogi_core::MATE_SCORE);
+        assert_eq!(terminal["nodes"], 0);
+        assert_eq!(terminal["proof"]["learned_eval_calls"], 0);
+        let normal: serde_json::Value =
+            serde_json::from_str(&engine.search("4k4/9/9/9/9/9/9/9/4K4 b - 1", 1, 8).unwrap())
+                .unwrap();
+        assert_eq!(normal["outcome"], "evaluated");
+        assert!(normal["proof"]["learned_eval_calls"].as_u64().unwrap() > 0);
+    }
     #[test]
     fn history_json_rejects_unknown_fields_types_and_oversize() {
         assert!(parse_history(r#"{"available":true,"repetition_count":2}"#).is_err());

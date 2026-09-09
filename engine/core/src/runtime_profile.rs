@@ -78,6 +78,74 @@ impl RuntimeProofCounters {
     /// Whether the evidence satisfies the pure learned invariant.
     #[must_use]
     pub fn valid_pure_learned(&self) -> bool {
+        self.valid_pure_runtime() && self.learned_eval_calls > 0
+    }
+
+    /// Validate measured evidence against the explicit result of one search.
+    /// The legacy positive-inference proof stays strict. Rule-terminal and pre-evaluation
+    /// interruption results instead require exact zero-work shapes and their declared reason.
+    #[must_use]
+    pub fn valid_pure_search(&self, result: &crate::SearchResult) -> bool {
+        use crate::{MATE_SCORE, SearchOutcome, SearchTermination};
+
+        if !self.valid_pure_runtime()
+            || self.learned_eval_calls != result.stats.learned_eval_calls
+            || self.handcrafted_eval_calls != result.stats.handcrafted_eval_calls
+            || self.residual_eval_calls != result.stats.residual_eval_calls
+            || self.composite_eval_calls != result.stats.composite_eval_calls
+            || self.fallback_count != result.stats.fallback_count
+            || result.termination == SearchTermination::EvaluationError
+        {
+            return false;
+        }
+        if result.outcome == SearchOutcome::Evaluated {
+            return self.learned_eval_calls > 0 && result.best_move.is_some();
+        }
+        if self.learned_eval_calls != 0
+            || result.stats.neural_inference_calls != 0
+            || self.accumulator_updates != 0
+            || self.accumulator_refreshes != 0
+            || result.nodes != 0
+            || result.depth != 0
+            || result.seldepth != 0
+            || !result.root_moves.is_empty()
+        {
+            return false;
+        }
+        if result.outcome.is_terminal() {
+            return result.termination == SearchTermination::Completed
+                && result.best_move.is_none()
+                && result.pv.is_empty()
+                && match result.outcome {
+                    SearchOutcome::Checkmate | SearchOutcome::NoLegalMoves => {
+                        result.score == -MATE_SCORE
+                    }
+                    SearchOutcome::Repetition => result.score == 0,
+                    SearchOutcome::PerpetualCheck => {
+                        result.score.unsigned_abs() == MATE_SCORE.unsigned_abs()
+                    }
+                    _ => false,
+                };
+        }
+        result.best_move.is_some()
+            && result.pv == result.best_move.into_iter().collect::<Vec<_>>()
+            && result.score == 0
+            && matches!(
+                (result.outcome, result.termination),
+                (
+                    SearchOutcome::CancelledBeforeEvaluation,
+                    SearchTermination::Cancelled
+                ) | (
+                    SearchOutcome::NodeLimitBeforeEvaluation,
+                    SearchTermination::NodeLimit
+                ) | (
+                    SearchOutcome::TimeLimitBeforeEvaluation,
+                    SearchTermination::TimeLimit
+                )
+            )
+    }
+
+    fn valid_pure_runtime(&self) -> bool {
         self.profile == PURE_LEARNED_PROFILE_NAME
             && ((self.profile_schema == PURE_LEARNED_PROFILE_SCHEMA
                 && self.evaluator_profile_schema_hash == PURE_LEARNED_PROFILE_SCHEMA_SHA256)
@@ -85,7 +153,6 @@ impl RuntimeProofCounters {
                     && self.evaluator_profile_schema_hash == PHASE10T_PROFILE_SCHEMA_SHA256)
                 || (self.profile_schema == PHASE10V_PROFILE_SCHEMA
                     && self.evaluator_profile_schema_hash == PHASE10V_PROFILE_SCHEMA_SHA256))
-            && self.learned_eval_calls > 0
             && self.handcrafted_eval_calls == 0
             && self.residual_eval_calls == 0
             && self.composite_eval_calls == 0
