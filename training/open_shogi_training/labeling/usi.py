@@ -13,7 +13,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import BinaryIO, Final, Literal
 
 from open_shogi_training.labeling.config import TeacherConfig, resolve_config_path
 from open_shogi_training.labeling.execution import (
@@ -57,6 +57,8 @@ class USIError(RuntimeError):
     def __init__(self, message: str, *, stderr_tail: str = "") -> None:
         super().__init__(message)
         self.stderr_tail = stderr_tail
+        self.stdout_tail = ""
+        self.bestmove_line: str | None = None
 
 
 class USITimeoutError(USIError):
@@ -129,6 +131,15 @@ class USISearchResult:
     @property
     def primary(self) -> USICandidate:
         return self.candidates[0]
+
+
+@dataclass(frozen=True, slots=True)
+class USITerminalResult:
+    """A teacher claim, requiring native rules validation before use as an outcome."""
+
+    outcome: Literal["win", "resign"]
+    raw_bestmove: str
+    elapsed_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,13 +376,23 @@ class USIEngine:
     """One persistent USI process with strict protocol and process-group cleanup."""
 
     def __init__(
-        self, config: TeacherConfig, project_root: Path, *, isolate_process_group: bool = True
+        self,
+        config: TeacherConfig,
+        project_root: Path,
+        *,
+        isolate_process_group: bool = True,
+        allow_terminal_outcomes: bool = False,
     ) -> None:
         # Only the finite evaluator runner opts into its already isolated stage group.
         # Every other teacher caller retains the historical private-session default.
         if type(isolate_process_group) is not bool:
             raise ValueError("isolate_process_group must be boolean")
+        if type(allow_terminal_outcomes) is not bool:
+            raise ValueError("allow_terminal_outcomes must be boolean")
         self._isolate_process_group = isolate_process_group
+        self._allow_terminal_outcomes = allow_terminal_outcomes
+        self._search_stdout_tail = b""
+        self._search_bestmove_line: str | None = None
         self.config = config
         self.project_root = project_root.resolve(strict=True)
         self.executable = resolve_config_path(
@@ -396,6 +417,13 @@ class USIEngine:
     @property
     def stderr_tail(self) -> str:
         return "" if self._stderr is None else self._stderr.text()
+
+    @property
+    def search_diagnostics(self) -> dict[str, str | None]:
+        return {
+            "bestmove_line": self._search_bestmove_line,
+            "stdout_tail": self._search_stdout_tail.decode("utf-8", errors="replace"),
+        }
 
     def __enter__(self) -> USIEngine:
         self.start()
@@ -524,9 +552,13 @@ class USIEngine:
         self._send("usinewgame")
         self._ready()
 
-    def analyze(self, sfen: str, *, nodes: int | None = None) -> USISearchResult:
+    def analyze(
+        self, sfen: str, *, nodes: int | None = None
+    ) -> USISearchResult | USITerminalResult:
         """Analyze one independent SFEN, issuing stop before a timeout failure."""
 
+        self._search_stdout_tail = b""
+        self._search_bestmove_line = None
         self._ensure_started()
         requested_nodes = self.config.nodes if nodes is None else nodes
         if isinstance(requested_nodes, bool) or not isinstance(requested_nodes, int):
@@ -544,6 +576,11 @@ class USIEngine:
         try:
             while True:
                 line = self._readline(deadline, "search")
+                self._search_stdout_tail = (
+                    self._search_stdout_tail + line.encode("utf-8") + b"\n"
+                )[-8192:]
+                if line.startswith("bestmove "):
+                    self._search_bestmove_line = line
                 lines += 1
                 if lines > self.config.protocol_limits.max_search_lines:
                     raise self._protocol_error("teacher search exceeded the output-line bound")
@@ -559,6 +596,7 @@ class USIEngine:
                         candidates,
                         expected_multipv=self.config.multipv,
                         elapsed_ms=elapsed_ms,
+                        allow_terminal_outcomes=self._allow_terminal_outcomes,
                     )
                     self._assert_executable_metadata_unchanged()
                     return result
@@ -566,8 +604,16 @@ class USIEngine:
         except USITimeoutError:
             self._send_stop_after_timeout()
             raise
+        except USIProtocolError as error:
+            error.stdout_tail = self.search_diagnostics["stdout_tail"]
+            error.bestmove_line = self._search_bestmove_line
+            if not error.stderr_tail:
+                error.stderr_tail = self.stderr_tail
+            raise
 
-    def analyze_with_retry(self, sfen: str, *, nodes: int | None = None) -> USISearchResult:
+    def analyze_with_retry(
+        self, sfen: str, *, nodes: int | None = None
+    ) -> USISearchResult | USITerminalResult:
         """Restart and retry crashes/timeouts; reject malformed protocol immediately."""
 
         attempts = 0
@@ -957,11 +1003,18 @@ def _finish_search(
     *,
     expected_multipv: int,
     elapsed_ms: int,
-) -> USISearchResult:
+    allow_terminal_outcomes: bool = False,
+) -> USISearchResult | USITerminalResult:
     tokens = bestmove_line.split(" ")
     if len(tokens) not in {2, 4} or tokens[0] != "bestmove":
         raise USIProtocolError("malformed bestmove line")
     bestmove = tokens[1]
+    if allow_terminal_outcomes and bestmove in {"win", "resign"}:
+        if len(tokens) != 2:
+            raise USIProtocolError("special bestmove must have exactly two tokens")
+        return USITerminalResult(
+            outcome=bestmove, raw_bestmove=bestmove_line, elapsed_ms=elapsed_ms
+        )
     if _USI_MOVE_RE.fullmatch(bestmove) is None:
         raise USIProtocolError("teacher bestmove is not a normal USI move")
     if len(tokens) == 4 and (tokens[2] != "ponder" or _USI_MOVE_RE.fullmatch(tokens[3]) is None):

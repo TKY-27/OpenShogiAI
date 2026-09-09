@@ -107,15 +107,19 @@ The current approved run is `configs/evaluator-main.json`. Its one operational e
 
 ```sh
 PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/evaluator-20260910/main
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/evaluator-20260910/main
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/evaluator-20260910/main
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/evaluator-20260910/main-r2
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/evaluator-20260910/main-r2
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/evaluator-20260910/main-r2
 ```
 
 `seal` runs once after the code commit and local preflight; `start` also resumes. Do not reseal
 or edit a running contract. `docs/status.md` records whether it has actually been sealed/launched.
 The run binds code, native/Wasm files, teacher configuration, frozen model, split metadata and seed.
 The supervisor advances generation, preparation, training, export audit and the predefined arena.
+The current r2 recovery preserves all 327 verified completed trajectories from the stopped first
+run through a hash-bound continuation manifest. The source raw labels/receipts are immutable
+hard links; they are not regenerated or counted as newly acquired twice. The original campaign
+start and swap baseline carry into the prepared state, so the 24-hour limit is not reset.
 It stops at `awaiting_astra_browser`; this does not promote or publish a model.
 
 Luna (`gpt-5.6-luna`, `max`) executes this contract, reads state on meaningful changes, and owns
@@ -155,8 +159,11 @@ including known diagnostic/preflight positions and frozen split-guard hashes. No
 contents are opened. New trajectories share a teacher and starting state; they are not independent
 human games. Every move is checked by our native rules engine. Roots and teacher candidate children
 use typed scores with explicit side-to-move conversion; mate and terminal children are masked.
-Weak baseline-preferred deviations receive a separate teacher analysis. Raw labels and lineage
-remain available. Scores are not mixed with another teacher or converted from unknown WDL scales.
+Weak baseline-preferred deviations receive a separate teacher analysis. A teacher declaration
+response is independently checked under its CSA entering-king rules; it is retained as a typed
+ending, never converted into an invented scalar label. The ordinary strict MultiPV adapter
+contract and the engine's separate JSA rules remain unchanged. Raw labels and lineage remain
+available. Scores are not mixed with another teacher or converted from unknown WDL scales.
 
 The fixed main plan uses 2,048 trajectories, at most 192 plies, two teacher workers at 25,000 nodes,
 and samples every second root plus candidate children. It targets roughly 250,000–700,000 distinct

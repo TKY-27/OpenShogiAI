@@ -5,7 +5,9 @@
 学習開始の再承認は不要。公開既定モデルへの昇格、mainへの試作統合、本番公開、
 重みの公開、有料計算資源の契約は今回の範囲外。
 現在は修正・実教師による短い学習/再開/export試験と実行監督の重要レビューを完了した。
-本学習runは起動済みで、新規データを生成中。重み更新・学習後評価はまだ始まっていない。
+本学習runは327trajectory生成後に教師特殊応答の契約エラーで安全停止した。
+完了データを保全し、契約修正後の別run `evaluator-20260910-main-r2` への継続を準備中。
+重み更新・学習後評価はまだ始まっていない。
 凍結W256と未開封最終holdoutを保持し、棋力向上・初段への安定勝ちは認定していない。
 この文書を進捗と次工程の正本とする。詳細は小さな機械可読記録として
 `local/runs/evaluator-20260910/` と既存 `local/core-prototype/` に保持する。
@@ -46,20 +48,33 @@
   新規2,048trajectory、最大192手、2 teacher workers、25,000 nodes。
   25万–70万ユニーク局面を見込み、実数を報告。最大8,192更新/8周、CPU4threads。
   計画・起動/再開/停止・保持・復旧条件は [development.md](development.md) に集約。
-  run ID `evaluator-20260910-main`、保存先 `local/runs/evaluator-20260910/main`。
+  初回run ID `evaluator-20260910-main`、保存先 `local/runs/evaluator-20260910/main`。
   `d8ca51f27b40ada81df7699b0177c20848712a5a` でseal済み、同commitをpush済み。
   run SHA-256 `60132bc849be461fcbd261ffe9ac23b0e631059ad5dda567a52cd3a5953c94ce`。
   既知診断と全preflight由来16,980個の対称局面hashを
   本runから除外する。凍結holdout原本は開いていない。
 - 独立した重要実装/レビューは `gpt-6-astra` / `xhigh`。配布元調査は
   `gpt-5.6-luna` / `max` で実施。本runも同Lunaへ実引継ぎし、Lunaが起動済み。
-  supervisor PID `96926`、generate stage PID/PGID `96928`、lease・process生存を確認。
+  初回supervisor PID `96926`、generate stage PID/PGID `96928`。起動時の生存を確認。
   最初の正常進捗は2→22 trajectory、親の追加確認時40/2,048 trajectory。
   重複除去後ユニーク数・本runの延べ学習件数はまだ未確定（重み更新未開始）。
-  15秒間隔で監督scriptのprogress/RSS/swap/容量記録が増加している。
+  15秒間隔の監督scriptがprogress/RSS/swap/容量を記録し、障害後の回収を完了した。
   supervisorのcode/config封印、子孫回収、二重起動、データ再照合の指摘は修正済み。
   未観測子を専用PGIDで回収してから親を終了処理し、監督消失後の残留も再起動前に検査。
   実教師2trajectory/16手の追加試験は終了後の残留processゼロ。
+- 初回runの停止: 327trajectory（41,115手・標本root20,644）を保存後、
+  `teacher bestmove is not a normal USI move` で `needs_astra`。重み更新はゼロ。
+  原本に失敗時SFEN/raw応答がなく、fresh349/350は正常終了したため厳密再現は未達。
+  構成した先後入玉宣言2局面では、固定教師の正規 `bestmove win` を同parserが
+  拒否することを実確認した。証拠は `diagnosis/teacher-terminal-contract/`。
+  今回generatorだけtyped終了を許可しnative CSA条件で検証する修正を完了。
+  通常adapterの厳格契約、不正応答拒否、scalarラベルへの終端混入防止を維持する。
+  新run `evaluator-20260910-main-r2` は全327件をhash照合したprefixから継続予定。
+  関連Python60件・Rust入玉境界2件・Clippy/Ruff成功。先後実教師smokeは
+  宣言終端各1件/通常scalar観測0件・4process残留0。更新診断器の306局面一致も成功。
+  独立Astra/xhighレビューで阻害なし、旧85,494 observationの読取互換が完全一致。
+  旧run/ログ/設定を保全、既知復旧診断も含む18,672対称hashを新除外ファイルに固定。
+  規模・seed・学習率・採用閾値は不変、24h上限の起点も初回開始時刻を維持する。
 - 検証: Rust392件、Python928件、OSUI210件とnative/Wasmビルドが成功。
   最後の監督/USI修正には関連73件と実process回帰を追補し、Ruffと独立Astra/xhighレビュー済み。
   更新step24の再export照合と凍結pure smokeも成功。全体試験を変更なく反復していない。

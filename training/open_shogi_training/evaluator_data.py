@@ -14,6 +14,7 @@ import random
 import selectors
 import subprocess
 import time
+import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import ExitStack
 from dataclasses import replace
@@ -22,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from .labeling.config import load_teacher_config
-from .labeling.usi import USIEngine
+from .labeling.usi import USIEngine, USIError, USITerminalResult
 from .phase10r_model import parse_sfen
 from .phase10v_data import position_hash
 from .phase10v_model import sparse_features
@@ -155,12 +156,112 @@ def teacher_config(root: Path, config: dict):
     )
 
 
+def _validated_teacher_terminal(result: USITerminalResult, state: dict, ply: int) -> dict:
+    side = "black" if state["sfen"].split()[1] == "b" else "white"
+    declaration = state.get("teacher_declaration")
+    if result.outcome == "win":
+        required = 28 if side == "black" else 27
+        if (
+            state["terminal"] != "None"
+            or not isinstance(declaration, dict)
+            or declaration.get("rule") != "csa_28_27"
+            or declaration.get("side") != side
+            or declaration.get("minimum_camp_pieces") != 10
+            or declaration.get("required_points") != required
+            or declaration.get("result") != "win"
+            or type(declaration.get("points")) is not int
+            or declaration["points"] < required
+        ):
+            raise ValueError("teacher win is not a verified native CSA declaration")
+        validation = "native_csa_28_27"
+    elif result.outcome == "resign":
+        if state["terminal"] == "None" or state.get("teacher_resign_eligible") is not True:
+            raise ValueError("teacher resign disagrees with native no-legal-move termination")
+        validation = "native_no_legal_moves"
+    else:
+        raise ValueError("unknown teacher terminal outcome")
+    if result.raw_bestmove != f"bestmove {result.outcome}":
+        raise ValueError("teacher terminal bestmove is not the exact two-token response")
+    return {
+        "kind": "terminal",
+        "outcome": result.outcome,
+        "validation": validation,
+        "raw_bestmove": result.raw_bestmove,
+        "sfen": state["sfen"],
+        "ply": ply,
+        "native_terminal": state["terminal"],
+        "native_declaration": declaration,
+    }
+
+
+def _teacher_observation(
+    teacher, state, *, root, output, config, game, ply, branch, moves, records
+):
+    """Keep rejected teacher evidence before propagating its fail-closed exception."""
+    try:
+        result = teacher.analyze_with_retry(state["sfen"])
+        if isinstance(result, USITerminalResult):
+            return result, _validated_teacher_terminal(result, state, ply)
+        if "successors" in state:
+            legal = {child["move"] for child in state["successors"]}
+            if any(candidate.pv[0] not in legal for candidate in result.candidates):
+                raise ValueError("teacher proposed illegal move")
+        return result, None
+    except (USIError, ValueError) as error:
+        if not output.resolve().is_relative_to((root / "local").resolve()):
+            raise ValueError(
+                "teacher failure evidence must stay in ignored local output"
+            ) from error
+        diagnosis = getattr(teacher, "search_diagnostics", {})
+        bestmove_line = getattr(error, "bestmove_line", None) or diagnosis.get("bestmove_line")
+        stdout_tail = getattr(error, "stdout_tail", "") or diagnosis.get("stdout_tail", "")
+        stem = f"{game:06d}-ply{ply:04d}-{branch}-{uuid.uuid4().hex}"
+        prefix = output / "failures" / f"{stem}.prefix.json.gz"
+        atomic(prefix, gzip.compress(encoded({"moves": moves, "records": records}), mtime=0))
+        receipt = {
+            "schema": "open_shogiai_teacher_failure/v1",
+            "game": game,
+            "ply": ply,
+            "branch": branch,
+            "sfen": state["sfen"],
+            "error_type": type(error).__name__,
+            "error": str(error)[:8192],
+            "bestmove_line": bestmove_line,
+            "stdout_tail": stdout_tail,
+            "stderr_tail": getattr(error, "stderr_tail", "")[-8192:],
+            "native_terminal": state["terminal"],
+            "native_declaration": state.get("teacher_declaration"),
+            "native_resign_eligible": state.get("teacher_resign_eligible"),
+            "generation_config_sha256": hashlib.sha256(encoded(config)).hexdigest(),
+            "completed_records": len(records),
+            "prefix": {"path": prefix.name, "sha256": digest(prefix)},
+        }
+        atomic(prefix.with_name(f"{stem}.json"), encoded(receipt))
+        raise
+
+
+def _terminal_counts(records: list[dict]) -> dict[str, int]:
+    counts = {}
+    for row in records:
+        for branch, observation in (("root", row), ("deviation", row.get("deviation"))):
+            terminal = observation.get("terminal_outcome") if observation else None
+            if terminal:
+                key = f"{branch}_{terminal['outcome']}"
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _generate_group(root_name: str, output_name: str, config: dict, games: list[int]) -> list[dict]:
     root, output = Path(root_name), Path(output_name)
     reports = []
     replay = Replay(root, config)
     try:
-        with USIEngine(teacher_config(root, config), root, isolate_process_group=False) as teacher:
+        with USIEngine(
+            teacher_config(root, config),
+            root,
+            isolate_process_group=False,
+            allow_terminal_outcomes=True,
+        ) as teacher:
             for game in games:
                 target = output / "games" / f"{game:06d}.json.gz"
                 receipt = target.with_suffix(".receipt.json")
@@ -173,16 +274,38 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                 rng = random.Random(config["seed"] + game)
                 began = time.monotonic()
                 state = replay.ask(reset=START, successors=True)
-                records, moves = [], []
+                records, moves, trajectory_outcome = [], [], None
                 for ply in range(config["max_plies"]):
                     if (output / "STOP").exists():
                         raise InterruptedError("requested stop; completed trajectories retained")
                     if state["terminal"] != "None":
                         break
-                    result = teacher.analyze_with_retry(state["sfen"])
+                    result, terminal = _teacher_observation(
+                        teacher,
+                        state,
+                        root=root,
+                        output=output,
+                        config=config,
+                        game=game,
+                        ply=ply,
+                        branch="root",
+                        moves=moves,
+                        records=records,
+                    )
+                    if terminal is not None:
+                        records.append(
+                            {
+                                "sfen": state["sfen"],
+                                "ply": ply,
+                                "candidates": [],
+                                "deviation": None,
+                                "terminal_outcome": terminal,
+                                "teacher_elapsed_ms": result.elapsed_ms,
+                            }
+                        )
+                        trajectory_outcome = terminal
+                        break
                     legal = {c["move"]: c for c in state["successors"]}
-                    if any(c.pv[0] not in legal for c in result.candidates):
-                        raise ValueError("teacher proposed illegal move")
                     if ply % config["sample_stride"] == 0:
                         candidates = [
                             dict(
@@ -206,14 +329,30 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                             and ply % config["deviation_stride"] == 0
                             and weak["move"] not in {c.pv[0] for c in result.candidates}
                         ):
-                            child_result = teacher.analyze_with_retry(weak["sfen"])
+                            child_result, child_terminal = _teacher_observation(
+                                teacher,
+                                {**weak, "sfen": weak["sfen"]},
+                                root=root,
+                                output=output,
+                                config=config,
+                                game=game,
+                                ply=ply + 1,
+                                branch="deviation",
+                                moves=moves,
+                                records=[*records, record],
+                            )
                             record["deviation"] = {
                                 "move": weak["move"],
                                 "sfen": weak["sfen"],
-                                "score": child_result.primary.score.as_dict(),
-                                "candidates": [c.as_dict() for c in child_result.candidates],
                                 "teacher_elapsed_ms": child_result.elapsed_ms,
                             }
+                            if child_terminal is not None:
+                                record["deviation"]["terminal_outcome"] = child_terminal
+                            else:
+                                record["deviation"].update(
+                                    score=child_result.primary.score.as_dict(),
+                                    candidates=[c.as_dict() for c in child_result.candidates],
+                                )
                         records.append(record)
                     # Data generation only: varied strong continuations, never a runtime preset.
                     weights = [0.6, 0.3, 0.1] if ply < 48 else [0.92, 0.06, 0.02]
@@ -228,9 +367,11 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                     "seed": config["seed"] + game,
                     "split": partition(game, config["seed"]),
                     "moves": moves,
-                    "end": state["terminal"],
+                    "end": state["terminal"] if trajectory_outcome is None else "TeacherTerminal",
                     "records": records,
                 }
+                if trajectory_outcome is not None:
+                    raw["terminal_outcome"] = trajectory_outcome
                 # An interrupted old temporary output is replaced, never a completed receipt.
                 atomic(target, gzip.compress(encoded(raw), mtime=0))
                 saved = {
@@ -240,6 +381,7 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                     "plies": len(moves),
                     "elapsed_s": time.monotonic() - began,
                     "split": raw["split"],
+                    "teacher_terminal_outcomes": _terminal_counts(records),
                 }
                 atomic(receipt, encoded(saved))
                 reports.append(saved)
@@ -287,6 +429,10 @@ def generate(root: Path, output: Path, config: dict) -> dict:
         "sampled_roots": sum(r["rows"] for r in all_reports),
         "plies": sum(r["plies"] for r in all_reports),
         "config_sha256": digest(identity),
+        "teacher_terminal_outcomes": {
+            key: sum(r.get("teacher_terminal_outcomes", {}).get(key, 0) for r in all_reports)
+            for key in ("root_win", "root_resign", "deviation_win", "deviation_resign")
+        },
     }
     if {r["game"] for r in all_reports} != set(range(start, start + config["games"])):
         raise ValueError("generation did not complete its exact trajectory set")
@@ -296,6 +442,9 @@ def generate(root: Path, output: Path, config: dict) -> dict:
 
 def _observations(game: dict):
     for index, row in enumerate(game["records"]):
+        if row.get("terminal_outcome") is not None:
+            yield row["sfen"], row["terminal_outcome"], "root", row["ply"], index, None
+            continue
         primary = row["candidates"][0]
         yield row["sfen"], primary["score"], "root", row["ply"], index, None
         for c in row["candidates"]:
@@ -311,7 +460,8 @@ def _observations(game: dict):
             )
         if row["deviation"]:
             d = row["deviation"]
-            yield d["sfen"], d["score"], "deviation", row["ply"] + 1, index, d["move"]
+            score = d["terminal_outcome"] if d.get("terminal_outcome") is not None else d["score"]
+            yield d["sfen"], score, "deviation", row["ply"] + 1, index, d["move"]
 
 
 def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -> dict:
@@ -363,6 +513,7 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
         excluded.update(symmetry_keys(sfen))
     excluded.update(development_keys)
     owners, conflicts, raw_count, raw_mates = {}, set(), 0, 0
+    raw_terminals = {"win": 0, "resign": 0}
     games = []
     for path in sorted((output / "games").glob("*.json.gz")):
         receipt = json.loads(path.with_suffix(".receipt.json").read_text())
@@ -386,9 +537,19 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
         )
         for sfen, score, *_ in _observations(game):
             raw_count += 1
-            if score["kind"] != "cp":
+            if score["kind"] == "terminal":
+                outcome = score.get("outcome")
+                if outcome not in raw_terminals or score.get("validation") != (
+                    "native_csa_28_27" if outcome == "win" else "native_no_legal_moves"
+                ):
+                    raise ValueError("unvalidated typed teacher terminal observation")
+                raw_terminals[outcome] += 1
+                continue
+            if score["kind"] == "mate":
                 raw_mates += 1
                 continue
+            if score["kind"] != "cp":
+                raise ValueError("unknown teacher score kind")
             keys = symmetry_keys(sfen)
             key = min(keys)
             if keys & excluded:
@@ -489,8 +650,12 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
         "unique_positions": counts,
         "raw_observations": raw_count,
         "mate_observations_masked": raw_mates,
+        "teacher_terminal_observations_masked": raw_terminals,
         "excluded_conflict_keys": len(conflicts),
-        "duplicate_or_excluded_observations": raw_count - raw_mates - sum(counts.values()),
+        "duplicate_or_excluded_observations": raw_count
+        - raw_mates
+        - sum(raw_terminals.values())
+        - sum(counts.values()),
         "source_games": games,
         "distributions": distributions,
         "label_summary": label_summary,

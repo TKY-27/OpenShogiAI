@@ -1,7 +1,7 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "evaluator-20260910-main",
-  "output": "local/runs/evaluator-20260910/main",
+  "run_id": "evaluator-20260910-main-r2",
+  "output": "local/runs/evaluator-20260910/main-r2",
   "seed": 20260915,
   "generation": {
     "first_game": 22,
@@ -16,8 +16,8 @@
     "teacher_config_path": "local/frozen/metadata/teacher-config.yaml",
     "teacher_binary_sha256": "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403",
     "split_guard_path": "local/frozen/metadata/split-guard.json",
-    "development_exclusions_path": "local/runs/evaluator-20260910/diagnosis/preflight-exclusions.json",
-    "development_exclusions_sha256": "02805b6f13f30b28abfad02d7459ca1f5c13a942137118424bcdc64eaf274b0e"
+    "development_exclusions_path": "local/runs/evaluator-20260910/diagnosis/recovery-exclusions.json",
+    "development_exclusions_sha256": "af1d6eab54a71eecdad83f099dc1ea5b97f4b4f4c3dfcfdacb822573e73c26cf"
   },
   "training": {
     "device": "cpu",
@@ -66,5 +66,12 @@
     "lnsgkgsnl/1r5b1/p1ppppppp/1p7/7P1/9/PPPPPPP1P/1B5R1/LNSGKGSNL w - 4",
     "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/9/PPPPPPPPP/1B3K1R1/LNSG1GSNL b - 3",
     "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PPNPPPPPP/1B5R1/L1SGKGSNL w - 4"
-  ]
+  ],
+  "continuation": {
+    "manifest_path": "local/runs/evaluator-20260910/main-r2-continuation.json",
+    "manifest_sha256": "f2e7821d24a18b045f81b2733258a803da41073522b2de8fa9e38aa748bdc8c7",
+    "verified_completed_trajectories": 327,
+    "campaign_began_at": 1788980656.291158,
+    "mode": "reuse every verified immutable completed trajectory; no learner checkpoint exists; preserve original campaign wall-clock origin"
+  }
 }

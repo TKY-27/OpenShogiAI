@@ -650,3 +650,64 @@ def test_inherited_teacher_signal_refuses_a_reused_pid(monkeypatch):
     usi_module._signal_teacher_process(
         43210, signal.SIGKILL, expected_start_identity="original", isolate_process_group=False
     )
+
+
+@pytest.mark.parametrize("outcome", ["win", "resign"])
+@pytest.mark.parametrize("allow", [False, True])
+def test_special_terminal_reply_is_typed_only_with_explicit_opt_in(tmp_path, outcome, allow):
+    import hashlib
+    from dataclasses import replace
+
+    config, executable, _ = make_fake_project(tmp_path)
+    line = f"bestmove {outcome}"
+    executable.write_text(
+        executable.read_text().replace("        good_search()", f"        emit({line!r})")
+    )
+    config = replace(config, binary_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
+    engine = USIEngine(config, tmp_path, allow_terminal_outcomes=allow)
+    try:
+        if allow:
+            result = engine.analyze_with_retry("state b - 1")
+            assert isinstance(result, usi_module.USITerminalResult)
+            assert result.outcome == outcome and result.raw_bestmove == line
+            assert not hasattr(result, "candidates")
+        else:
+            with pytest.raises(USIProtocolError, match="not a normal USI move") as caught:
+                engine.analyze_with_retry("state b - 1")
+            assert caught.value.bestmove_line == line
+            assert caught.value.stdout_tail == line + "\n"
+            assert engine.pid is None
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "bestmove win ponder 7g7f",
+        "bestmove resign ponder 7g7f",
+        "bestmove win extra",
+        "bestmove win ",
+        "bestmove  win",
+        "bestmove 0000",
+        "bestmove\twin",
+    ],
+)
+def test_terminal_opt_in_never_accepts_malformed_suffixes_or_null_moves(line):
+    with pytest.raises(USIProtocolError):
+        usi_module._finish_search(
+            line, {}, expected_multipv=3, elapsed_ms=1, allow_terminal_outcomes=True
+        )
+
+
+def test_terminal_opt_in_preserves_normal_multipv_labels(tmp_path):
+    config, _, _ = make_fake_project(tmp_path)
+    with USIEngine(config, tmp_path, allow_terminal_outcomes=True) as engine:
+        result = engine.analyze_with_retry("state b - 1")
+    assert isinstance(result, usi_module.USISearchResult)
+    assert result.bestmove == "7g7f"
+    assert [c.score.as_dict() for c in result.candidates] == [
+        {"kind": "cp", "value": 42},
+        {"kind": "mate", "value": -3},
+        {"kind": "cp", "value": -7},
+    ]
