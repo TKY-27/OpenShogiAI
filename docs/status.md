@@ -5,8 +5,8 @@
 学習開始の再承認は不要。公開既定モデルへの昇格、mainへの試作統合、本番公開、
 重みの公開、有料計算資源の契約は今回の範囲外。
 現在は修正・実教師による短い学習/再開/export試験と実行監督の重要レビューを完了した。
-本学習runは327trajectory生成後に教師特殊応答の契約エラーで安全停止した。
-完了データを保全し、契約修正後の別run `evaluator-20260910-main-r2` への継続を準備中。
+初回runは327trajectory後に安全停止し、契約修正後の別run
+`evaluator-20260910-main-r2` を起動した。全完了データを保持して新規生成を継続中。
 重み更新・学習後評価はまだ始まっていない。
 凍結W256と未開封最終holdoutを保持し、棋力向上・初段への安定勝ちは認定していない。
 この文書を進捗と次工程の正本とする。詳細は小さな機械可読記録として
@@ -69,16 +69,23 @@
   拒否することを実確認した。証拠は `diagnosis/teacher-terminal-contract/`。
   今回generatorだけtyped終了を許可しnative CSA条件で検証する修正を完了。
   通常adapterの厳格契約、不正応答拒否、scalarラベルへの終端混入防止を維持する。
-  新run `evaluator-20260910-main-r2` は全327件をhash照合したprefixから継続予定。
+  新run `evaluator-20260910-main-r2` は全327件をhash照合したprefixから起動済み。
   関連Python60件・Rust入玉境界2件・Clippy/Ruff成功。先後実教師smokeは
   宣言終端各1件/通常scalar観測0件・4process残留0。更新診断器の306局面一致も成功。
   独立Astra/xhighレビューで阻害なし、旧85,494 observationの読取互換が完全一致。
   旧run/ログ/設定を保全、既知復旧診断も含む18,672対称hashを新除外ファイルに固定。
   規模・seed・学習率・採用閾値は不変、24h上限の起点も初回開始時刻を維持する。
+  新code `4f684626464456be6b417d3e56ac8969355357fe` をcommit/push・seal済み。
+  新run SHA-256 `4ac7ea429ed1ea6703a7d7867857bd8b876714f99345f2e639b98972e8911ca6`。
+  Luna / maxが実起動し、新supervisor PID `24006`、stage PID `24009`。
+  327→337 trajectoryの正常増加を確認。旧・新runの両lease下で654 raw/receipt
+  ファイルをhash一致のhardlinkで引継ぎ、原本の書換え・ラベル再生成はゼロ。
+  `main-r2/continuation-import.json` に実行script/入力/出力hashと元の期限を記録。
 - 検証: Rust392件、Python928件、OSUI210件とnative/Wasmビルドが成功。
   最後の監督/USI修正には関連73件と実process回帰を追補し、Ruffと独立Astra/xhighレビュー済み。
   更新step24の再export照合と凍結pure smokeも成功。全体試験を変更なく反復していない。
 - 継続: 現在taskのheartbeat `openshogiai` を30分間隔でACTIVE登録済み。
+  対象をmain-r2と新code/run hashへ更新済み。旧mainは再起動しない。
   常時監督は実script、Lunaは固定運用、Astraは重要な失敗・学習後判断と実ブラウザーを担当。
   変更なしでは通知せず、`awaiting_astra_browser` から候補identity/固定40対局を判断し、
   開発候補選択へ載せて8時計条件・18fixture・通常対局を再確認する。
