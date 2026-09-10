@@ -9,11 +9,13 @@
 `evaluator-20260910-main-r2` を起動したが、479trajectory後にswap増加上限で安全停止した。
 全完了データとログを保持し、r2の479件を再ハッシュ・seed・split・件数照合したうえで、
 同じキャンペーンの単一教師worker継続run `evaluator-20260910-main-r3` をsealした。
-r3は479件を変更なしのhardlinkで再利用し、重みcheckpointなし・`prepared` のまま起動していない。
-60秒・4点の入場測定自体はpressure=1、swapout/pageout増加0で通過したが、開始直前の再確認で
-pageoutが3,134,456から3,135,181へ+725ページ増加したため、正本どおり起動を拒否した。
-OpenShogiAIの実行プロセスはなく、現在は外部ホストのメモリ/pageout安定待ちである。
-重み更新・学習後評価はまだ始まっていない。
+r3は479件を変更なしのhardlinkで再利用し、重みcheckpointなし・`prepared` から既存経路で起動した。
+前回は開始直前のpageoutが3,134,456から3,135,181へ+725ページ増加したことだけで起動を保留したが、
+今回の再開ゲートではこの単発deltaを単独の拒否条件にせず、実測page sizeを用いた短期の複合測定で再判定した。
+起動前4点約30秒はpressure level=1、pageout/swapout delta=0、swap使用量delta=0、OSAIプロセスなし、
+空き容量約292.5 GiBだった。教師1並列のcanaryで479→506 raw/receiptへ実増加し、pressure level=1、
+pageout/swapout/swap使用量のcanary delta=0、OSAI owned RSS最大約1.06 GiB（teacher約0.95 GiB）で安定している。
+現在はr3の教師処理を継続中で、重み更新・学習後評価はまだ始まっていない。
 凍結W256と未開封最終holdoutを保持し、棋力向上・初段への安定勝ちは認定していない。
 この文書を進捗と次工程の正本とする。詳細は小さな機械可読記録として
 `local/runs/evaluator-20260910/` と既存 `local/core-prototype/` に保持する。
@@ -105,15 +107,23 @@ OpenShogiAIの実行プロセスはなく、現在は外部ホストのメモリ
   の追加swap上限へ意味を変更するため、旧/新baselineと差を明記する。通算増加上限
   を維持したとは扱わない。RSS16GiB/空き80GiB/学習条件/採用基準/元24h期限は維持。
   60秒・4点のbounded測定は通過したため、元479件を再照合してr3継続manifestを作成した。
-  ただし開始直前のpageout増加(+725 pages)でr3は未起動のまま保持している。
+  ただし開始直前のpageout増加(+725 pages)で前回はr3を未起動のまま保持した。
+  今回は単発pageoutを停止根拠にせず、実測page size 16,384 bytesで4点約30秒の再測定を実施。
+  pressure level=1、pageout/swapout delta=0、swap使用量delta=0、OSAI起動前プロセス0、
+  空き容量約292.5 GiBを確認したため、元のcampaign deadlineを維持してr3を一度だけ復旧した。
+  起動後のteacher=1 canaryはsupervisor PID `2232`、generate stage PID `2234`、teacher PID `2248`。
+  約30秒で479→506 raw/receipt、teacher RSS約995,440 KiB、owned RSS約1,137,442,816 bytes、
+  pressure level=1、pageout/swapout/swap使用量delta=0。プロセス存在だけでなく実データ増加を確認し、
+  通常監視へ移行した。r3のinitial swap baselineは`2,240,869,826` bytesで、元の24h期限は変更していない。
   r3で再度swap停止したら自動再基準化・再起動は禁止。
 - 検証: Rust392件、Python928件、OSUI210件とnative/Wasmビルドが成功。
   最後の監督/USI修正には関連73件と実process回帰を追補し、Ruffと独立Astra/xhighレビュー済み。
   更新step24の再export照合と凍結pure smokeも成功。全体試験を変更なく反復していない。
-- 継続: 既存heartbeat `openshogiai-main-r2-monitor` は前回r2停止を記録したPAUSED状態で、
-  r3への自動監視切替はまだ行っていない。対象runはr3に移行済みで、既知swap停止を再調査・
-  即再起動せず、期限内でメモリ回復条件を確認する。
-  圧迫中は変更なしとして静かに終了し、条件達成時だけ、作成済みr3を一度だけ起動する。
+- 継続: 既存heartbeat `openshogiai-main-r2-monitor` は同じautomation IDのまま、対象path/state/run IDを
+  r3へ更新しACTIVE化した。r2は再起動せず、r2/r3の二重monitorも作成していない。
+  通常は30分間隔の読み取り専用監視とし、stage遷移・実進捗・checkpoint・異常時だけ短く確認する。
+  単発pageoutや既存swap非ゼロでは停止せず、pressure、継続swap/pageout、available/compressed/wired、
+  OSAI RSS trend、CPU、disk freeを組み合わせる。圧迫中は他appを終了せず、OSAI自身の再現可能な持続増加時だけ安全停止してAstraへ戻す。
   旧mainは再起動しない。期限 `1789067056.291158` 到達時は延長せずcampaignを終了保存。
   常時監督は実script、Lunaは固定運用、Astraは重要な失敗・学習後判断と実ブラウザーを担当。
   変更なしでは通知せず、`awaiting_astra_browser` から候補identity/固定40対局を判断し、
