@@ -1,5 +1,122 @@
 # 現在の状態と次工程
 
+2026-09-11、`evaluator-20260910-main-r3` の学習・export監査・固定対局は完了し、
+Astra/xhighによるOSAI/OSUIの実ブラウザー工程も **PASS**。開発版でr3と旧基準を
+選んで対局でき、ローカル本番相当previewでは一構成だけを使用することを確認した。
+学習監督の終端status `awaiting_astra_browser` は再起動防止のため保持し、既存stateの
+`astra_browser.status=PASS` とhash付き結果参照にbrowser完了を記録した。新たな学習state名や
+再sealは導入していない。追加学習・教師生成・大規模Arena・Luna監視は再開しない。
+この文書を現在の状態と次工程の正本とする。
+
+- r3 bestは **step 6144、OSAVAL03 W256、旧制御器OFF**。
+  評価器SHA-256は `cd07f2a202f6e781afcb6a8af3c7a198c4203373e4505fe089f8c7f05eefd983`。
+  正本は `local/runs/evaluator-20260910/main-r3/fit/best.osaval03`。
+  最終更新は8192だがbestとは異なる。保存された8192の再開checkpointに含まれる
+  `best_step=6144` と `best_model_bytes` が、このruntime exportと完全一致することを確認した。
+  exportの作り直しや再学習は不要だった。
+- ユニーク局面はtrain **435,147**、validation **22,039**、development test **25,667**。
+  学習の延べ使用は2,096,940件、1局面の最大露出は5回。旧凍結W256、必要な再開資産、
+  原本の評価記録、未開封最終holdoutを保持している。
+- 既存evaluationは **32戦32勝**。相手は同じ封印済みnative engineで動く凍結W256 hard2
+  (`859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480`)。
+  両者制御器OFF・定跡OFF、3分24局／10分8局、先後各16局、depth64・qdepth4・TT2MiB・1thread。
+  全32局は詰みで終了し、無効局・異常attempt・絶対期限違反は0。
+  開始局面は同runのdevelopment testに属する16本の自前trajectoryの16手目。
+  train/validationの選択とは分離されているが、offline開発評価と同じ集合由来であり、
+  外部の独立した人間棋譜や最終holdoutによる検証ではない。
+  初期局面からのdemonstration **8局は6勝2敗**で、32局の評価成績へ加算しない。
+  旧基準に対するこの条件での改善を示すが、初段棋力・他の相手・ブラウザー動作は認定しない。
+- export監査はnative／実Wasm-in-NodeでPASS、10根局面と合法子300の評価差0。
+  40局の小型receipt署名とtrain/audit/arena完了資産hashを照合済み。
+  封印codeは `a2bc10d1bdba22caae70b8078bcad3ea19812068`、run SHA-256は
+  `8f279bae1d0e4a980afb29e40bc7df8984b621cb3718934cff6d39b2ebce3ebf`。
+  今回の監査時点で封印対象のOSAI source hashは全一致し、engine／探索／時計の意味は変更していない。
+  元のrun、runtime、評価成績のidentityを保持し、再sealしていない。
+- OSUI `41ec5a6f4bbf418bf83c15b74ae948202cc7c5a4` で実装・実画面確認を完了。
+  開発 `http://127.0.0.1:5176/#/match` はr3候補をローカル既定とし、旧基準W256を選べる。
+  旧試作は同じW256に制御器をONにした構成なので、別モデルとして重複登録せず開発用の別項目にした。
+  r3はcontrollerなし/OFF固定。品質は同一重みの探索方針で、別モデルではない。
+  読込中再選択はAbort/世代ID/Worker破棄で保護し、対局・停止中は選択不可。
+  明示終了/reset、HTTP失敗・hash不一致の開始禁止と同じ候補の再試行を実確認。
+  正常読込後のWorkerは1個、失敗後0個。旧→r3→旧・同モデルreloadで実hashとidentityが追従する。
+- JS/Wasm/評価器/旧制御器の実バイトを初期化時にSHA照合し、検証済みJS bytesをBlob moduleとして実行。
+  Wasm loadModel identityと実探索のpure proofを診断へ保持する。毎手hash計算なし。
+  共通Wasm SHA-256 `0df3ce43b275137bf18ccbf1372c4dacdc99645db6b7b3630669b8528252ad1f`、
+  JS `907da1421263a2cbc621297095d13ccd3f707942b1e6f09bd7a2b2512efeee2e`、
+  旧制御器 `66110bae4ef5fbedd6a3c5537813f0fae5b9276b576a745b2364b4a093141b63`。
+  r3には旧制御器を流用していない。内容hash付きURL/no-storeで提供し、Service Workerは登録なし。
+- 本番選択 `release-model.json` は `model: null` の未採用状態を維持。指定なしbuild、
+  複数/形式不整合/hash不一致の小型試験、非productionモードのbuildは明確に拒否する。
+  ignoredローカル一時指定でr3の評価器・Wasm・JSの3構成要素だけを出力し、実previewで推論確認。
+  旧モデル、checkpoint、source map、旧標準Wasm、selector、解析upload/lab、比較routeは出力に含まれない。
+  Viteのpublic自動コピーを無効にし既存UI資産をallowlistで出力、dist再生成・Workerを含む全出力を監査。
+  preview `http://127.0.0.1:4176/#/match` でも実hash/推論がr3と一致し、旧選択のstorage/queryを無視。
+  旧資産やsourceの不存在URLはpreviewのSPA fallback HTMLを返すが、重みやsource bytesは取得できない。
+  標準/高品質・時計/先後は維持。本番採用・公開既定変更ではない。
+- OSUI230 testsとformat/lint/type/accessibility/boundary/license/provenance/駒資産audit・一構成buildがPASS。
+  OSAI docs/boundary/license/provenanceとnative/Wasm凍結smokeがPASS。engine sourceは未変更のため、
+  完了済み学習や全Rust/Python試験の再実行、同一Wasmの再ビルドは行っていない。
+  本番境界・runtime/UI統合の独立レビューで重大な追加指摘なし。実画面はDesktop Chrome、
+  小viewport390×844。81マス盤面、モデル選択、console例外0、横はみ出し0を確認した。
+- r3監視heartbeatは完了に伴い削除済みというユーザー報告。今回のprocess確認でもr3の
+  supervisor・学習・評価processは0で、監視を再開していない。
+  **promotionなし、公開既定変更なし、main merge・本番deploy・Release・重み公開なし**。
+
+## browserの時計・序盤・終局結果
+
+r3は3分/10分×標準/高品質×先後の8条件、各2回の序盤探索を実Workerで測定。
+後手の初回は7六歩後。初手の固定や定跡・手の禁止は使わず、同じ残り対局時計で配分した。
+初回/次回の実待ち時間（秒）は以下。準備時間161–197msは別計測で時計へ加算しない。
+
+| 時計 | 品質 | AI手番 | 初回 | 次回 | 序盤のAI着手 |
+| --- | --- | --- | ---: | ---: | --- |
+| 3分 | 標準 | 先手 | 0.456 | 1.012 | 2g2f → 7g7f |
+| 3分 | 標準 | 後手 | 0.593 | 0.658 | 8c8d → 5a4b |
+| 3分 | 高品質 | 先手 | 0.476 | 0.926 | 2g2f → 7g7f |
+| 3分 | 高品質 | 後手 | 0.557 | 0.625 | 8c8d → 5a4b |
+| 10分 | 標準 | 先手 | 1.742 | 5.283 | 2g2f → 2f2e |
+| 10分 | 標準 | 後手 | 4.061 | 3.567 | 5a4b → 8c8d |
+| 10分 | 高品質 | 先手 | 1.710 | 4.915 | 2g2f → 2f2e |
+| 10分 | 高品質 | 後手 | 3.814 | 3.247 | 5a4b → 8c8d |
+
+r3全16探索はstable終了、初回hard limitは3分5.350秒/10分17.950秒、全探索が上限内。
+目標時間は局面の安定性により1.798–9.064秒で変化し、常に使い切る実装ではない。
+旧比較の同時計代表4条件・8探索は初回3分0.755/0.873秒、10分3.273/5.532秒、
+次回まで含め最大5.847秒、全stable/上限内。目標・絶対停止時刻・実探索・待ち時間・
+準備時間・remaining clock・full model/runtime identityは `browser-clock.json` に保存。
+重いbuildや学習と時計比較を並行していない。
+
+初手約1分・高品質の過剰長考は今回の代表局面で再現せず、engine時計の追加修正は不要だった。
+r3先手は歩を進めるが、後手では早い `5a4b` の玉移動が残る。桂跳ねは今回の短い序盤では
+観測しなかった。玉移動の妥当性や棋力不足の解消は認定せず、ユーザー棋譜の厳密再現や
+教師追加診断は未実施。学習課題と実装不具合を混同せず、着手の禁止・定跡・再学習は行っていない。
+
+残り0/50/200ms、先後/品質、1手詰・終盤・詰み・非王手合法手なしの18実Worker fixtureがPASS。
+通常UIで探索中停止→再開→人間着手→AI応手→投了→再対局、対局中選択拒否を確認。
+別の初期局面からの通常UI対局は、操作試験用の決定的な合法手を相手として17手目の詰みで完了。
+この対局やユーザー由来開発局面を32戦の独立棋力証拠へ加算しない。
+
+証拠は `local/runs/evaluator-20260910/diagnosis/astra-browser-r3/` 内の
+`browser-complete.json`、`identity-audit.json`、実画面PNG、console/networkと小型JSON。
+Browser plugin/skillはセッションに存在せず、Playwright実ブラウザーを使用した。
+MCP unsafe実行環境のfilesystem import不足とfault-injection復旧の不安定さは記録し、
+同じUI経路のnetwork障害・本番preview検証を既存Playwright/Chromeの別processで完了した。
+mockや画像生成を実画面証拠として使っていない。他ブラウザーや物理モバイル端末は未確認。
+
+開発サーバー5176とローカルpreview4176は稼働中。再起動はOSUIの既存READMEに記載した
+`npm run dev -- --host 127.0.0.1 --port 5176 --strictPort`、
+`npm run preview -- --host 127.0.0.1 --port 4176 --strictPort`。
+OSUIの全check/buildには同READMEのignored一時release指定が必要。本番選択は未決定を維持する。
+ローカル証拠は約1.2MiB、単一buildは約16MiB、空き約229GiB。重みの追加export/複製登録なし。
+凍結基準/r3 best/必要な再開資産/評価原本/未開封holdoutは保持した。
+browser合格とpromotionは別で、次の学習・公開・モデル昇格へ自動で進まない。
+
+## 履歴：2026-09-10の本学習準備・復旧
+
+以下は当時の記録を保持したもの。「現在」「起動中」「未開始」「残工程」、PID、
+heartbeatのACTIVE記述はその時点の状態であり、現在の運用指示ではない。
+現在の完了状態・残工程は上記を参照する。
+
 2026-09-10、ユーザーは序盤評価・時計の修正、評価器を含む本学習、新規データの
 取得・生成、開発用OpenShogiUIでの比較・再評価を一工程として承認した。
 学習開始の再承認は不要。公開既定モデルへの昇格、mainへの試作統合、本番公開、
@@ -20,7 +137,7 @@ pageout/swapout/swap使用量のcanary delta=0、OSAI owned RSS最大約1.06 GiB
 この文書を進捗と次工程の正本とする。詳細は小さな機械可読記録として
 `local/runs/evaluator-20260910/` と既存 `local/core-prototype/` に保持する。
 
-## 進行中の修正・本学習
+### 修正・本学習の実施記録
 
 - 開始時の照合: OSAI `7e4b84c`、OSUI `852875e`、双方 `codex/core-prototype`。
   両PR #1はdraft・未merge、remote CI/reviewなし。既存Viteは5176で起動中。
