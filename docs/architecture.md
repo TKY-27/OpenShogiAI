@@ -24,9 +24,9 @@ engine/cli -> engine/usi -> engine/core <-+-> engine/wasm -> bindings/wasm
   time allocation, play/analysis resource
   coordination, persistent completed-depth analysis cache, opening-book validation, and search.
 - `engine/usi`: the interruptible USI protocol boundary over `engine/core`, including complete
-  clock mapping and immediate validated book moves.
+  clock mapping; runtime opening-book loading is rejected.
 - `engine/cli`: local tools, terminal play, Arena, model inspection, dataset replay, and
-  opening-book integration. Its line-oriented analysis command is the minimal reference client
+  offline opening-data verification. Its line-oriented analysis command is the minimal reference client
   for the UI protocol.
 - `engine/wasm`: the versioned WebAssembly adapter over `engine/core`, with the same time-control,
   opening, and analysis lifecycle schemas.

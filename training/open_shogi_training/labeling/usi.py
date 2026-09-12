@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import BinaryIO, Final, Literal
 
@@ -75,6 +76,12 @@ class USIResourceError(USIProcessError):
 
 class USIProtocolError(USIError):
     category = "protocol"
+
+
+class USIIncompleteDepthError(USIProtocolError):
+    """No labels accepted; a caller may retry its sealed larger node ceiling once."""
+
+    category = "incomplete_depth"
 
 
 class USIRetryError(USIError):
@@ -553,7 +560,7 @@ class USIEngine:
         self._ready()
 
     def analyze(
-        self, sfen: str, *, nodes: int | None = None
+        self, sfen: str, *, nodes: int | None = None, depth: int | None = None
     ) -> USISearchResult | USITerminalResult:
         """Analyze one independent SFEN, issuing stop before a timeout failure."""
 
@@ -565,11 +572,21 @@ class USIEngine:
             raise ValueError("nodes must be an integer")
         if not 1 <= requested_nodes <= 10_000_000_000:
             raise ValueError("nodes is outside the supported bound")
+        if depth is not None and (type(depth) is not int or not 1 <= depth <= 64):
+            raise ValueError("depth must be an integer in 1..64")
+        if depth is not None and self.config.threads != 1:
+            raise ValueError("completed-depth teacher labels require one thread")
         _validate_sfen_command(sfen)
+        if depth is not None:
+            # Apery's usinewgame clears search histories but deliberately retains TT.
+            # Independent fixed labels must not depend on the preceding root or resume.
+            if self.identity is None or "Clear_Hash" not in self.identity.declared_options:
+                raise USIProtocolError("completed-depth teacher must declare Clear_Hash")
+            self._send("setoption name Clear_Hash")
         self.new_game()
         self._send(f"position sfen {sfen}")
         started = time.monotonic()
-        self._send(f"go nodes {requested_nodes}")
+        self._send(f"go nodes {requested_nodes}" + (f" depth {depth}" if depth is not None else ""))
         deadline = started + self.config.timeouts.search_ms / 1_000
         candidates: dict[int, USICandidate] = {}
         lines = 0
@@ -598,6 +615,8 @@ class USIEngine:
                         elapsed_ms=elapsed_ms,
                         allow_terminal_outcomes=self._allow_terminal_outcomes,
                     )
+                    if depth is not None and isinstance(result, USISearchResult):
+                        _validate_completed_depth(result, depth, requested_nodes)
                     self._assert_executable_metadata_unchanged()
                     return result
                 raise self._protocol_error(f"unexpected search output: {line!r}")
@@ -612,7 +631,7 @@ class USIEngine:
             raise
 
     def analyze_with_retry(
-        self, sfen: str, *, nodes: int | None = None
+        self, sfen: str, *, nodes: int | None = None, depth: int | None = None
     ) -> USISearchResult | USITerminalResult:
         """Restart and retry crashes/timeouts; reject malformed protocol immediately."""
 
@@ -626,7 +645,7 @@ class USIEngine:
                     if last_error is not None:
                         self.restart_count += 1
                     self.start()
-                return self.analyze(sfen, nodes=nodes)
+                return self.analyze(sfen, nodes=nodes, depth=depth)
             except USIProtocolError:
                 self.close()
                 raise
@@ -995,6 +1014,31 @@ def _consume_move_sequence(tokens: list[str], index: int, field: str) -> int:
     if cursor == start:
         raise USIProtocolError(f"malformed info {field}")
     return cursor
+
+
+def _validate_completed_depth(result: USISearchResult, depth: int, node_cap: int) -> None:
+    """Reject interrupted Apery labels, even when final info calls them unbounded.
+
+    Apery 2.0.0 reprints mutable root scores using completed_depth and an infinite
+    window after stop. A node-capped search can therefore report unfinished values
+    as exact, sometimes at the same depth. A single-thread fixed-depth search must
+    finish the requested depth *before* reaching its independent node ceiling.
+    The historical node-only API remains unchanged for frozen evidence readers.
+    """
+    if any(candidate.depth != depth for candidate in result.candidates):
+        raise USIIncompleteDepthError("teacher did not complete the requested fixed depth")
+    if any(candidate.nodes >= node_cap for candidate in result.candidates):
+        raise USIIncompleteDepthError("teacher reached its node ceiling; labels may be interrupted")
+
+    def order(score: USIScore) -> tuple[int, int]:
+        if score.kind == "cp":
+            return (1, score.value)
+        # Positive mate outranks cp; a shorter win or longer forced loss is better.
+        return (2, -score.value) if score.value > 0 else (0, -score.value)
+
+    scores = [order(candidate.score) for candidate in result.candidates]
+    if any(left < right for left, right in pairwise(scores)):
+        raise USIProtocolError("completed-depth MultiPV scores disagree with their ranks")
 
 
 def _finish_search(

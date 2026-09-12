@@ -32,7 +32,7 @@ The development bindings are generated from this repository's Rust source and Ca
 with wasm-bindgen 0.2.127. Source paths in standard distributed bindings are remapped to
 `/user`, `/cargo` and `/open-shogi` at compile time; no host account path is retained. `make wasm-web-check` verifies all four files byte-for-byte.
 The current Wasm SHA-256 is
-`4e796b9c97ae9e12022d08ffec66ac5c04b3583e3787f154e41c6d299a44c575`.
+`ac6e26e539a7792cc9d53d3bbbd99e3113d97a65ea76d433c9f8daa6280d131d`.
 `scripts/check_provenance.sh` also checks their identities and private-history exclusion.
 Older generation hashes remain historical Git evidence, not current freeze gates.
 

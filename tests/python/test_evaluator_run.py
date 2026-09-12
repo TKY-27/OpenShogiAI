@@ -21,6 +21,37 @@ from open_shogi_training.evaluator_data import atomic, digest, encoded
 PROJECT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize(
+    "scalar,screen,arena",
+    [(False, True, True), (True, False, True), (True, True, False), (True, True, True)],
+)
+def test_candidate_review_requires_all_independent_gates(
+    tmp_path, monkeypatch, scalar, screen, arena
+):
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    atomic(tmp_path / "run.json", encoded({"fixture": True}))
+    atomic(tmp_path / "fit/best.osaval03", b"fixture")
+    atomic(tmp_path / "arena/arena.json", encoded({"adoption_criteria_met": arena}))
+    atomic(
+        tmp_path / "development-test.json",
+        encoded(
+            {
+                "groups": {
+                    "r3": {g: {"loss": 1.0} for g in ("general", "attack_end")},
+                    "candidate": {
+                        g: {"loss": 1.02 if scalar else 1.04} for g in ("general", "attack_end")
+                    },
+                },
+                "move_quality_screen": {"screen_pass": screen},
+            }
+        ),
+    )
+    review = runner._candidate_review(tmp_path)
+    assert review["meets_frozen_criteria"] is (scalar and screen and arena)
+    assert review["promotion_performed"] is False
+    assert review["human_shodan_validated"] is False
+
+
 def put(path: Path, content: bytes = b"fixture") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
@@ -30,6 +61,9 @@ def put(path: Path, content: bytes = b"fixture") -> Path:
 @pytest.fixture
 def prepared(tmp_path, monkeypatch):
     config = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
+    config["generation"].pop("defense_campaign", None)
+    config["evaluation"].pop("groups", None)
+    config["evaluation"]["startpos_demonstration_games"] = 8
     monkeypatch.setattr(runner, "ROOT", tmp_path)
     config.update(run_id="contract-test", output="local/runs/contract-test")
     generation = config["generation"]
@@ -562,12 +596,57 @@ def test_retry_is_finite_and_does_not_restart_contract_failures(prepared, monkey
     assert result["status"] == "needs_astra"
     assert len(launches) == 2
     assert result["retries"] == {"generate": 1}
-    # A fresh explicit resume cannot replenish the saved retry allowance.
+    # A run requiring Astra cannot be relaunched by either execution entry point.
     runner.work(run)
-    assert len(launches) == 3
+    assert len(launches) == 2
     assert runner._json(run / "state.json")["retries"] == {"generate": 1}
     monkeypatch.setattr(runner, "_run_stage", lambda *_args: (1, "data_corruption"))
-    assert runner.work(run)["reason"] == "data_corruption"
+    assert runner.work(run)["reason"] == "stage_exit_-15"
+
+
+def test_foreign_run_state_and_review_stage_are_rejected(prepared):
+    _, run, _, _, _ = prepared
+    state = runner._json(run / "state.json")
+    atomic(run / "state.json", encoded({**state, "run_id": "other-run"}))
+    with pytest.raises(ValueError, match="another contract"):
+        runner._state(run)
+    atomic(run / "state.json", encoded({**state, "status": "needs_astra"}))
+    with pytest.raises(ValueError, match="Astra review"):
+        runner.stage_run(run, "generate")
+
+
+def test_defense_contract_rejects_legacy_state_and_terminal_transitions(prepared):
+    _, run, _, _, _ = prepared
+    config = runner._json(run / "run.json")
+    reviewed = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
+    reviewed["state_machine"]["transitions"]["awaiting_astra_review"] = ["running"]
+    with pytest.raises(ValueError, match="transitions"):
+        runner._validate_config(reviewed)
+    config["generation"]["defense_campaign"] = {"fixture": True}
+    config["state_machine"] = reviewed["state_machine"]
+    atomic(run / "run.json", encoded(config))
+    with pytest.raises(ValueError, match="outside this defense"):
+        runner._state(run)
+
+
+def test_review_status_detects_changed_candidate_evidence(prepared):
+    _, run, _, _, _ = prepared
+    paths = {
+        "run_sha256": run / "run.json",
+        "candidate_sha256": put(run / "fit/best.osaval03"),
+        "offline_sha256": put(run / "development-test.json"),
+        "arena_sha256": put(run / "arena/arena.json"),
+    }
+    atomic(run / "candidate-review.json", encoded({k: digest(p) for k, p in paths.items()}))
+    state = runner._state(run)
+    state.update(
+        status="awaiting_astra_review", review_sha256=digest(run / "candidate-review.json")
+    )
+    atomic(run / "state.json", encoded(state))
+    assert runner.status(run)["status"] == "awaiting_astra_review"
+    paths["candidate_sha256"].write_bytes(b"changed")
+    with pytest.raises(ValueError, match="artifact changed"):
+        runner.status(run)
 
 
 def test_audit_callback_resumes_after_report_before_completion_without_relaunching_node(

@@ -1492,9 +1492,9 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
     let mut profile = PlayProfile::OverallChampion;
     let mut model_path = None;
     let mut registry_path = None;
-    let mut opening_book_path = None;
+    let opening_book_path = None;
     let mut opening_max_plies = 24_u32;
-    let mut opening_profile = OpeningProfile::IbishaStrict;
+    let mut opening_profile = OpeningProfile::Unrestricted;
     let mut opening_minimum_samples = 2_u64;
     let mut opening_maximum_teacher_loss_cp = 80_i32;
     let mut seen_options = std::collections::BTreeSet::new();
@@ -1560,7 +1560,7 @@ fn parse_arguments(arguments: &[String]) -> Result<PlayConfig, String> {
                 registry_path = Some(path_next(arguments, &mut index, "--registry")?);
             }
             "--opening-book" => {
-                opening_book_path = Some(path_next(arguments, &mut index, "--opening-book")?);
+                return Err("opening books are disabled for play; offline training only".to_owned());
             }
             "--opening-max-plies" => {
                 opening_max_plies = parse_next(arguments, &mut index, "--opening-max-plies")?;

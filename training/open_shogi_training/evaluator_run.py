@@ -29,6 +29,15 @@ ROOT = Path(__file__).resolve().parents[2]
 MODULE = "open_shogi_training.evaluator_run"
 SCHEMA = "open_shogiai_evaluator_run/v1"
 STAGES = ("generate", "prepare", "train", "audit", "arena")
+STATES = {
+    "prepared",
+    "ready_for_luna",
+    "running",
+    "stopped",
+    "needs_astra",
+    "awaiting_astra_review",
+    "awaiting_astra_browser",
+}
 RUNTIME_SOURCES = {
     "replay": "target/release/examples/position_audit",
     "probe": "target/release/examples/core_probe",
@@ -140,7 +149,7 @@ def _validate_config(config: dict) -> None:
     _number(training["gradient_norm_limit"], 1e-12, 1e6, "gradient_norm_limit", integer=False)
     resources = config["resources"]
     for name, low, high, integer in (
-        ("maximum_wall_seconds", 1, 86400, True),
+        ("maximum_wall_seconds", 1, 604800, True),
         ("free_space_floor_gib", 1, 1024, False),
         ("maximum_process_rss_gib", 1, 20, False),
         ("maximum_swap_growth_gib", 0, 16, False),
@@ -154,10 +163,36 @@ def _validate_config(config: dict) -> None:
         ("max_plies", 256),
         ("paired_3minute_games", 24),
         ("paired_10minute_games", 8),
-        ("startpos_demonstration_games", 8),
+        ("startpos_demonstration_games", 4 if generation.get("defense_campaign") else 8),
     ):
         if config["evaluation"][name] != expected:
             raise ValueError("evaluation must retain the reviewed finite plan")
+    if generation.get("defense_campaign"):
+        from .evaluator_training import GROUPS
+
+        if training.get("sampling_fractions") != [0.3, 0.2, 0.3, 0.2]:
+            raise ValueError("defense run requires the reviewed four-group sampling plan")
+        if training.get("maximum_replay_regression_ratio") != 1.03:
+            raise ValueError("unreviewed replay regression guard")
+        if config["evaluation"].get("groups") != list(GROUPS):
+            raise ValueError("missing defense/attack evaluation groups")
+        machine = config["state_machine"]
+        if machine.get("schema") != "open_shogiai_evaluator_state/v2" or set(
+            machine.get("states", [])
+        ) != {"ready_for_luna", "running", "stopped", "needs_astra", "awaiting_astra_review"}:
+            raise ValueError("unknown defense state machine")
+        if (
+            machine.get("transitions")
+            != {
+                "ready_for_luna": ["running"],
+                "running": ["stopped", "needs_astra", "awaiting_astra_review"],
+                "stopped": ["running"],
+                "needs_astra": [],
+                "awaiting_astra_review": [],
+            }
+            or machine.get("terminal") != "awaiting_astra_review"
+        ):
+            raise ValueError("unknown defense state transitions")
     exclusions = config["excluded_development_sfens"]
     if (
         not isinstance(exclusions, list)
@@ -218,6 +253,8 @@ def verify(run: Path) -> dict:
     _validate_config(config)
     if inside(config["output"]) != run or receipt["run_id"] != config["run_id"]:
         raise ValueError("sealed run location/identity mismatch")
+    if config.get("execution_cwd", str(ROOT)) != str(ROOT):
+        raise ValueError("run belongs to another execution root")
     if receipt["code_commit"] != config["code"]["commit"]:
         raise ValueError("sealed commit identity mismatch")
     for name, expected in config["code"]["files"].items():
@@ -232,6 +269,38 @@ def verify(run: Path) -> dict:
     for ref in config["inputs"].values():
         _reference(inside(ref["path"]), ref["sha256"])
     return config
+
+
+def _state(run: Path) -> dict:
+    value = _json(run / "state.json")
+    if value.get("status") not in STATES:
+        raise ValueError("unknown run state")
+    seal = _json(run / "seal.json")
+    config = _json(run / "run.json")
+    if (
+        config["generation"].get("defense_campaign")
+        and value.get("status") not in config["state_machine"]["states"]
+    ):
+        raise ValueError("state is outside this defense contract")
+    if value.get("run_id") != seal["run_id"] or (
+        config["generation"].get("defense_campaign")
+        and (
+            value.get("run_sha256") != seal["run_sha256"]
+            or value.get("schema") != "open_shogiai_evaluator_state/v2"
+        )
+    ):
+        raise ValueError("run state belongs to another contract")
+    if value["status"] == "awaiting_astra_review":
+        review = _json(run / "candidate-review.json")
+        _reference(run / "candidate-review.json", value["review_sha256"])
+        for key, path in (
+            ("run_sha256", run / "run.json"),
+            ("candidate_sha256", run / "fit/best.osaval03"),
+            ("offline_sha256", run / "development-test.json"),
+            ("arena_sha256", run / "arena/arena.json"),
+        ):
+            _reference(path, review[key])
+    return value
 
 
 def seal(config_path: Path) -> dict:
@@ -257,6 +326,33 @@ def seal(config_path: Path) -> dict:
         inputs[name] = _reference(inside(generation[path_key]), generation.get(hash_key))
         generation[hash_key] = inputs[name]["sha256"]
     sources = {name: _reference(inside(path)) for name, path in RUNTIME_SOURCES.items()}
+    campaign = generation.get("defense_campaign")
+    if campaign:
+        from .labeling.config import load_teacher_config
+
+        installed_teacher = load_teacher_config(inside(generation["teacher_config_path"]))
+        if installed_teacher.install_manifest is None:
+            raise ValueError("teacher installation provenance is required")
+        inputs["teacher_install_manifest"] = _reference(inside(installed_teacher.install_manifest))
+        inputs["regression_positions"] = _reference(
+            inside(config["evaluation"]["regression_positions_path"]),
+            config["evaluation"]["regression_positions_sha256"],
+        )
+        teacher_identity = _json(inside("local/frozen/metadata/teacher-identity.json"))
+        inputs["teacher_identity"] = _reference(
+            inside("local/frozen/metadata/teacher-identity.json")
+        )
+        for i, ref in enumerate([teacher_identity["binary"], *teacher_identity["eval_files"]]):
+            inputs[f"teacher_asset_{i}"] = _reference(inside(ref["path"]), ref["sha256"])
+        replay = campaign["replay_dataset"]
+        inputs["replay_manifest"] = _reference(
+            inside(Path(replay["path"]) / "manifest.json"), replay["manifest_sha256"]
+        )
+        manifest = _json(inside(inputs["replay_manifest"]["path"]))
+        for i, ref in enumerate(manifest["artifacts"]):
+            inputs[f"replay_artifact_{i}"] = _reference(
+                inside(Path(replay["path"]) / ref["path"]), ref["sha256"]
+            )
     run.parent.mkdir(parents=True, exist_ok=True)
     # This temporary directory is exclusively created here and never named by a sealed run.
     staging = Path(tempfile.mkdtemp(prefix=f".{run.name}.sealing-", dir=run.parent))
@@ -278,12 +374,22 @@ def seal(config_path: Path) -> dict:
             replay_path=runtime["replay"]["path"],
             replay_sha256=runtime["replay"]["sha256"],
         )
+        if campaign:
+            campaign.update(
+                probe_path=runtime["probe"]["path"], probe_sha256=runtime["probe"]["sha256"]
+            )
         config["training"].update(
             seed=config["seed"],
             initial_model=generation["leaf_path"],
             initial_sha256=generation["leaf_sha256"],
         )
-        config.update(code=code, runtime=runtime, inputs=inputs, sealed_at=time.time())
+        config.update(
+            code=code,
+            runtime=runtime,
+            inputs=inputs,
+            sealed_at=time.time(),
+            execution_cwd=str(ROOT),
+        )
         for ref in inputs.values():
             _reference(inside(ref["path"]), ref["sha256"])
         for path, expected in code["files"].items():
@@ -300,7 +406,10 @@ def seal(config_path: Path) -> dict:
             staging / "state.json",
             encoded(
                 {
-                    "status": "prepared",
+                    "schema": "open_shogiai_evaluator_state/v2"
+                    if campaign
+                    else "open_shogiai_evaluator_state/v1",
+                    "status": "ready_for_luna" if campaign else "prepared",
                     "run_id": config["run_id"],
                     "pid": None,
                     "run_sha256": receipt["run_sha256"],
@@ -316,7 +425,7 @@ def seal(config_path: Path) -> dict:
     return {
         "run_id": config["run_id"],
         "run": str(run.relative_to(ROOT)),
-        "status": "prepared",
+        "status": "ready_for_luna" if campaign else "prepared",
         "code_commit": code["commit"],
         "run_sha256": receipt["run_sha256"],
     }
@@ -530,7 +639,7 @@ def _mark_group_cleaned(run: Path, process) -> None:
 
 
 def status(run: Path) -> dict:
-    value = _json(run / "state.json") if (run / "state.json").exists() else {}
+    value = _state(run) if (run / "state.json").exists() else {}
     value["process_alive"] = bool(value.get("process_identity")) and (
         read_process_identity(value.get("pid")) == value["process_identity"]
     )
@@ -572,7 +681,7 @@ def start(run: Path) -> dict:
     config = verify(run)
     try:
         with _lease(run) as lease:
-            current = _json(run / "state.json")
+            current = _state(run)
             residual = _residual_stage_group(run)
             if residual is not None:
                 current.update(
@@ -582,9 +691,13 @@ def start(run: Path) -> dict:
                 )
                 atomic(run / "state.json", encoded(current))
                 return current
-            if current.get("status") == "awaiting_astra_browser":
+            if current.get("status") in {"awaiting_astra_browser", "awaiting_astra_review"}:
                 for stage in STAGES:
                     _verify_completion(run, stage, config)
+                if current["status"] == "awaiting_astra_review":
+                    _reference(run / "candidate-review.json", current["review_sha256"])
+                return current
+            if current["status"] == "needs_astra":
                 return current
             _clear_stop(run)
             with inside(run / "supervisor.log", exists=False).open("ab") as log:
@@ -687,7 +800,29 @@ def _dataset(run: Path, config: dict) -> dict:
             if path.is_absolute() or len(path.parts) != 1:
                 raise ValueError("dataset references must be local file names")
             inside(directory / path)  # Reject links before prepare reads the referenced bytes.
-    return prepare(ROOT, run / "data", config["generation"], config["excluded_development_sfens"])
+    result = prepare(ROOT, run / "data", config["generation"], config["excluded_development_sfens"])
+    if config["generation"].get("defense_campaign"):
+        goal = config["unique_data_goal"]
+        if (
+            result["unique_positions"]["train"] < goal["minimum_train_positions"]
+            or result["generated_unique_positions"]["train"] < goal["minimum_new_train_positions"]
+        ):
+            raise ValueError("insufficient unique training data; return to Astra without fitting")
+        import numpy as np
+
+        for split in ("validation", "development_test"):
+            groups = np.load(run / "data/dataset" / f"{split}-groups.npy", allow_pickle=False)
+            if any(
+                int((groups == i).sum()) < goal["minimum_evaluation_rows_per_group"]
+                for i in range(4)
+            ):
+                raise ValueError("insufficient unknown evaluation coverage")
+        train_groups = np.load(run / "data/dataset/train-groups.npy", allow_pickle=False)
+        if any(
+            int((train_groups == i).sum()) < goal["minimum_train_rows_per_group"] for i in range(4)
+        ):
+            raise ValueError("insufficient training stratum; refuse small-set exposure inflation")
+    return result
 
 
 def _training_summary(run: Path, config: dict) -> dict:
@@ -738,12 +873,12 @@ def _audit_report(run: Path, config: dict) -> dict:
     return value
 
 
-def _arena_complete(result: dict) -> None:
+def _arena_complete(result: dict, expected_games: int = 40) -> None:
     if result.get("status") == "stopped":
         raise InterruptedError("arena stopped with retained game receipts")
     if (
         result.get("status") != "complete"
-        or result.get("planned_games") != 40
+        or result.get("planned_games") != expected_games
         or result.get("summary", {}).get("all_planned_complete") is not True
     ):
         raise ValueError("arena is failed or incomplete; preserve its evidence for Astra")
@@ -774,6 +909,8 @@ def _completion_artifacts(run: Path, stage: str) -> list[dict]:
                 for ref in [attempt["trace"], *attempt.get("stderr_artifacts", [])]
                 if ref is not None
             )
+    if stage == "audit" and (run / "move-screen").exists():
+        paths.extend(sorted((run / "move-screen").glob("*.json")))
     return [_reference(path) for path in paths]
 
 
@@ -794,7 +931,9 @@ def _verify_completion(run: Path, stage: str, config: dict) -> dict:
     if stage in ("audit", "arena"):
         _audit_report(run, config)
     if stage == "arena":
-        _arena_complete(receipt["result"])
+        _arena_complete(
+            receipt["result"], 32 + config["evaluation"]["startpos_demonstration_games"]
+        )
         if receipt["result"] != _json(run / "arena" / "arena.json"):
             raise ValueError("arena summary differs from its completion receipt")
     return receipt["result"]
@@ -906,7 +1045,9 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
             )
             atomic(run / "state.json", encoded(state))
             return state
-        prior = _json(run / "state.json")
+        prior = _state(run)
+        if prior["status"] in {"needs_astra", "awaiting_astra_review", "awaiting_astra_browser"}:
+            return prior
         began = prior.get("began_at", time.time())
         _number(began, 0, time.time(), "began_at", integer=False)
         initial_swap = prior.get("initial_swap_bytes")
@@ -918,7 +1059,11 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
         for count in retries.values():
             _number(count, 0, config["resources"]["maximum_retries"], "retry count")
         state = {
+            "schema": "open_shogiai_evaluator_state/v2"
+            if config["generation"].get("defense_campaign")
+            else "open_shogiai_evaluator_state/v1",
             "run_id": config["run_id"],
+            "run_sha256": digest(run / "run.json"),
             "pid": os.getpid(),
             "process_identity": read_process_identity(os.getpid()),
             "began_at": began,
@@ -965,8 +1110,18 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
                 if state["status"] != "running":
                     break
             else:
+                if config["generation"].get("defense_campaign"):
+                    review = _candidate_review(run)
+                    state.update(
+                        review_sha256=digest(run / "candidate-review.json"),
+                        meets_frozen_criteria=review["meets_frozen_criteria"],
+                    )
                 state.update(
-                    status="awaiting_astra_browser", stage="complete", completed_at=time.time()
+                    status="awaiting_astra_review"
+                    if config["generation"].get("defense_campaign")
+                    else "awaiting_astra_browser",
+                    stage="complete",
+                    completed_at=time.time(),
                 )
         except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as error:
             state.update(status="needs_astra", reason=f"{type(error).__name__}:{error}")
@@ -993,15 +1148,52 @@ def _arena_config(run: Path, config: dict) -> dict:
     }
 
 
+def _candidate_review(run: Path) -> dict:
+    """Combine predeclared screens without mistaking an arena win for overall adoption."""
+    offline = _json(run / "development-test.json")
+    arena = _json(run / "arena/arena.json")
+    groups = offline["groups"]
+    scalar_preserved = all(
+        groups["candidate"][g]["loss"] <= groups["r3"][g]["loss"] * 1.03
+        for g in ("general", "attack_end")
+    )
+    screen_pass = offline["move_quality_screen"]["screen_pass"] is True
+    arena_pass = arena["adoption_criteria_met"] is True
+    result = {
+        "schema": "open_shogiai_candidate_review/v1",
+        "run_sha256": digest(run / "run.json"),
+        "candidate_sha256": digest(run / "fit/best.osaval03"),
+        "offline_sha256": digest(run / "development-test.json"),
+        "arena_sha256": digest(run / "arena/arena.json"),
+        "scalar_general_attack_preserved": scalar_preserved,
+        "move_quality_screen_pass": screen_pass,
+        "r3_arena_pass": arena_pass,
+        "meets_frozen_criteria": bool(scalar_preserved and screen_pass and arena_pass),
+        "promotion_performed": False,
+        "decision_owner": "Astra; review actual independence, evidence and browser behavior",
+        "human_shodan_validated": False,
+    }
+    atomic(run / "candidate-review.json", encoded(result))
+    return result
+
+
 def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
     if stage not in STAGES:
         raise ValueError("unknown stage")
     with _lease(run, inherited_fd):
         config = verify(run)
+        state = _state(run)
+        if state["status"] in {"needs_astra", "awaiting_astra_review", "awaiting_astra_browser"}:
+            raise ValueError(
+                "stage execution requires Astra review; terminal run is not restartable"
+            )
         if (run / "STOP").exists():
             raise InterruptedError("stop requested before stage launch")
         if (run / f"{stage}-complete.json").exists():
             return _verify_completion(run, stage, config)
+        if config["generation"].get("defense_campaign"):
+            for previous in STAGES[: STAGES.index(stage)]:
+                _verify_completion(run, previous, config)
         _register_stage_group(run, stage)
         generation = config["generation"]
         if stage == "generate":
@@ -1030,7 +1222,7 @@ def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
             elif stage == "audit":
                 import torch
 
-                from .evaluator_training import arrays, evaluate
+                from .evaluator_training import arrays, evaluate, evaluate_groups, grouped_arrays
                 from .phase10v_model import Phase10VModel, torch_parameters
 
                 _training_summary(run, config)
@@ -1064,6 +1256,22 @@ def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
                         ("candidate", model),
                     )
                 }
+                if generation.get("defense_campaign"):
+                    from .defense_evaluation import screen
+
+                    grouped = grouped_arrays(run / "data" / "dataset", "development_test")
+                    metrics["groups"] = {
+                        name: evaluate_groups(
+                            torch_parameters(Phase10VModel.read(path)),
+                            grouped,
+                            config["training"]["batch_size"],
+                        )
+                        for name, path in (
+                            ("r3", inside(generation["leaf_path"])),
+                            ("candidate", model),
+                        )
+                    }
+                    metrics["move_quality_screen"] = screen(ROOT, run, config)
                 atomic(run / "development-test.json", encoded(metrics))
                 result = {
                     "model_sha256": digest(model),
@@ -1076,7 +1284,7 @@ def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
                 _training_summary(run, config)
                 _audit_report(run, config)
                 result = run_arena(ROOT, run / "arena", _arena_config(run, config))
-                _arena_complete(result)
+                _arena_complete(result, 32 + config["evaluation"]["startpos_demonstration_games"])
         verify(run)
         if (run / "STOP").exists():
             raise InterruptedError("stop requested before completion publication")

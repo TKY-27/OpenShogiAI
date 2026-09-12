@@ -5,7 +5,8 @@ model-format support, and research data/training tools. The browser application 
 in the separate OpenShogiUI (OSUI) repository.
 
 It provides legal move generation, SFEN/USI/CSA, bounded search, game-clock allocation,
-terminal play, analysis and opening-book interfaces. The default is the built-in
+terminal play, analysis and offline opening-data interfaces. All play is book-free; runtime
+book loading is rejected. The default is the built-in
 `handcrafted-experimental` evaluator. Experimental learned formats are explicit opt-ins;
 no trained weights, datasets or external teacher binaries are distributed here.
 Amateur-dan strength and the next design's novelty have not been established.
@@ -36,9 +37,9 @@ make check
 
 Standard builds/tests use synthetic or small checked-in fixtures, not private training data.
 For the optional local frozen W256 comparison model, see [model handling](docs/model/handling.md).
-The hard4 terminal/runtime-proof failure is fixed. The local core prototype learns root-work
-ordering and game-clock spending while keeping W256 frozen. It is available through an explicit
-development-only OSUI choice; it is not a playing-strength or model-promotion claim. See the
+The hard4 terminal/runtime-proof failure is fixed. The current defense/opening campaign
+continues the local r3 evaluator with corrected offline teacher labels and balanced replay.
+The old computation controller stays OFF. Local candidates are not public model promotions. See the
 [prototype status](docs/status.md) and [local play instructions](docs/development.md).
 
 ## Documentation

@@ -157,7 +157,7 @@ impl Default for UsiOptions {
             expected_model_sha256: String::new(),
             runtime_profile: RuntimeProfile::Standard,
             opening_book_path: String::new(),
-            opening_profile: OpeningProfile::IbishaStrict,
+            opening_profile: OpeningProfile::Unrestricted,
             opening_max_plies: DEFAULT_OPENING_MAX_PLIES,
             opening_minimum_samples: DEFAULT_OPENING_MINIMUM_SAMPLES,
             opening_maximum_teacher_loss_cp: DEFAULT_OPENING_MAXIMUM_TEACHER_LOSS_CP,
@@ -350,20 +350,6 @@ impl UsiSession {
             .send("option name ModelPath type filename default <empty>");
         self.sink
             .send("option name ExpectedModelSha256 type string default <empty>");
-        self.sink
-            .send("option name OpeningBookPath type filename default <empty>");
-        self.sink.send(
-            "option name OpeningProfile type combo default ibisha_strict var unrestricted var ibisha_preferred var ibisha_strict",
-        );
-        self.sink.send(&format!(
-            "option name OpeningMaxPlies type spin default {DEFAULT_OPENING_MAX_PLIES} min 1 max 40"
-        ));
-        self.sink.send(&format!(
-            "option name OpeningMinSamples type spin default {DEFAULT_OPENING_MINIMUM_SAMPLES} min 1 max 1000000"
-        ));
-        self.sink.send(&format!(
-            "option name OpeningMaxTeacherLossCp type spin default {DEFAULT_OPENING_MAXIMUM_TEACHER_LOSS_CP} min 0 max 10000"
-        ));
         for name in evaluation_option_names() {
             self.sink
                 .send(&format!("option name Eval{name} type check default true"));
@@ -473,17 +459,7 @@ impl UsiSession {
                 hash.clone_into(&mut self.options.expected_model_sha256);
             }
             "OpeningBookPath" => {
-                if self.options.runtime_profile == RuntimeProfile::PureLearned {
-                    return Err("pure_learned prohibits opening books".to_owned());
-                }
-                let path = value.ok_or_else(|| "OpeningBookPath requires a value".to_owned())?;
-                if path.is_empty() {
-                    return Err("OpeningBookPath must not be empty".to_owned());
-                }
-                let book = OpeningBookV2::load_file(path)
-                    .map_err(|error| format!("opening book validation failed: {error}"))?;
-                path.clone_into(&mut self.options.opening_book_path);
-                self.opening_book = Some(Arc::new(book));
+                return Err("opening books are disabled for play; offline training only".to_owned());
             }
             "OpeningProfile" => {
                 let profile = OpeningProfile::parse(
@@ -1282,9 +1258,11 @@ mod tests {
         assert!(lines.iter().any(|line| {
             line == "option name TimeSafetyMarginMs type spin default 50 min 0 max 1000"
         }));
-        assert!(lines.iter().any(|line| {
-            line == "option name OpeningProfile type combo default ibisha_strict var unrestricted var ibisha_preferred var ibisha_strict"
-        }));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.starts_with("option name Opening"))
+        );
         assert!(
             lines
                 .iter()
@@ -1639,30 +1617,22 @@ mod tests {
     }
 
     #[test]
-    fn valid_opening_book_returns_immediate_legal_move_without_worker() {
+    fn valid_opening_book_is_rejected_for_play() {
         let book = TemporaryModel::write(&opening_book_bytes());
         let sink = Arc::new(MemorySink::default());
         let mut session = UsiSession::new(sink.clone());
-
         assert!(session.process_line(&format!(
             "setoption name OpeningBookPath value {}",
             book.display()
         )));
-        assert!(session.process_line("go nodes 100"));
-
-        assert!(session.active.is_none());
+        assert!(session.opening_book.is_none());
         let lines = sink.0.lock().unwrap();
-        assert!(lines.iter().any(|line| {
-            line.starts_with("info string source book ") && line.contains("classification ibisha")
-        }));
-        assert_eq!(
+        assert!(
             lines
                 .iter()
-                .filter(|line| line.starts_with("bestmove "))
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["bestmove 2g2f"]
+                .any(|line| line.contains("opening books are disabled"))
         );
+        assert!(!lines.iter().any(|line| line.starts_with("bestmove ")));
     }
 
     #[test]

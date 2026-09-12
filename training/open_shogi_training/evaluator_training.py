@@ -23,6 +23,45 @@ from .phase10v_model import (
     torch_parameters,
 )
 
+GROUPS = ("general", "opening", "defense", "attack_end")
+
+
+def grouped_arrays(folder: Path, split: str) -> dict:
+    data = arrays(folder, split)
+    data["groups"] = np.load(folder / f"{split}-groups.npy", allow_pickle=False)
+    if data["groups"].shape != data["targets"].shape or not np.isin(data["groups"], range(4)).all():
+        raise ValueError("invalid sampling groups")
+    return data
+
+
+def evaluate_groups(parameters: list, data: dict, batch_size: int) -> dict:
+    result = {}
+    for i, name in enumerate(GROUPS):
+        indexes = np.flatnonzero(data["groups"] == i)
+        if not len(indexes):
+            raise ValueError(f"missing independent validation group: {name}")
+        subset = {k: v[indexes] for k, v in data.items() if k != "groups"}
+        result[name] = evaluate(parameters, subset, batch_size)
+    return result
+
+
+def stratified_order(
+    data: dict, fractions: list[float], generator: torch.Generator
+) -> torch.Tensor:
+    """One bounded pass, no replacement; reshuffle independently on the next pass."""
+    if len(fractions) != 4 or min(fractions) <= 0 or abs(sum(fractions) - 1) > 1e-9:
+        raise ValueError("invalid four-group sampling fractions")
+    members = [torch.from_numpy(np.flatnonzero(data["groups"] == i)) for i in range(4)]
+    size = int(min(len(m) / f for m, f in zip(members, fractions, strict=True)))
+    if size < 4:
+        raise ValueError("insufficient independent rows for stratified training")
+    chosen = []
+    for m, fraction in zip(members, fractions, strict=True):
+        count = max(1, int(size * fraction))
+        chosen.append(m[torch.randperm(len(m), generator=generator)[:count]])
+    order = torch.cat(chosen)
+    return order[torch.randperm(len(order), generator=generator)]
+
 
 def forward(parameters: list, features: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     """Pre-encoded own/opponent features; exact Q20/f64 accumulation on the measured CPU route."""
@@ -56,6 +95,7 @@ def batch(data: dict, indexes) -> tuple:
 
 def evaluate(parameters: list, data: dict, batch_size: int) -> dict:
     total, absolute, square, count = 0.0, 0.0, 0.0, len(data["targets"])
+    severe_over = 0
     if count == 0:
         raise ValueError("empty development validation")
     with torch.no_grad():
@@ -65,11 +105,13 @@ def evaluate(parameters: list, data: dict, batch_size: int) -> dict:
             total += float(functional.smooth_l1_loss(predicted / 600, y / 600, reduction="sum"))
             absolute += float((predicted - y).abs().sum())
             square += float(((predicted - y) ** 2).sum())
+            severe_over += int(((predicted - y) > 600).sum())
     return {
         "loss": total / count,
         "cp_mae": absolute / count,
         "cp_rmse": math.sqrt(square / count),
         "positions": count,
+        "overestimate_above_600cp_rate": severe_over / count,
     }
 
 
@@ -124,7 +166,9 @@ def train(
     torch.set_num_threads(config["threads"])
     torch.use_deterministic_algorithms(True)
     torch.manual_seed(config["seed"])
-    data, validation = arrays(dataset, "train"), arrays(dataset, "validation")
+    fractions = config.get("sampling_fractions")
+    loader = grouped_arrays if fractions is not None else arrays
+    data, validation = loader(dataset, "train"), loader(dataset, "validation")
     n = len(data["targets"])
     if not n:
         raise ValueError("empty training split")
@@ -136,7 +180,18 @@ def train(
     generator = torch.Generator().manual_seed(config["seed"])
     step, epoch, offset, exposures, stale, best_step = 0, 0, 0, 0, 0, 0
     counts = torch.zeros(n, dtype=torch.int32)
-    order = torch.randperm(n, generator=generator)
+
+    def next_order():
+        return (
+            stratified_order(data, fractions, generator)
+            if fractions
+            else torch.randperm(n, generator=generator)
+        )
+
+    order = next_order()
+    baseline_groups = (
+        evaluate_groups(parameters, validation, config["batch_size"]) if fractions else None
+    )
     best_loss = math.inf
     best_bytes = b""
     history = []
@@ -188,8 +243,11 @@ def train(
             atomic(best_path, best_bytes)
         if (
             counts.sum().item() != exposures
-            or not 0 <= offset <= n
-            or order.sort().values.tolist() != list(range(n))
+            or not 0 <= offset <= len(order)
+            or len(order.unique()) != len(order)
+            or bool(((order < 0) | (order >= n)).any())
+            or (fractions is None and len(order) != n)
+            or int(counts.max()) > config["max_epochs"]
         ):
             raise ValueError("checkpoint sampler/exposure mismatch")
         completed = folder / "training.json"
@@ -230,9 +288,22 @@ def train(
     def save(reason: str) -> dict:
         nonlocal best_loss, best_bytes, stale, best_step, train_loss_sum, train_rows
         metrics = evaluate(parameters, validation, config["batch_size"])
+        groups = (
+            evaluate_groups(parameters, validation, config["batch_size"]) if fractions else None
+        )
+        eligible = True
+        if groups:
+            metrics["loss"] = sum(groups[g]["loss"] * fractions[i] for i, g in enumerate(GROUPS))
+            eligible = all(
+                groups[g]["loss"]
+                <= baseline_groups[g]["loss"] * config["maximum_replay_regression_ratio"]
+                for g in ("general", "attack_end")
+            )
         if not all(math.isfinite(v) for v in metrics.values()):
             raise FloatingPointError("nonfinite validation")
-        improved = metrics["loss"] < best_loss * (1 - config["minimum_relative_improvement"])
+        improved = eligible and metrics["loss"] < best_loss * (
+            1 - config["minimum_relative_improvement"]
+        )
         current = _snapshot(parameters, model.seed)
         if improved:
             best_loss, stale, best_step = metrics["loss"], 0, step
@@ -254,6 +325,8 @@ def train(
             "reason": reason,
             "elapsed_this_invocation_s": time.monotonic() - started,
             "model_sha256": current.sha256,
+            "groups": groups,
+            "replay_guard_eligible": eligible,
         }
         history.append(event)
         train_loss_sum, train_rows = 0.0, 0
@@ -271,12 +344,12 @@ def train(
         if (folder.parent / "STOP").exists():
             reason = "requested_stop"
             break
-        if offset == n:
+        if offset == len(order):
             epoch += 1
             if epoch == config["max_epochs"]:
                 reason = "max_epochs"
                 break
-            order = torch.randperm(n, generator=generator)
+            order = next_order()
             offset = 0
         indexes = order[offset : offset + config["batch_size"]]
         features, lengths, y = batch(data, indexes.numpy())
@@ -323,11 +396,18 @@ def train(
         "status": "stopped" if reason == "requested_stop" else "complete",
         "reason": reason,
         "step": step,
-        "epochs_finished": min(config["max_epochs"], epoch + int(offset == n)),
+        "epochs_finished": min(config["max_epochs"], epoch + int(offset == len(order))),
         "unique_training_positions": n,
         "seen_unique_positions": int((counts > 0).sum()),
         "example_exposures": exposures,
         "maximum_exposure": int(counts.max()),
+        "sampling_fractions": fractions,
+        "group_exposures": {
+            name: int(counts[torch.from_numpy(data["groups"] == i)].sum())
+            for i, name in enumerate(GROUPS)
+        }
+        if fractions
+        else None,
         "best_step": best_step,
         "best_sha256": digest(folder / "best.osaval03"),
         "identity": identity,

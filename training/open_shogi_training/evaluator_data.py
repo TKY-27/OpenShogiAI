@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from .labeling.config import load_teacher_config
-from .labeling.usi import USIEngine, USIError, USITerminalResult
+from .labeling.usi import USIEngine, USIError, USIIncompleteDepthError, USITerminalResult
 from .phase10r_model import parse_sfen
 from .phase10v_data import position_hash
 from .phase10v_model import sparse_features
@@ -199,7 +199,12 @@ def _teacher_observation(
 ):
     """Keep rejected teacher evidence before propagating its fail-closed exception."""
     try:
-        result = teacher.analyze_with_retry(state["sfen"])
+        if config.get("teacher_depth") is not None:
+            result = teacher.analyze_with_retry(
+                state["sfen"], nodes=config["teacher_nodes"], depth=config["teacher_depth"]
+            )
+        else:
+            result = teacher.analyze_with_retry(state["sfen"])
         if isinstance(result, USITerminalResult):
             return result, _validated_teacher_terminal(result, state, ply)
         if "successors" in state:
@@ -237,7 +242,44 @@ def _teacher_observation(
             "prefix": {"path": prefix.name, "sha256": digest(prefix)},
         }
         atomic(prefix.with_name(f"{stem}.json"), encoded(receipt))
+        retry_nodes = config.get("teacher_retry_nodes")
+        if (
+            isinstance(error, USIIncompleteDepthError)
+            and config.get("teacher_depth")
+            and type(retry_nodes) is int
+            and retry_nodes > config["teacher_nodes"]
+        ):
+            return _teacher_observation(
+                teacher,
+                state,
+                root=root,
+                output=output,
+                config={**config, "teacher_nodes": retry_nodes, "teacher_retry_nodes": None},
+                game=game,
+                ply=ply,
+                branch=branch,
+                moves=moves,
+                records=records,
+            )
+        error.failure_receipt = str(prefix.with_name(f"{stem}.json").relative_to(output))
+        error.requested_depth = config.get("teacher_depth")
+        error.node_ceiling = config.get("teacher_nodes")
         raise
+
+
+def _optional_focus_observation(*args, **kwargs):
+    """Only an exhausted optional depth budget becomes explicit missing evidence."""
+    try:
+        return _teacher_observation(*args, **kwargs)
+    except USIIncompleteDepthError as error:
+        return None, {
+            "status": "unlabeled_incomplete_depth",
+            "requested_depth": error.requested_depth,
+            "node_ceiling": error.node_ceiling,
+            "failure_receipt": error.failure_receipt,
+            "failure_sha256": digest(kwargs["output"] / error.failure_receipt),
+            "recovery": "not_attempted",
+        }
 
 
 def _terminal_counts(records: list[dict]) -> dict[str, int]:
@@ -254,8 +296,16 @@ def _terminal_counts(records: list[dict]) -> dict[str, int]:
 def _generate_group(root_name: str, output_name: str, config: dict, games: list[int]) -> list[dict]:
     root, output = Path(root_name), Path(output_name)
     reports = []
+    unlabeled_in_worker = 0
     replay = Replay(root, config)
+    campaign = config.get("defense_campaign")
+    probe, branch_replay = None, None
     try:
+        if campaign:
+            from .defense_scenarios import R3Probe
+
+            probe = R3Probe(root, config)
+            branch_replay = Replay(root, config)
         with USIEngine(
             teacher_config(root, config),
             root,
@@ -270,10 +320,18 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                     if digest(target) != saved["sha256"]:
                         raise ValueError("completed trajectory corrupted")
                     reports.append(saved)
+                    unlabeled_in_worker += saved.get("unlabeled_focus", 0)
                     continue
                 rng = random.Random(config["seed"] + game)
                 began = time.monotonic()
-                state = replay.ask(reset=START, successors=True)
+                initial, prefix, family, variant = START, [], None, None
+                if campaign:
+                    from .defense_scenarios import assignment, rotate_move, rotate_sfen
+
+                    family, variant = assignment(config, game)
+                    initial = rotate_sfen(START) if variant % 2 else START
+                    prefix = [rotate_move(m) if variant % 2 else m for m in family["moves"]]
+                state = replay.ask(reset=initial, successors=True)
                 records, moves, trajectory_outcome = [], [], None
                 for ply in range(config["max_plies"]):
                     if (output / "STOP").exists():
@@ -324,17 +382,42 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                         }
                         # Offline coverage of the current weak evaluator's actual preferred child.
                         weak = min(legal.values(), key=lambda c: (c["child_cp"], c["move"]))
+                        if campaign and ply % campaign["probe_stride"] == 0:
+                            observed = probe.search(initial, moves, state["sfen"])
+                            if observed["best_move"] not in legal:
+                                raise ValueError("r3 diagnostic selected illegal move")
+                            weak = legal[observed["best_move"]]
+                            record["r3_search"] = observed
                         if (
                             weak["terminal"] == "None"
-                            and ply % config["deviation_stride"] == 0
-                            and weak["move"] not in {c.pv[0] for c in result.candidates}
+                            and ply
+                            % (campaign["probe_stride"] if campaign else config["deviation_stride"])
+                            == 0
+                            and (
+                                campaign or weak["move"] not in {c.pv[0] for c in result.candidates}
+                            )
                         ):
-                            child_result, child_terminal = _teacher_observation(
+                            child_state = (
+                                branch_replay.ask(reset=weak["sfen"], successors=True)
+                                if campaign
+                                else {**weak, "sfen": weak["sfen"]}
+                            )
+                            child_config = config
+                            if campaign:
+                                child_config = {
+                                    **config,
+                                    "teacher_nodes": campaign["relabel_nodes"],
+                                    "teacher_depth": campaign["relabel_depth"],
+                                }
+                            observer = (
+                                _optional_focus_observation if campaign else _teacher_observation
+                            )
+                            child_result, child_terminal = observer(
                                 teacher,
-                                {**weak, "sfen": weak["sfen"]},
+                                child_state,
                                 root=root,
                                 output=output,
-                                config=config,
+                                config=child_config,
                                 game=game,
                                 ply=ply + 1,
                                 branch="deviation",
@@ -344,21 +427,100 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                             record["deviation"] = {
                                 "move": weak["move"],
                                 "sfen": weak["sfen"],
-                                "teacher_elapsed_ms": child_result.elapsed_ms,
+                                "teacher_elapsed_ms": child_result.elapsed_ms
+                                if child_result
+                                else None,
                             }
-                            if child_terminal is not None:
+                            if child_result is None:
+                                record["deviation"].update(child_terminal)
+                            elif child_terminal is not None:
                                 record["deviation"]["terminal_outcome"] = child_terminal
                             else:
                                 record["deviation"].update(
                                     score=child_result.primary.score.as_dict(),
                                     candidates=[c.as_dict() for c in child_result.candidates],
                                 )
+                                if campaign:
+                                    reply = child_result.primary.pv[0]
+                                    recovery_state = branch_replay.ask(
+                                        movement=reply, successors=True
+                                    )
+                                    if recovery_state["terminal"] == "None":
+                                        recovery, recovery_terminal = _optional_focus_observation(
+                                            teacher,
+                                            recovery_state,
+                                            root=root,
+                                            output=output,
+                                            config=child_config,
+                                            game=game,
+                                            ply=ply + 2,
+                                            branch="recovery",
+                                            moves=[*moves, weak["move"], reply],
+                                            records=[*records, record],
+                                        )
+                                        record["deviation"]["recovery"] = {
+                                            "sfen": recovery_state["sfen"],
+                                            "reply": reply,
+                                            "score": (
+                                                recovery_terminal
+                                                if recovery_terminal is not None
+                                                else recovery.primary.score.as_dict()
+                                            ),
+                                            "candidates": (
+                                                []
+                                                if recovery_terminal is not None
+                                                else [c.as_dict() for c in recovery.candidates]
+                                            ),
+                                            "teacher_elapsed_ms": recovery.elapsed_ms
+                                            if recovery
+                                            else None,
+                                        }
+                                        if recovery is None:
+                                            record["deviation"]["recovery"] = {
+                                                "sfen": recovery_state["sfen"],
+                                                "reply": reply,
+                                                **{
+                                                    k: v
+                                                    for k, v in recovery_terminal.items()
+                                                    if k != "recovery"
+                                                },
+                                            }
                         records.append(record)
+                        if campaign:
+                            d = record.get("deviation")
+                            missing = sum(
+                                isinstance(observation, dict)
+                                and observation.get("status") == "unlabeled_incomplete_depth"
+                                for observation in (d, d.get("recovery") if d else None)
+                            )
+                            unlabeled_in_worker += missing
+                            if unlabeled_in_worker > campaign["maximum_unlabeled_focus"]:
+                                atomic(
+                                    output / f"focus-limit-{games[0]}.json",
+                                    encoded(
+                                        {
+                                            "status": "needs_astra",
+                                            "game": game,
+                                            "ply": ply,
+                                            "unlabeled_in_worker": unlabeled_in_worker,
+                                            "maximum_unlabeled_focus": campaign[
+                                                "maximum_unlabeled_focus"
+                                            ],
+                                        }
+                                    ),
+                                )
+                                raise ValueError(
+                                    "optional focus absolute missing-label ceiling exceeded"
+                                )
                     # Data generation only: varied strong continuations, never a runtime preset.
                     weights = [0.6, 0.3, 0.1] if ply < 48 else [0.92, 0.06, 0.02]
                     choice = rng.choices(result.candidates, weights[: len(result.candidates)])[
                         0
                     ].pv[0]
+                    if ply < len(prefix):
+                        choice = prefix[ply]
+                        if choice not in legal:
+                            raise ValueError("offline prefix no longer legal")
                     moves.append(choice)
                     state = replay.ask(movement=choice, successors=True)
                 raw = {
@@ -370,6 +532,16 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                     "end": state["terminal"] if trajectory_outcome is None else "TeacherTerminal",
                     "records": records,
                 }
+                if campaign:
+                    raw.update(
+                        family=family["id"],
+                        variant=variant,
+                        group=family["group"],
+                        split=family["split"],
+                        prefix_moves=prefix,
+                        initial_sfen=initial,
+                        source="generated",
+                    )
                 if trajectory_outcome is not None:
                     raw["terminal_outcome"] = trajectory_outcome
                 # An interrupted old temporary output is replaced, never a completed receipt.
@@ -383,11 +555,40 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                     "split": raw["split"],
                     "teacher_terminal_outcomes": _terminal_counts(records),
                 }
+                if campaign:
+                    canonical_moves = [rotate_move(m) if variant % 2 else m for m in moves]
+                    saved.update(
+                        family=family["id"],
+                        group=family["group"],
+                        variant=variant,
+                        trajectory_sha256=hashlib.sha256(
+                            encoded([family["id"], canonical_moves])
+                        ).hexdigest(),
+                        unlabeled_focus=sum(
+                            isinstance(observation, dict)
+                            and observation.get("status") == "unlabeled_incomplete_depth"
+                            for r in records
+                            for d in [r.get("deviation")]
+                            for observation in (d, d.get("recovery") if d else None)
+                        ),
+                        candidate_examples=sum(len(r["candidates"]) for r in records),
+                        r3_searches=sum("r3_search" in r for r in records),
+                        deviation_labels=sum(r.get("deviation") is not None for r in records),
+                        recovery_labels=sum(
+                            isinstance(r.get("deviation", {}).get("recovery"), dict)
+                            for r in records
+                            if r.get("deviation")
+                        ),
+                    )
                 atomic(receipt, encoded(saved))
                 reports.append(saved)
                 atomic(output / f"worker-{games[0]}.json", encoded(saved))
     finally:
         replay.close()
+        if probe is not None:
+            probe.close()
+        if branch_replay is not None:
+            branch_replay.close()
     return reports
 
 
@@ -400,6 +601,10 @@ def generate(root: Path, output: Path, config: dict) -> dict:
         if digest(root / config[path_key]) != config[sha_key]:
             raise ValueError(f"identity changed: {path_key}")
     output.mkdir(parents=True, exist_ok=True)
+    if config.get("defense_campaign"):
+        from .defense_scenarios import verify_prefixes
+
+        atomic(output / "prefix-validation.json", encoded(verify_prefixes(root, config)))
     identity = output / "generation.json"
     if identity.exists() and identity.read_bytes() != encoded(config):
         raise ValueError("generation config changed; new run required")
@@ -434,6 +639,32 @@ def generate(root: Path, output: Path, config: dict) -> dict:
             for key in ("root_win", "root_resign", "deviation_win", "deviation_resign")
         },
     }
+    if config.get("defense_campaign"):
+        from .defense_scenarios import focus_gate
+
+        report["focus_quality"] = focus_gate(output, config)
+        report.update(
+            scenario_families=len({r["family"] for r in all_reports}),
+            unique_trajectory_paths=len({r["trajectory_sha256"] for r in all_reports}),
+            family_splits={
+                s: sorted({r["family"] for r in all_reports if r["split"] == s})
+                for s in ("train", "validation", "development_test")
+            },
+            prefix_validation_sha256=digest(output / "prefix-validation.json"),
+            **{
+                k: sum(r[k] for r in all_reports)
+                for k in (
+                    "candidate_examples",
+                    "r3_searches",
+                    "deviation_labels",
+                    "recovery_labels",
+                )
+            },
+            independence_limit=(
+                "Color/stochastic variants are clustered by original scenario family; "
+                "they are not independent human games."
+            ),
+        )
     if {r["game"] for r in all_reports} != set(range(start, start + config["games"])):
         raise ValueError("generation did not complete its exact trajectory set")
     atomic(output / "generation-complete.json", encoded(report))
@@ -447,8 +678,16 @@ def _observations(game: dict):
             continue
         primary = row["candidates"][0]
         yield row["sfen"], primary["score"], "root", row["ply"], index, None
+        deviation = row.get("deviation")
+        recovery = deviation.get("recovery") if deviation else None
+        masked = {
+            position_hash(observation["sfen"])
+            for observation in (deviation, recovery)
+            if isinstance(observation, dict)
+            and observation.get("status") == "unlabeled_incomplete_depth"
+        }
         for c in row["candidates"]:
-            if c["child_terminal"] != "None":
+            if c["child_terminal"] != "None" or position_hash(c["child_sfen"]) in masked:
                 continue
             yield (
                 c["child_sfen"],
@@ -458,13 +697,35 @@ def _observations(game: dict):
                 index,
                 c["pv"][0],
             )
-        if row["deviation"]:
+        if row["deviation"] and row["deviation"].get("status") != "unlabeled_incomplete_depth":
             d = row["deviation"]
             score = d["terminal_outcome"] if d.get("terminal_outcome") is not None else d["score"]
             yield d["sfen"], score, "deviation", row["ply"] + 1, index, d["move"]
+            if (
+                isinstance(d.get("recovery"), dict)
+                and d["recovery"].get("status") != "unlabeled_incomplete_depth"
+            ):
+                r = d["recovery"]
+                yield r["sfen"], r["score"], "recovery", row["ply"] + 2, index, r["reply"]
 
 
 def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -> dict:
+    if config.get("defense_campaign"):
+        from .defense_scenarios import prepare_campaign
+
+        return prepare_campaign(root, output, config, excluded_sfens)
+    return _prepare(root, output, config, excluded_sfens)
+
+
+def _prepare(
+    root: Path,
+    output: Path,
+    config: dict,
+    excluded_sfens: list[str],
+    *,
+    extra_excluded_keys: set[str] | None = None,
+    dataset_name: str = "dataset",
+) -> dict:
     """Two passes remove ALL cross-split duplicate/symmetry states, then encode unique rows."""
     if not (output / "generation-complete.json").exists():
         raise ValueError("generation has not completed")
@@ -485,7 +746,7 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
         if digest(path) != config["development_exclusions_sha256"]:
             raise ValueError("development exclusions changed")
         development_keys = set(json.loads(path.read_text())["symmetry_keys"])
-    dataset = output / "dataset"
+    dataset = output / dataset_name
     if (dataset / "manifest.json").exists():
         report = json.loads((dataset / "manifest.json").read_text())
         if (
@@ -512,6 +773,7 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
     for sfen in excluded_sfens:
         excluded.update(symmetry_keys(sfen))
     excluded.update(development_keys)
+    excluded.update(extra_excluded_keys or set())
     owners, conflicts, raw_count, raw_mates = {}, set(), 0, 0
     raw_terminals = {"win": 0, "resign": 0}
     games = []
@@ -520,10 +782,25 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
         if digest(path) != receipt["sha256"]:
             raise ValueError("raw game identity mismatch")
         game = json.loads(gzip.decompress(path.read_bytes()))
+        expected_split = partition(game["game"], config["seed"])
+        if config.get("defense_campaign"):
+            from .defense_scenarios import assignment, rotate_move, rotate_sfen
+
+            family, variant = assignment(config, game["game"])
+            expected_split = family["split"]
+            expected_prefix = [rotate_move(m) if variant % 2 else m for m in family["moves"]]
+            if (
+                game.get("family") != family["id"]
+                or game.get("variant") != variant
+                or game.get("group") != family["group"]
+                or game.get("prefix_moves") != expected_prefix
+                or game.get("initial_sfen") != (rotate_sfen(START) if variant % 2 else START)
+            ):
+                raise ValueError("source family lineage changed")
         if (
             game["game"] not in expected_games
             or game["seed"] != config["seed"] + game["game"]
-            or game["split"] != partition(game["game"], config["seed"])
+            or game["split"] != expected_split
             or path.name != f"{game['game']:06d}.json.gz"
         ):
             raise ValueError("source trajectory split changed")
@@ -535,6 +812,8 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
                 "split": game["split"],
             }
         )
+        if config.get("defense_campaign"):
+            games[-1].update(family=game["family"], group=game["group"])
         for sfen, score, *_ in _observations(game):
             raw_count += 1
             if score["kind"] == "terminal":
@@ -559,6 +838,15 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
             owners[key] = game["split"]
     if {g["game"] for g in games} != expected_games:
         raise ValueError("source trajectory set incomplete")
+    source_cap_removed = 0
+    if config.get("defense_campaign"):
+        cap = config["defense_campaign"]["source_row_caps"]["generated"]
+        eligible = sorted(
+            key for key, owner in owners.items() if owner == "train" and key not in conflicts
+        )
+        rejected = eligible[cap:]
+        source_cap_removed = len(rejected)
+        conflicts.update(rejected)
     dataset.mkdir(exist_ok=True)
     counts = {
         s: sum(owner == s and key not in conflicts for key, owner in owners.items())
@@ -581,6 +869,10 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
                     dataset / f"{split}-targets.npy", mode="w+", dtype="float32", shape=(count,)
                 ),
             }
+            if config.get("defense_campaign"):
+                arrays[split]["groups"] = np.lib.format.open_memmap(
+                    dataset / f"{split}-groups.npy", mode="w+", dtype="uint8", shape=(count,)
+                )
             streams[split] = stack.enter_context(
                 gzip.open(dataset / f"{split}-rows.jsonl.gz", "wb")
             )
@@ -619,10 +911,38 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
                     "position_sha256": position_hash(sfen),
                     "symmetry_key": key,
                 }
+                if config.get("defense_campaign"):
+                    from .defense_scenarios import GROUPS, row_group
+
+                    group = row_group(game, ply)
+                    row.update(
+                        group=group,
+                        family=game["family"],
+                        source="generated",
+                        teacher_requested_root_depth=(
+                            config["teacher_depth"]
+                            if kind in ("root", "candidate")
+                            else config["defense_campaign"]["relabel_depth"]
+                        ),
+                        teacher_label_origin=(
+                            "root_multipv_child_negated"
+                            if kind == "candidate"
+                            else "direct_root"
+                            if kind == "root"
+                            else "direct_focus"
+                        ),
+                    )
+                    arrays[split]["groups"][n] = GROUPS[group]
+                    distributions[split][group] = distributions[split].get(group, 0) + 1
                 streams[split].write(encoded(row) + b"\n")
                 offsets[split] += 1
                 stage = "opening" if ply < 40 else "middle" if ply < 110 else "end"
-                for label in (stage, kind, "saturated" if abs(value) > 20000 else "unsaturated"):
+                stage_label = f"stage_{stage}" if config.get("defense_campaign") else stage
+                for label in (
+                    stage_label,
+                    kind,
+                    "saturated" if abs(value) > 20000 else "unsaturated",
+                ):
                     distributions[split][label] = distributions[split].get(label, 0) + 1
     for group in arrays.values():
         for array in group.values():
@@ -649,6 +969,7 @@ def prepare(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -
         "schema": SCHEMA,
         "unique_positions": counts,
         "raw_observations": raw_count,
+        "source_cap_removed": source_cap_removed,
         "mate_observations_masked": raw_mates,
         "teacher_terminal_observations_masked": raw_terminals,
         "excluded_conflict_keys": len(conflicts),

@@ -13,8 +13,8 @@ Play clocks use `open_shogi_time_control/v1` across Rust, native play, USI mappi
 Persistent analysis uses `open_shogi_analysis/v1`; see
 [`protocol/ANALYSIS_PROTOCOL.md`](protocol/ANALYSIS_PROTOCOL.md).
 Opening data uses `open_shogi_opening_book/v2`; see
-[`protocol/OPENING_BOOK_FORMAT.md`](protocol/OPENING_BOOK_FORMAT.md). Native, USI, and Wasm book
-hits report `source=book` and do not consume the normal search budget.
+[`protocol/OPENING_BOOK_FORMAT.md`](protocol/OPENING_BOOK_FORMAT.md). Historical `source=book` records remain parseable for offline compatibility.
+Current native play, USI and Wasm refuse runtime book loading; all matches use ordinary search.
 
 ## Phase 1 rule boundary
 

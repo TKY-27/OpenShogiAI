@@ -1,44 +1,260 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "evaluator-20260910-main-r2",
-  "output": "local/runs/evaluator-20260910/main-r2",
-  "seed": 20260915,
+  "run_id": "defense-20260912-main-r1",
+  "output": "local/runs/defense-20260912/main",
+  "seed": 20260912,
   "generation": {
-    "first_game": 22,
-    "games": 2048,
-    "workers": 2,
+    "first_game": 0,
+    "games": 3072,
+    "workers": 1,
     "max_plies": 192,
     "sample_stride": 2,
-    "deviation_stride": 8,
-    "teacher_nodes": 25000,
-    "leaf_path": "local/frozen/baseline/model.osaval03",
-    "leaf_sha256": "859e922b3f503ddeecf0afeb9a05fccac080a9faca3b19fce9d8253c9039c480",
+    "deviation_stride": 12,
+    "teacher_nodes": 2000000,
+    "leaf_path": "local/runs/evaluator-20260910/main-r3/fit/best.osaval03",
+    "leaf_sha256": "cd07f2a202f6e781afcb6a8af3c7a198c4203373e4505fe089f8c7f05eefd983",
     "teacher_config_path": "local/frozen/metadata/teacher-config.yaml",
     "teacher_binary_sha256": "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403",
     "split_guard_path": "local/frozen/metadata/split-guard.json",
-    "development_exclusions_path": "local/runs/evaluator-20260910/diagnosis/recovery-exclusions.json",
-    "development_exclusions_sha256": "af1d6eab54a71eecdad83f099dc1ea5b97f4b4f4c3dfcfdacb822573e73c26cf"
+    "development_exclusions_path": "local/runs/defense-20260912/exclusions.json",
+    "development_exclusions_sha256": "0574747158aec48357a360f8ada3d2c84d2d088209017bd173bb2d54eb6d3126",
+    "teacher_depth": 12,
+    "teacher_retry_nodes": 32000000,
+    "defense_campaign": {
+      "families": [
+        {
+          "id": "double_rook_pawns",
+          "group": "general",
+          "split": "train",
+          "moves": [
+            "2g2f",
+            "8c8d",
+            "2f2e",
+            "8d8e",
+            "7g7f",
+            "3c3d"
+          ]
+        },
+        {
+          "id": "bishop_diagonals",
+          "group": "general",
+          "split": "validation",
+          "moves": [
+            "7g7f",
+            "3c3d",
+            "2g2f",
+            "4c4d",
+            "6i7h",
+            "8c8d"
+          ]
+        },
+        {
+          "id": "central_space",
+          "group": "general",
+          "split": "development_test",
+          "moves": [
+            "5g5f",
+            "5c5d",
+            "7g7f",
+            "3c3d",
+            "6i5h",
+            "4a5b"
+          ]
+        },
+        {
+          "id": "rook_silver_coordination",
+          "group": "opening",
+          "split": "train",
+          "moves": [
+            "2g2f",
+            "3c3d",
+            "2f2e",
+            "8c8d",
+            "3i3h",
+            "4a3b",
+            "3h2g",
+            "8d8e",
+            "2g2f",
+            "5a4b"
+          ]
+        },
+        {
+          "id": "left_structure",
+          "group": "opening",
+          "split": "validation",
+          "moves": [
+            "7g7f",
+            "8c8d",
+            "6g6f",
+            "3c3d",
+            "7i7h",
+            "4a3b",
+            "7h6g",
+            "5a4b"
+          ]
+        },
+        {
+          "id": "central_rook",
+          "group": "opening",
+          "split": "development_test",
+          "moves": [
+            "5g5f",
+            "3c3d",
+            "7g7f",
+            "8c8d",
+            "2h5h",
+            "4a3b",
+            "5f5e",
+            "5a4b"
+          ]
+        },
+        {
+          "id": "rook_edge_silver",
+          "group": "defense",
+          "split": "train",
+          "moves": [
+            "2g2f",
+            "8c8d",
+            "2f2e",
+            "8d8e",
+            "3i3h",
+            "4a3b",
+            "3h2g",
+            "3c3d",
+            "2g2f",
+            "7a6b",
+            "2f1e",
+            "5a4b"
+          ]
+        },
+        {
+          "id": "fourth_file_rook_pressure",
+          "group": "defense",
+          "split": "validation",
+          "moves": [
+            "7g7f",
+            "8c8d",
+            "6g6f",
+            "8d8e",
+            "7i7h",
+            "3c3d",
+            "7h6g",
+            "7a6b",
+            "2h6h",
+            "6c6d",
+            "3i4h",
+            "6b6c"
+          ]
+        },
+        {
+          "id": "opposed_silver_pressure",
+          "group": "defense",
+          "split": "development_test",
+          "moves": [
+            "7g7f",
+            "8c8d",
+            "6i7h",
+            "8d8e",
+            "2g2f",
+            "7a7b",
+            "2f2e",
+            "7b8c",
+            "3i3h",
+            "8c8d",
+            "3h2g",
+            "8d9e"
+          ]
+        },
+        {
+          "id": "bishop_exchange",
+          "group": "attack_end",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "3c3d",
+            "8h2b+",
+            "3a2b",
+            "2g2f",
+            "8c8d",
+            "2f2e",
+            "8d8e"
+          ]
+        },
+        {
+          "id": "rook_pawn_exchange",
+          "group": "attack_end",
+          "split": "validation",
+          "moves": [
+            "2g2f",
+            "3c3d",
+            "2f2e",
+            "4c4d",
+            "2e2d",
+            "2c2d",
+            "2h2d",
+            "8c8d"
+          ]
+        },
+        {
+          "id": "opposite_rook_exchange",
+          "group": "attack_end",
+          "split": "development_test",
+          "moves": [
+            "7g7f",
+            "8c8d",
+            "6i7h",
+            "8d8e",
+            "6g6f",
+            "8e8f",
+            "8g8f",
+            "8b8f"
+          ]
+        }
+      ],
+      "variants_per_family": 256,
+      "probe_nodes": 20000,
+      "probe_stride": 12,
+      "relabel_depth": 16,
+      "relabel_nodes": 2000000,
+      "replay_dataset": {
+        "path": "local/runs/evaluator-20260910/main-r3/data/dataset",
+        "manifest_sha256": "d2ddabbf3415fc518c202b607f59855b889ab1c8d33e362bd5e611bbb9ec56aa"
+      },
+      "source_row_caps": {
+        "generated": 900000,
+        "r3_replay": 300000
+      },
+      "maximum_unlabeled_focus": 200,
+      "minimum_focus_completion_rate": 0.95
+    }
   },
   "training": {
     "device": "cpu",
     "threads": 4,
     "batch_size": 256,
-    "max_steps": 8192,
+    "max_steps": 12288,
     "max_epochs": 8,
-    "validation_every": 512,
-    "patience": 5,
+    "validation_every": 256,
+    "patience": 6,
     "minimum_relative_improvement": 0.002,
-    "learning_rate": 0.0002,
+    "learning_rate": 0.0001,
     "minimum_learning_rate": 1e-05,
-    "warmup_steps": 100,
-    "gradient_norm_limit": 5.0
+    "warmup_steps": 128,
+    "gradient_norm_limit": 5.0,
+    "sampling_fractions": [
+      0.3,
+      0.2,
+      0.3,
+      0.2
+    ],
+    "maximum_replay_regression_ratio": 1.03
   },
   "resources": {
-    "maximum_wall_seconds": 86400,
-    "free_space_floor_gib": 80,
-    "maximum_process_rss_gib": 16,
-    "maximum_swap_growth_gib": 4,
-    "stalled_seconds": 900,
+    "maximum_wall_seconds": 259200,
+    "free_space_floor_gib": 60,
+    "maximum_process_rss_gib": 12,
+    "maximum_swap_growth_gib": 2,
+    "stalled_seconds": 1800,
     "maximum_retries": 1,
     "monitor_interval_seconds": 15
   },
@@ -47,18 +263,32 @@
     "max_plies": 256,
     "paired_3minute_games": 24,
     "paired_10minute_games": 8,
-    "startpos_demonstration_games": 8,
-    "criterion": "all planned games valid; score above 0.5 in both clocks and paired-start bootstrap one-sided 95% lower bound above 0.5; no human-dan claim"
+    "startpos_demonstration_games": 4,
+    "criterion": "Only validation-selected best is evaluated against r3. Require complete valid 32 stress games, score >0.5 at each clock and family-cluster bootstrap one-sided 95% lower >0.5, opening/defense move-screen major errors strictly reduced and mean regret <=0.9*r3, general/attack major errors not increased and mean regret <=r3+50cp. Also unknown scalar general/attack loss <=1.03*r3. No automatic adoption; Astra reviews. 4 unique clock/color startpos demonstrations are separate. No success-based early exit; failures retained, maxplies draw, time forfeits adverse.",
+    "groups": [
+      "general",
+      "opening",
+      "defense",
+      "attack_end"
+    ],
+    "screen_teacher_depth": 16,
+    "screen_probe_nodes": 100000,
+    "regression_positions_path": "local/runs/defense-20260912/diagnosis/regression-roots.json",
+    "regression_positions_sha256": "8a8304f2b3c71646a7ccdcf7e02177cb08886e3b5658588a0364f3559e8d5269"
   },
   "unique_data_goal": {
     "expected_unique_positions": [
-      250000,
-      700000
+      400000,
+      1200000
     ],
+    "minimum_train_positions": 400000,
+    "minimum_new_train_positions": 150000,
+    "minimum_train_rows_per_group": 10000,
+    "minimum_evaluation_rows_per_group": 128,
     "report_actual_counts": true,
-    "no_small_sample_strength_gate": true
+    "independence": "12 predefined scenario families; all variants/colors share family split; shared and old-r3 split symmetries excluded. Not independent human games."
   },
-  "controller": "off; old controller labels remain bound only to frozen W256",
+  "controller": "off; r3 continuation and fixed-depth relabeling are not a new control mechanism",
   "excluded_development_sfens": [
     "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
     "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
@@ -67,11 +297,79 @@
     "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/9/PPPPPPPPP/1B3K1R1/LNSG1GSNL b - 3",
     "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PPNPPPPPP/1B5R1/L1SGKGSNL w - 4"
   ],
-  "continuation": {
-    "manifest_path": "local/runs/evaluator-20260910/main-r2-continuation.json",
-    "manifest_sha256": "f2e7821d24a18b045f81b2733258a803da41073522b2de8fa9e38aa748bdc8c7",
-    "verified_completed_trajectories": 327,
-    "campaign_began_at": 1788980656.291158,
-    "mode": "reuse every verified immutable completed trajectory; no learner checkpoint exists; preserve original campaign wall-clock origin"
+  "model": {
+    "format": "OSAVAL03",
+    "width": 256,
+    "objective": "all-layer scalar smooth L1 cp/600, exact Q20/f64 accumulation; no nonterminal handcrafted scores",
+    "selection": "one best validation export constrained by general and attack_end loss <=1.03 initial r3; two latest coherent resume checkpoints; development_test never selects best"
+  },
+  "state_machine": {
+    "schema": "open_shogiai_evaluator_state/v2",
+    "states": [
+      "ready_for_luna",
+      "running",
+      "stopped",
+      "needs_astra",
+      "awaiting_astra_review"
+    ],
+    "transitions": {
+      "ready_for_luna": [
+        "running"
+      ],
+      "running": [
+        "stopped",
+        "needs_astra",
+        "awaiting_astra_review"
+      ],
+      "stopped": [
+        "running"
+      ],
+      "needs_astra": [],
+      "awaiting_astra_review": []
+    },
+    "binding": "run_id and run_sha256; code file hashes, not documentation-only HEAD equality",
+    "terminal": "awaiting_astra_review"
+  },
+  "operations": {
+    "cwd": ".",
+    "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/main",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/main",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/main",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/main",
+    "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/main arena",
+    "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/main audit",
+    "export": "best runtime export is atomically published by train; audit uses that checkpoint-bound export",
+    "stages": [
+      "generate",
+      "prepare",
+      "train",
+      "audit",
+      "arena"
+    ],
+    "state": "local/runs/defense-20260912/main/state.json",
+    "best": "local/runs/defense-20260912/main/fit/best.osaval03",
+    "resume_checkpoint": "local/runs/defense-20260912/main/fit/resume.json",
+    "logs": "local/runs/defense-20260912/main/{supervisor.log,monitor.jsonl,*-0.log}",
+    "outputs": "local/runs/defense-20260912/main/data/dataset/manifest.json; local/runs/defense-20260912/main/development-test.json; local/runs/defense-20260912/main/arena/arena.json",
+    "cleanup_allowlist": [
+      "fit/checkpoint-*.pt older than latest two after hash/open-file check",
+      "data/dataset-building incomplete owned staging after containment/link/open-file verification"
+    ],
+    "recovery": [
+      "requested STOP resumes same immutable config, source shards, optimizer/RNG/sampler/offset",
+      "one SIGTERM/SIGINT stage retry, no threshold change",
+      "incomplete teacher depth only: retry same depth once at 32M nodes with Clear_Hash, retain rejected output",
+      "Optional D16 incomplete at 32M is typed missing, never scalar fallback; retain rejected evidence, require >=95% completion and <=200 missing focus observations before training. Root D12 and all protocol/identity failures remain fatal."
+    ],
+    "return_to_astra": [
+      "any identity/lineage/protocol/numerical failure",
+      "resource limit or exhausted retry",
+      "insufficient unique data or group coverage",
+      "awaiting_astra_review after valid fixed evaluation regardless of win rate"
+    ],
+    "acquisition": "All inputs already local; hash-pinned Apery 2.0.0 engine GPL-3.0 and separately licensed evaluation MIT; own generated trajectories. Verify sealed inputs before generation, seal actual dataset manifest during prepare; no additional public archive acquisition.",
+    "cwd_identity": "OpenShogiAI Git root; absolute execution_cwd is bound in the ignored sealed run.json",
+    "review_result": "local/runs/defense-20260912/main/candidate-review.json"
   }
 }

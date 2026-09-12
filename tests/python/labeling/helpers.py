@@ -59,6 +59,7 @@ for raw in sys.stdin:
         emit("id author Test Suite")
         for name, kind in [
             ("Book_Enable", "check"),
+            ("Clear_Hash", "button"),
             ("Eval_Dir", "string"),
             ("Eval_Hash", "spin"),
             ("MultiPV", "spin"),

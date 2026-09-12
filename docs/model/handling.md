@@ -26,16 +26,13 @@ The smoke checks the explicit hash, native legal search and actual Wasm model/br
 Without the local model it fails with a missing-model error; `make check` does not need it.
 Builds are regenerated from source/lockfiles, not kept as large frozen build directories.
 
-## Unresolved hard4 failure
+## Resolved hard4 reproduction
 
-The sole extra trained weight is `local/frozen/hard4/model.osaval03`, hash
-`5550803b616c8fd77e57f9cec4f2c9d0779e2bf1ad6a0c450f51663ed9c8e044`.
-It is only for the stopped `p0039-0` case. The exact historical native executable, final
-responses/error tails, identity and next request are retained locally. The next request was
-reconstructed from the last opponent response. Exactly that one request reproduced exit 2 and
-`pure runtime proof failed` with the historical executable, without playing the game again.
-The local instructions are in `local/frozen/hard4/reproduce.md`.
-No root cause or fix is claimed here.
+The no-legal-moves runtime-proof defect is fixed and covered by small native/pure/Wasm
+regression fixtures. The obsolete hard4 weight and historical executable were removed;
+its original request, failure identity and compact diagnosis remain in ignored local storage.
+The useful model copies are the old hard2 comparator and r3 best, each with format/hash/lineage.
+See [status](../status.md) for the active run and its required restart assets.
 
 ## Supported formats
 

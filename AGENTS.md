@@ -18,3 +18,15 @@
   `git clean -xfd`, delete `.git`, rewrite history or delete unknown user files.
 - Large training, release, OSUI integration and default promotion require explicit task scope.
   Closed campaign validation fails closed; historical controls are regression fixtures only.
+
+- Development matches, strength evaluation and future production are always book-free.
+  No fixed first moves, position-to-move tables, preloaded analysis or online teacher calls.
+  Offline teacher/scenario learning is allowed; normal search transposition tables remain allowed.
+  Pure learned play never mixes handcrafted nonterminal evaluation scores.
+- Astra owns strength diagnosis/design, engine/teacher/training settings, adoption review and OSUI
+  integration. A separately user-started Luna Max/max session executes the sealed finite contract.
+  Do not spawn Luna as a child or use Astra for long monitoring. Stop preparation at
+  `ready_for_luna`; return completed runs at `awaiting_astra_review` without retraining.
+- `docs/status.md` links the sole current execution contract. Operational results may change;
+  sealed source/config hashes may not. Learning approval does not authorize model publication,
+  public-default promotion, main merge, deployment or paid compute.

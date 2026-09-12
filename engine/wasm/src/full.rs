@@ -26,9 +26,7 @@ use wasm_bindgen::prelude::*;
 const SNAPSHOT_SCHEMA: &str = "open_shogi_browser_snapshot/v1";
 const SEARCH_SCHEMA: &str = "open_shogi_browser_search/v1";
 const MODEL_SCHEMA: &str = "open_shogi_browser_model/v1";
-const OPENING_BOOK_SUMMARY_SCHEMA: &str = "open_shogi_browser_opening_book/v1";
 const MAX_BROWSER_MODEL_BYTES: usize = 16 * 1024 * 1024;
-const MAX_BROWSER_OPENING_BOOK_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESTORE_JSON_BYTES: usize = 16 * 1024;
 const MAX_RESTORE_MOVES: usize = 512;
 const MAX_USI_MOVE_BYTES: usize = 8;
@@ -392,41 +390,16 @@ impl BrowserEngine {
         self.snapshot_json()
     }
 
-    /// Loads and fully validates one provenance-bound `OpenShogiAI` opening-book v2 snapshot.
+    /// Opening-book artifact parsers remain offline; play never loads a book.
     ///
     /// # Errors
-    ///
-    /// Returns an error for oversized, corrupt, incompatible, or hash-mismatched bytes.
+    /// Always rejects, including a correctly hashed and otherwise valid artifact.
     pub fn load_opening_book(
         &mut self,
-        bytes: &[u8],
-        expected_artifact_sha256: Option<&str>,
+        _bytes: &[u8],
+        _expected_artifact_sha256: Option<&str>,
     ) -> Result<String, String> {
-        if bytes.len() > MAX_BROWSER_OPENING_BOOK_BYTES {
-            return Err(format!(
-                "browser opening book is {} bytes; maximum is {MAX_BROWSER_OPENING_BOOK_BYTES}",
-                bytes.len()
-            ));
-        }
-        let artifact_sha256 = sha256_hex(bytes);
-        if let Some(expected) = expected_artifact_sha256 {
-            validate_sha256(expected)?;
-            if expected != artifact_sha256 {
-                return Err("opening-book SHA-256 does not match the expected value".to_owned());
-            }
-        }
-        let book = OpeningBookV2::from_compressed_bytes(bytes)
-            .map_err(|error| format!("opening-book validation failed: {error}"))?;
-        let summary = OpeningBookSummary {
-            schema: OPENING_BOOK_SUMMARY_SCHEMA,
-            artifact_sha256,
-            artifact_size: bytes.len(),
-            positions: book.positions(),
-            candidates: book.candidates(),
-        };
-        self.opening_book = Some(book);
-        self.opening_book_summary = Some(summary.clone());
-        serde_json::to_string(&summary).map_err(|error| error.to_string())
+        Err("opening books are disabled for play; offline training only".to_owned())
     }
 
     /// Removes the browser-owned opening book without affecting game or analysis state.
@@ -2107,38 +2080,24 @@ mod tests {
     }
 
     #[test]
-    fn wasm_book_hit_is_immediate_and_profile_controlled() {
+    fn wasm_rejects_even_valid_book_and_searches_normally() {
         let mut engine = BrowserEngine::new();
         let bytes = opening_book_bytes();
         let expected = format!("{:x}", Sha256::digest(&bytes));
-        let loaded: Value =
-            serde_json::from_str(&engine.load_opening_book(&bytes, Some(&expected)).unwrap())
-                .unwrap();
-        assert_eq!(loaded["positions"], 1);
-        assert_eq!(loaded["candidates"], 1);
-
+        assert!(
+            engine
+                .load_opening_book(&bytes, Some(&expected))
+                .unwrap_err()
+                .contains("disabled")
+        );
         engine
             .configure_opening("ibisha_strict", 40, 2, 80)
             .unwrap();
         let response: Value =
-            serde_json::from_str(&engine.search_json("eco", "overall-champion", 3).unwrap())
-                .unwrap();
-        assert_eq!(response["source"], "book");
-        assert_eq!(response["bestMove"], "2g2f");
-        assert_eq!(response["nodes"], 0);
-        assert_eq!(response["elapsedNs"], 0);
-        assert_eq!(response["openingBookMove"]["teacherNodes"], 25_000);
-        assert_eq!(
-            response["openingBookMove"]["openingClassification"],
-            "ibisha-vs-furibisha"
-        );
-
-        engine.configure_opening("unrestricted", 40, 3, 80).unwrap();
-        let fallback: Value =
             serde_json::from_str(&engine.search_json("eco", "overall-champion", 1).unwrap())
                 .unwrap();
-        assert_eq!(fallback["source"], "search");
-        assert!(fallback["nodes"].as_u64().unwrap() > 0);
+        assert_eq!(response["source"], "search");
+        assert!(response["nodes"].as_u64().unwrap() > 0);
     }
 
     #[test]

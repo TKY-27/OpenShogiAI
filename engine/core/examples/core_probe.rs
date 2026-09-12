@@ -100,9 +100,11 @@ fn sample(model: &Arc<Phase10VEvaluator>, games: u32, count: u32, seed: u64) -> 
 
 fn info_value(position: &Position, info: &SearchInfo, previous: Option<&SearchInfo>) -> Value {
     json!({"depth":info.depth,"score":info.score,"best_move":info.best_move.map(to_usi_move),
+        "pv":info.pv.iter().copied().map(to_usi_move).collect::<Vec<_>>(),
         "nodes":info.nodes,"elapsed_ms":info.elapsed.as_secs_f64()*1000.0,
         "roots":info.root_moves.iter().map(|r|json!({
             "move":to_usi_move(r.movement),"score":r.score,"nodes":r.nodes,
+            "pv":r.pv.iter().copied().map(to_usi_move).collect::<Vec<_>>(),
             "features":computation_features(position,info,previous,r)
         })).collect::<Vec<_>>()})
 }
@@ -178,6 +180,7 @@ fn probe(
         "perspective":format!("{:?}",game.position().side_to_move()),
         "leaf_sha256":model.identity().artifact_sha256,"best_move":result.best_move.map(to_usi_move),
         "score":result.score,"depth":result.depth,"seldepth":result.seldepth,"nodes":result.nodes,
+        "pv":result.pv.iter().copied().map(to_usi_move).collect::<Vec<_>>(),
         "outcome":result.outcome,"time_hard_limit_ms":time_hard_limit_ms,
         "elapsed_ms":result.elapsed.as_secs_f64()*1000.0,"termination":format!("{:?}",result.termination),
         "time_target_ms":search.managed_target_ms(),

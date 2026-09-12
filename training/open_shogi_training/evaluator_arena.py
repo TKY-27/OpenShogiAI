@@ -88,11 +88,55 @@ def _starts(dataset: Path, seed: int) -> tuple[list[dict], dict]:
     raise ValueError("need 16 distinct development-test trajectory roots at ply 16 or 12..32")
 
 
+def _defense_starts(dataset: Path, seed: int, groups: list[str]) -> tuple[list[dict], dict]:
+    """Four predeclared strata, four distinct games each; never rank by scores."""
+    manifest = json.loads((dataset / "manifest.json").read_text())
+    ref = next(r for r in manifest["artifacts"] if r["path"] == "development_test-rows.jsonl.gz")
+    path = dataset / ref["path"]
+    if path.is_symlink() or digest(path) != ref["sha256"]:
+        raise ValueError("development-test metadata identity changed")
+    permitted = {g["game"] for g in manifest["source_games"] if g["split"] == "development_test"}
+    bounds = {
+        "general": (32, 128),
+        "opening": (12, 40),
+        "defense": (16, 96),
+        "attack_end": (80, 191),
+    }
+    pools = {g: [] for g in groups}
+    with gzip.open(path, "rt") as stream:
+        for line in stream:
+            row = json.loads(line)
+            group = row["group"]
+            if row["game"] not in permitted:
+                raise ValueError("development-test lineage mismatch")
+            lo, hi = bounds[group]
+            if row["kind"] == "root" and lo <= row["ply"] <= hi:
+                pools[group].append(row)
+    selected, seen = {}, set()
+    for group in groups:
+        selected[group], games = [], set()
+        for row in sorted(
+            pools[group],
+            key=lambda r: hashlib.sha256(encoded([seed, r["game"], r["ply"]])).digest(),
+        ):
+            key = min(symmetry_keys(row["sfen"]))
+            if row["game"] in games or key in seen:
+                continue
+            selected[group].append(row)
+            games.add(row["game"])
+            seen.add(key)
+            if len(games) == 4:
+                break
+        if len(games) != 4:
+            raise ValueError(f"need four distinct held-out trajectory roots in {group}")
+    return [selected[g][i] for i in range(4) for g in groups], ref
+
+
 def _plan(root: Path, config: dict) -> dict:
     if (
         config.get("depth") != 64
         or config.get("max_plies") != 256
-        or config.get("seed") != 20260915
+        or (not config.get("groups") and config.get("seed") != 20260915)
     ):
         raise ValueError("arena depth, ply ceiling and seed must match the reviewed contract")
     if not 1 <= config.get("max_wall_seconds", 86_400) <= 86_400:
@@ -102,7 +146,12 @@ def _plan(root: Path, config: dict) -> dict:
         assets[kind] = _reference(root, config[f"{kind}_path"], config[f"{kind}_sha256"])
     dataset = _inside(root, config["dataset_path"], file=False)
     assets["dataset_manifest"] = _reference(root, dataset / "manifest.json")
-    starts, rows = _starts(dataset, config["seed"])
+    defense = bool(config.get("groups"))
+    starts, rows = (
+        _defense_starts(dataset, config["seed"], config["groups"])
+        if defense
+        else _starts(dataset, config["seed"])
+    )
     assets["development_test_rows"] = _reference(root, dataset / rows["path"], rows["sha256"])
     assets["probe_driver"] = _reference(root, "scripts/compare_core_prototype.py")
     games = []
@@ -119,16 +168,17 @@ def _plan(root: Path, config: dict) -> dict:
                     "initial_sfen": start["sfen"],
                     "source_game": start["game"],
                     "source_ply": start["ply"],
+                    **({"stratum": start["group"], "family": start["family"]} if defense else {}),
                 }
             )
-    for pair in range(4):
+    for pair in range(2 if defense else 4):
         for candidate_side in ("black", "white"):
             games.append(
                 {
                     "id": f"demonstration-{pair:02d}-{candidate_side}",
                     "pair": pair,
                     "group": "demonstration",
-                    "clock_ms": 180_000 if pair < 2 else 600_000,
+                    "clock_ms": 180_000 if pair < (1 if defense else 2) else 600_000,
                     "candidate_side": candidate_side,
                     "initial_sfen": START,
                 }
@@ -149,13 +199,15 @@ def _plan(root: Path, config: dict) -> dict:
         "root_history": "same restored SFEN; repetition history starts at that root",
         "criteria": {
             "evaluation_games": 32,
-            "demonstration_games": 8,
+            "demonstration_games": 4 if defense else 8,
             "all_planned_games_must_finish": True,
             "no_adverse_attempts": True,
             "candidate_score_each_clock_strictly_above": 0.5,
-            "cluster": "color-reversed pair from one distinct source trajectory",
+            "cluster": "source family (including all variants and color reversals)"
+            if defense
+            else "color-reversed pair from one distinct source trajectory",
             "bootstrap_resamples": 10_000,
-            "bootstrap_seed": 20260915,
+            "bootstrap_seed": config["seed"],
             "one_sided_lower_percentile": 5,
             "overall_lower_strictly_above": 0.5,
         },
@@ -531,7 +583,8 @@ def _play_game(
 def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
     scored = [g for g in games if g["group"] == "evaluation"]
     complete = len(scored) == 32 and all(g["status"] == "completed" for g in scored)
-    all_complete = len(games) == 40 and all(g["status"] == "completed" for g in games)
+    planned = 32 + plan["criteria"]["demonstration_games"]
+    all_complete = len(games) == planned and all(g["status"] == "completed" for g in games)
     adverse = [
         a
         for a in attempts
@@ -544,14 +597,21 @@ def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
         for clock_ms in (180_000, 600_000):
             group = [g["score_candidate"] for g in scored if g["clock_ms"] == clock_ms]
             scores[str(clock_ms)] = sum(group) / len(group)
+        clusters = sorted({str(g.get("family", g["pair"])) for g in scored})
         pair_scores = np.array(
             [
-                sum(g["score_candidate"] for g in scored if g["pair"] == pair) / 2
-                for pair in range(16)
+                np.mean(
+                    [
+                        g["score_candidate"]
+                        for g in scored
+                        if str(g.get("family", g["pair"])) == cluster
+                    ]
+                )
+                for cluster in clusters
             ]
         )
         rng = np.random.default_rng(plan["criteria"]["bootstrap_seed"])
-        draws = rng.integers(0, 16, size=(10_000, 16))
+        draws = rng.integers(0, len(clusters), size=(10_000, len(clusters)))
         lower = float(np.percentile(pair_scores[draws].mean(axis=1), 5))
     adopted = (
         all_complete
@@ -565,10 +625,17 @@ def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
         "all_planned_complete": all_complete,
         "completed_games": sum(g["status"] == "completed" for g in games),
         "unscored_games": sum(g["status"] != "completed" for g in games),
-        "unplayed_games": 40 - len(games),
+        "unplayed_games": planned - len(games),
         "adverse_attempts": len(adverse),
         "candidate_score_by_clock": scores,
         "paired_bootstrap_one_sided_95_lower": lower,
+        "source_family_count": len({g.get("family", g["pair"]) for g in scored}),
+        "stratum_scores": {
+            s: float(np.mean([g["score_candidate"] for g in scored if g.get("stratum") == s]))
+            for s in sorted({g["stratum"] for g in scored if "stratum" in g})
+        }
+        if complete
+        else {},
         "demonstration_scores": [
             g.get("score_candidate") for g in games if g["group"] == "demonstration"
         ],
@@ -681,9 +748,9 @@ def run_arena(root: Path, output: Path, config: dict) -> dict:
         "schema": SCHEMA,
         "status": status,
         "plan_sha256": plan_sha,
-        "planned_games": 40,
+        "planned_games": len(plan["games"]),
         "evaluation_games": 32,
-        "demonstration_games": 8,
+        "demonstration_games": plan["criteria"]["demonstration_games"],
         "games": games,
         "attempts": attempts,
         "summary": summary,

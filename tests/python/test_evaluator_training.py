@@ -18,7 +18,7 @@ from open_shogi_training.evaluator_data import (
     prepare,
     symmetry_keys,
 )
-from open_shogi_training.evaluator_training import forward, train
+from open_shogi_training.evaluator_training import forward, stratified_order, train
 from open_shogi_training.phase10u_execution import successor_sfen
 from open_shogi_training.phase10v_model import (
     Phase10VModel,
@@ -134,6 +134,35 @@ def test_checkpoint_binds_best_and_restores_only_bound_export(tmp_path):
     (folder / ref["path"]).write_bytes(b"corrupted")
     with pytest.raises(ValueError, match="checkpoint hash"):
         train(data, folder, config, {"code": "fixture"})
+
+
+def test_group_sampler_preserves_balance_without_duplicate_exposure():
+    data = {"groups": np.array([0] * 90 + [1] * 20 + [2] * 30 + [3] * 20)}
+    order = stratified_order(data, [0.3, 0.2, 0.3, 0.2], torch.Generator().manual_seed(11))
+    assert len(order) == 100 and len(order.unique()) == 100
+    assert np.bincount(data["groups"][order.numpy()]).tolist() == [30, 20, 30, 20]
+
+
+def test_stratified_resume_restores_every_parameter_and_sampler_state(tmp_path):
+    data, config = setup(tmp_path)
+    for split in ("train", "validation"):
+        make_dataset(data, corpus()[:8], split)
+        np.save(data / f"{split}-groups.npy", np.arange(8, dtype=np.uint8) % 4)
+    config.update(sampling_fractions=[0.3, 0.2, 0.3, 0.2], maximum_replay_regression_ratio=1.03)
+    identity = {"dataset": "four-groups", "code": "fixture"}
+    whole = train(data, tmp_path / "whole", config, identity)
+    train(data, tmp_path / "resumed", config, identity, stop_after=4)
+    resumed = train(data, tmp_path / "resumed", config, identity)
+    assert resumed["best_sha256"] == whole["best_sha256"]
+    states = []
+    for folder in ("whole", "resumed"):
+        ref = json.loads((tmp_path / folder / "resume.json").read_text())
+        states.append(torch.load(tmp_path / folder / ref["path"], weights_only=True))
+    for key in ("order", "counts", "sampler_rng", "torch_rng"):
+        assert torch.equal(states[0][key], states[1][key])
+    for a, b in zip(states[0]["parameters"], states[1]["parameters"], strict=True):
+        assert torch.equal(a, b)
+    assert resumed["maximum_exposure"] <= config["max_epochs"]
 
 
 def test_child_perspective_and_terminal_masks():
