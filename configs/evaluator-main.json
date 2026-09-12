@@ -1,7 +1,7 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "defense-20260912-recovery-r2",
-  "output": "local/runs/defense-20260912/recovery-r2",
+  "run_id": "defense-20260912-recovery-r3",
+  "output": "local/runs/defense-20260912/recovery-r3",
   "seed": 20260912,
   "generation": {
     "first_game": 0,
@@ -300,10 +300,11 @@
     "maximum_wall_seconds": 259200,
     "free_space_floor_gib": 60,
     "maximum_process_rss_gib": 12,
-    "maximum_swap_growth_gib": 2,
+    "maximum_swap_growth_gib": 0.5,
     "stalled_seconds": 1800,
     "maximum_retries": 1,
-    "monitor_interval_seconds": 15
+    "monitor_interval_seconds": 15,
+    "minimum_memory_free_percent": 50
   },
   "evaluation": {
     "depth": 64,
@@ -381,12 +382,12 @@
   "operations": {
     "cwd": ".",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2",
-    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r2",
-    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r2",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2",
-    "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r2 arena",
-    "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r2 audit",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r3",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r3",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3",
+    "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r3 arena",
+    "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r3 audit",
     "export": "best runtime export is atomically published by train; audit uses that checkpoint-bound export",
     "stages": [
       "generate",
@@ -395,11 +396,11 @@
       "audit",
       "arena"
     ],
-    "state": "local/runs/defense-20260912/recovery-r2/state.json",
-    "best": "local/runs/defense-20260912/recovery-r2/fit/best.osaval03",
-    "resume_checkpoint": "local/runs/defense-20260912/recovery-r2/fit/resume.json",
-    "logs": "local/runs/defense-20260912/recovery-r2/{supervisor.log,monitor.jsonl,*-0.log}",
-    "outputs": "local/runs/defense-20260912/recovery-r2/data/dataset/manifest.json; local/runs/defense-20260912/recovery-r2/development-test.json; local/runs/defense-20260912/recovery-r2/arena/arena.json",
+    "state": "local/runs/defense-20260912/recovery-r3/state.json",
+    "best": "local/runs/defense-20260912/recovery-r3/fit/best.osaval03",
+    "resume_checkpoint": "local/runs/defense-20260912/recovery-r3/fit/resume.json",
+    "logs": "local/runs/defense-20260912/recovery-r3/{supervisor.log,monitor.jsonl,*-0.log}",
+    "outputs": "local/runs/defense-20260912/recovery-r3/data/dataset/manifest.json; local/runs/defense-20260912/recovery-r3/development-test.json; local/runs/defense-20260912/recovery-r3/arena/arena.json",
     "cleanup_allowlist": [
       "fit/checkpoint-*.pt older than latest two after hash/open-file check",
       "data/dataset-building incomplete owned staging after containment/link/open-file verification"
@@ -420,9 +421,9 @@
     ],
     "acquisition": "All inputs already local; hash-pinned Apery 2.0.0 engine GPL-3.0 and separately licensed evaluation MIT; own generated trajectories. Verify sealed inputs before generation, seal actual dataset manifest during prepare; no additional public archive acquisition.",
     "cwd_identity": "OpenShogiAI Git root; absolute execution_cwd is bound in the ignored sealed run.json",
-    "review_result": "local/runs/defense-20260912/recovery-r2/candidate-review.json",
-    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run probe local/runs/defense-20260912/recovery-r2 --pause-after-new-games 1",
-    "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r2"
+    "review_result": "local/runs/defense-20260912/recovery-r3/candidate-review.json",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run probe local/runs/defense-20260912/recovery-r3 --pause-after-new-games 1",
+    "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r3"
   },
   "contract_revision": 2,
   "recovery_from": {
@@ -444,5 +445,13 @@
         "sha256": "ecde9b959f27c5d09b1d793188186905ccb2a09a1262d55b4d9328039f43bcd0"
       }
     ]
+  },
+  "resource_epoch": {
+    "authorization": "explicit_user_approval_20260912",
+    "original_initial_swap_bytes": 1500313026,
+    "initial_swap_bytes": 4191221186,
+    "source": "Astra resource-stop diagnosis; retain original deadline and all attempt history",
+    "prior_probe": "local/runs/defense-20260912/recovery-evidence-r2/probe-resource-stop.json",
+    "prior_probe_sha256": "a875942702614a536006a55dc891117fc1bd8c36f8ea4deab74e12f19fda86d4"
   }
 }

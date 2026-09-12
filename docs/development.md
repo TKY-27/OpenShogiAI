@@ -105,13 +105,13 @@ than claiming byte equality with the original data. Do not automatically rerun o
 
 [Status](status.md) is the human handoff; [evaluator-main.json](../configs/evaluator-main.json)
 is the one current machine-readable plan. The sealed executable copy is
-`local/runs/defense-20260912/recovery-r2/run.json`, with `seal.json` and `state.json` alongside.
+`local/runs/defense-20260912/recovery-r3/run.json`, with `seal.json` and `state.json` alongside.
 Do not infer a run name from old r3 directories. From this Git root:
 
 ```sh
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r2
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r2
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r3
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r3
 ```
 
 `start` resumes the same stopped run. It cannot restart `needs_astra` or an awaiting-review

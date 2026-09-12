@@ -191,6 +191,18 @@ def _validate_config(config: dict) -> None:
         ("monitor_interval_seconds", 0.1, 60, False),
     ):
         _number(resources[name], low, high, name, integer=integer)
+    epoch = config.get("resource_epoch")
+    if epoch:
+        if (
+            not policy
+            or epoch.get("authorization") != "explicit_user_approval_20260912"
+            or resources["maximum_swap_growth_gib"] != 0.5
+            or resources.get("minimum_memory_free_percent") != 50
+        ):
+            raise ValueError("resource epoch requires the explicitly approved narrow limits")
+        for key in ("initial_swap_bytes", "original_initial_swap_bytes"):
+            _number(epoch[key], 0, 24 * 1024**3, key)
+        _hash(epoch["prior_probe_sha256"])
     for name, expected in (
         ("depth", 64),
         ("max_plies", 256),
@@ -381,6 +393,12 @@ def seal(config_path: Path) -> dict:
             inherited = {
                 key: parent_state[key] for key in ("began_at", "initial_swap_bytes", "retries")
             }
+            if config.get("resource_epoch"):
+                epoch = config["resource_epoch"]
+                inputs["prior_resource_stop"] = _reference(
+                    inside(epoch["prior_probe"]), epoch["prior_probe_sha256"]
+                )
+                inherited = _apply_resource_epoch(inherited, epoch)
             inherited["parent_run_id"] = parent["run_id"]
             inherited["parent_state_sha256"] = parent["state_sha256"]
 
@@ -893,6 +911,28 @@ def stop(run: Path) -> dict:
     }
 
 
+def _apply_resource_epoch(inherited: dict, epoch: dict) -> dict:
+    if (
+        epoch.get("authorization") != "explicit_user_approval_20260912"
+        or inherited["initial_swap_bytes"] != epoch["original_initial_swap_bytes"]
+    ):
+        raise ValueError("resource epoch does not match the approved parent baseline")
+    return {
+        **inherited,
+        "original_initial_swap_bytes": inherited["initial_swap_bytes"],
+        "initial_swap_bytes": epoch["initial_swap_bytes"],
+        "resource_epoch": epoch,
+    }
+
+
+def _memory_free_percent() -> int:
+    output = subprocess.check_output(["memory_pressure", "-Q"], text=True, timeout=3)
+    found = re.search(r"System-wide memory free percentage:\s*(\d+)%", output)
+    if found is None or not 0 <= int(found[1]) <= 100:
+        raise ValueError("memory pressure measurement unavailable")
+    return int(found[1])
+
+
 def _swap_bytes() -> int:
     output = subprocess.check_output(["sysctl", "-n", "vm.swapusage"], text=True, timeout=3)
     found = re.search(r"used\s*=\s*([0-9.]+)([MG])", output)
@@ -1207,7 +1247,11 @@ def _run_stage(
                     signature, last_progress = current, time.monotonic()
                 rss, owned = _sample_owned(process, owned)
                 free, swap = shutil.disk_usage(run).free, _swap_bytes()
+                memory_free = (
+                    _memory_free_percent() if "minimum_memory_free_percent" in limits else None
+                )
                 metric = {
+                    "memory_free_percent": memory_free,
                     "at": time.time(),
                     "stage": stage,
                     "stage_pid": process.pid,
@@ -1222,6 +1266,10 @@ def _run_stage(
                 atomic(run / "state.json", encoded(state))
                 if time.time() - state["began_at"] > limits["maximum_wall_seconds"]:
                     failure = "wall_limit"
+                elif (
+                    memory_free is not None and memory_free < limits["minimum_memory_free_percent"]
+                ):
+                    failure = "memory_pressure_limit"
                 elif rss > limits["maximum_process_rss_gib"] * 1024**3:
                     failure = "memory_limit"
                 elif free < limits["free_space_floor_gib"] * 1024**3:

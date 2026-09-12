@@ -1,7 +1,7 @@
 # 現在の状態と再開契約
 
 2026-09-12、停止した防御強化runの復旧コードを検証中。本学習は未開始。
-親は `defense-20260912-main-r1`、後継は **`defense-20260912-recovery-r2`**。
+親は `defense-20260912-main-r1`、後継は **`defense-20260912-recovery-r3`**。
 唯一の現行機械契約は [configs/evaluator-main.json](../configs/evaluator-main.json)。
 後継のseal・移行・実resume検証が完了するまでは実行しない。
 本書が人間向けの正本で、過去工程はGit履歴に残す。
@@ -53,8 +53,8 @@ SQLite取引、ply checkpoint、確定shard/receiptにより再実行時の重�
 
 直近32個の異なるtaskで24失敗以上かつ8trajectory以上にまたがる故障は生成段階停止。
 同一局面の反復だけでは全系故障に昇格しない。合法手不整合、データ/権利/split/identity異常、
-資源危険は安全停止。全体の上限72時間、空き60GiB、所有RSS12GiB、swap増分2GiB、
-有効出力なし30分は親の開始時刻・基準を継承する。heartbeatだけで進捗とみなさない。
+資源危険は安全停止。全体の上限72時間、空き60GiB、所有RSS12GiB、swap追加増分512MiB、メモリ空き指標50%以上、
+有効出力なし30分。期限は親の開始時刻を継承する。heartbeatだけで進捗とみなさない。
 
 学習開始は検証済みmanifestとcoverageを基準とし、全root無欠測を要求しない。
 各family240完了以上、保留root合計96以下・各family8以下。
@@ -86,17 +86,26 @@ Luna子エージェントやAstra長時間監視を使わず、実行中のコ�
 本番一モデル、開発比較選択の方針を維持。本作業はOSUIを変更しない。
 main merge、公開既定昇格、重み配布、deploy、有料計算、force-push、履歴書換えは行わない。
 
+## 承認された資源基準の移行
+
+r2の最初のprobeは教師起動前に旧swap増分上限で停止した。旧基準1,500,313,026 bytesに対し
+実測4,191,221,186 bytesで、元D12問題とは別の停止だった。メモリ空き指標は80%。
+ユーザーの明示承認によりr3は実測4,191,221,186 bytesを基準とし、追加増分512MiB・
+メモリ空き指標50%以上に制限する。元の基準・r2停止証拠を保持し、自動再基準化はしない。
+元72時間期限、全task試行履歴、RSS12GiB、ディスク空き60GiBは維持。
+`resource_epoch`が承認・旧基準・実測・停止証拠をhash-bindする。
+
 ## 操作
 
 cwdはOpenShogiAI Gitルート。後継の実行正本は
-`local/runs/defense-20260912/recovery-r2/run.json`、同所の`seal.json`がcode/run identity。
+`local/runs/defense-20260912/recovery-r3/run.json`、同所の`seal.json`がcode/run identity。
 `state.json`、`data/tasks.sqlite3`、`data/recovery-queue.json`、`data/generation-progress.json`を引き継ぐ。
 親 `main/` の`needs_astra`を直接解除しない。学習準備を一からやり直す運転ではない。
 
 ```sh
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r2
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r2
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r3
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r3
 ```
 
 `start`がresumeコマンド。Astraの一度だけの準備はseal→migrate→probe。

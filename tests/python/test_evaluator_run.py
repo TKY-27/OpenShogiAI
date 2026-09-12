@@ -63,6 +63,8 @@ def prepared(tmp_path, monkeypatch):
     config = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
     config["generation"].pop("defense_campaign", None)
     config["generation"].pop("recovery_policy", None)
+    config.pop("resource_epoch", None)
+    config["resources"].pop("minimum_memory_free_percent", None)
     config["evaluation"].pop("groups", None)
     config["evaluation"]["startpos_demonstration_games"] = 8
     monkeypatch.setattr(runner, "ROOT", tmp_path)
@@ -890,3 +892,50 @@ def test_recovery_execution_requires_committed_migration(prepared):
     atomic(run / "data/inherited.json", encoded({"games": []}))
     with pytest.raises(ValueError, match="artifact changed"):
         runner._require_migration(run, config)
+
+
+def test_explicit_resource_epoch_preserves_deadline_and_attempts():
+    prior = {"initial_swap_bytes": 10, "began_at": 100, "retries": {"generate": 1}}
+    epoch = {
+        "authorization": "explicit_user_approval_20260912",
+        "original_initial_swap_bytes": 10,
+        "initial_swap_bytes": 20,
+    }
+    result = runner._apply_resource_epoch(prior, epoch)
+    assert result["initial_swap_bytes"] == 20
+    assert result["original_initial_swap_bytes"] == 10
+    assert result["began_at"] == 100 and result["retries"] == {"generate": 1}
+    assert prior["initial_swap_bytes"] == 10
+    with pytest.raises(ValueError, match="approved parent"):
+        runner._apply_resource_epoch(prior, {**epoch, "original_initial_swap_bytes": 11})
+
+
+def test_memory_pressure_measurement_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        runner.subprocess, "check_output", lambda *a, **k: "System-wide memory free percentage: 80%"
+    )
+    assert runner._memory_free_percent() == 80
+    monkeypatch.setattr(runner.subprocess, "check_output", lambda *a, **k: "unavailable")
+    with pytest.raises(ValueError, match="unavailable"):
+        runner._memory_free_percent()
+
+
+def test_memory_pressure_gate_stops_owned_stage(prepared, monkeypatch):
+    _, run, config, _, _ = prepared
+    config["resources"]["minimum_memory_free_percent"] = 50
+    process = FakeProcess()
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: process)
+    monkeypatch.setattr(runner, "read_process_identity", lambda pid: "test-identity")
+    monkeypatch.setattr(
+        runner,
+        "_stage_group_snapshot",
+        lambda *a: {process.pid: (os.getpid(), 10, "S", process.pid)},
+    )
+    monkeypatch.setattr(runner, "_sample_owned", lambda *a: (10, {}))
+    monkeypatch.setattr(runner, "_swap_bytes", lambda: 0)
+    monkeypatch.setattr(runner, "_memory_free_percent", lambda: 49)
+    monkeypatch.setattr(runner, "_cleanup", lambda *a, **k: {"remaining_processes": {}})
+    with runner._lease(run) as lease:
+        _, failure = runner._run_stage(run, "generate", config, stage_state(), lease)
+    assert failure == "memory_pressure_limit"
+    assert (run / "STOP").exists()
