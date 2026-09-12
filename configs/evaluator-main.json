@@ -382,10 +382,10 @@
   "operations": {
     "cwd": ".",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 </dev/null",
     "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r3",
     "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r3",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 </dev/null",
     "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r3 arena",
     "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r3 audit",
     "export": "best runtime export is atomically published by train; audit uses that checkpoint-bound export",
@@ -411,7 +411,11 @@
       "Worker communication failure restarts only that worker within its persisted recovery budget. Independent-task health circuit and integrity/resource failures stop the affected stage.",
       "Complete accepted manifests may retain bounded local deferrals; unmet coverage automatically uses sealed same-family supplementation then returns only the deficient stage to Astra.",
       "Probe runs only generation through the supervised resume path and pauses ready_for_luna before preparation/training.",
-      "34M is the cumulative requested node budget; teacher node counters may overshoot their request. Persist observed nodes and enforce each 60-second wall deadline. Teacher circuit uses 24 failures in the latest 32 distinct tasks across at least 8 games."
+      "34M is the cumulative requested node budget; teacher node counters may overshoot their request. Persist observed nodes and enforce each 60-second wall deadline. Teacher circuit uses 24 failures in the latest 32 distinct tasks across at least 8 games.",
+      "Reviewed startup/stdio-only fixes use the same run and immutable run/seal, with committed operational file hashes and original failure/state/log prefixes in execution attempts. Only evaluator_run.py and the operations section of this source config may differ; teacher, data, training, resources and evaluation remain sealed.",
+      "resume acquires the live lease, excludes residual processes, verifies output receipts and native checkpoint replay, records the operation revision and attempt, and starts a fresh supervisor/stage with DEVNULL runner stdin and append logs. Confirmed before-spawn or unregistered CPython init_sys_streams EBADF failures are recoverable; data-writing and unknown failures remain needs_astra. No automatic EBADF retry or budget reset.",
+      "pause waits for the supervisor/stage lease to be released, verifies durable progress and returns ready_for_luna. Luna may execute the verified resume/pause commands without reapproval; no new run, reseal, data clone or model publication is authorized.",
+      "Astra performs approve-operations once after code review and commit; it pins the allowed operational hashes without changing state or the original seal. Luna only resumes that approved revision; resume never approves new code hashes automatically."
     ],
     "return_to_astra": [
       "identity, split, corruption, numerical or illegal-move integrity failure",
@@ -423,7 +427,8 @@
     "cwd_identity": "OpenShogiAI Git root; absolute execution_cwd is bound in the ignored sealed run.json",
     "review_result": "local/runs/defense-20260912/recovery-r3/candidate-review.json",
     "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run probe local/runs/defense-20260912/recovery-r3 --pause-after-new-games 1",
-    "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r3"
+    "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r3",
+    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/defense-20260912/recovery-r3 </dev/null"
   },
   "contract_revision": 2,
   "recovery_from": {

@@ -28,7 +28,10 @@
   Do not spawn Luna as a child or use Astra for long monitoring. Stop preparation at
   `ready_for_luna`; return completed runs at `awaiting_astra_review` without retraining.
 - `docs/status.md` links the sole current execution contract. Operational results may change;
-  sealed source/config hashes may not. Learning approval does not authorize model publication,
+  sealed experiment/source hashes may not. Reviewed startup-only operational revisions may be
+  recorded separately by the formal resume command in the same run, preserving the original
+  seal, failure and cumulative budgets; Luna may execute that verified recovery without reapproval.
+  Learning approval does not authorize model publication,
   public-default promotion, main merge, deployment or paid compute.
 - A single incomplete fixed-depth teacher label, including a root, is a local deferred task
   under the current recovery contract, never a fabricated label or automatic whole-run failure.

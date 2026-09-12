@@ -563,10 +563,13 @@ def test_monitor_exception_stops_and_cleans_the_owned_stage(prepared, monkeypatc
     assert state["cleanup"]["remaining_processes"] == {}
 
 
-def test_stop_is_classified_even_when_child_exits_before_monitor_tick(prepared, monkeypatch):
+@pytest.mark.parametrize("returncode,expected", [(1, None), (runner.PAUSED_EXIT, "requested_stop")])
+def test_stop_never_hides_a_child_failure_before_monitor_tick(
+    prepared, monkeypatch, returncode, expected
+):
     _, run, config, _, _ = prepared
     process = FakeProcess()
-    process.returncode = 1
+    process.returncode = returncode
 
     def launch(*_args, **_kwargs):
         runner.stop(run)
@@ -582,7 +585,7 @@ def test_stop_is_classified_even_when_child_exits_before_monitor_tick(prepared, 
     monkeypatch.setattr(runner, "_cleanup", lambda *_a, **_kw: {"remaining_processes": {}})
     with runner._lease(run) as lease:
         code, failure = runner._run_stage(run, "train", config, stage_state(), lease)
-    assert (code, failure) == (1, "requested_stop")
+    assert (code, failure) == (returncode, expected)
 
 
 def test_retry_is_finite_and_does_not_restart_contract_failures(prepared, monkeypatch):

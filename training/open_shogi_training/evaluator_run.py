@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import gzip
+import hashlib
 import json
 import math
 import os
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 from .evaluator_data import atomic, digest, encoded, generate, prepare
@@ -28,6 +31,7 @@ from .labeling.process_identity import read_process_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = "open_shogi_training.evaluator_run"
+PAUSED_EXIT = 75
 SCHEMA = "open_shogiai_evaluator_run/v1"
 STAGES = ("generate", "prepare", "train", "audit", "arena")
 STATES = {
@@ -45,6 +49,7 @@ RUNTIME_SOURCES = {
     "module": "target/pure/bindings/open_shogi_wasm.js",
     "wasm": "target/pure/bindings/open_shogi_wasm_bg.wasm",
 }
+OPERATIONAL_FILES = {"training/open_shogi_training/evaluator_run.py", "configs/evaluator-main.json"}
 
 
 def inside(path: str | Path, *, exists: bool = True) -> Path:
@@ -288,7 +293,48 @@ def _reference(path: Path, expected: str | None = None) -> dict:
     return {"path": str(path.relative_to(ROOT)), "sha256": sha}
 
 
-def verify(run: Path) -> dict:
+def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
+    """An execution revision never edits the original experiment or its seal."""
+    if revision is None:
+        ref = _state(run).get("operation_revision")
+        if ref:
+            path = inside(ref["path"])
+            if path.parent != run / "operations":
+                raise ValueError("operation revision outside run")
+            _reference(path, ref["sha256"])
+            revision = _json(path)
+    if revision is None:
+        return config["code"]["files"]
+    if (
+        revision.get("schema") != "open_shogiai_operation_revision/v1"
+        or revision.get("run_sha256") != digest(run / "run.json")
+        or revision.get("original_code_commit") != config["code"]["commit"]
+        or not set(revision["files"]) <= OPERATIONAL_FILES
+        or not re.fullmatch(r"[a-f0-9]{40}", revision["commit"])
+    ):
+        raise ValueError("invalid operational code revision")
+    expected = {**config["code"]["files"], **revision["files"]}
+    for name, sha in revision["files"].items():
+        committed = subprocess.check_output(
+            ["git", "show", f"{revision['commit']}:{name}"], cwd=ROOT
+        )
+        if hashlib.sha256(committed).hexdigest() != sha:
+            raise ValueError("operation revision is not committed code")
+        if name == "configs/evaluator-main.json":
+            original = subprocess.check_output(
+                ["git", "show", f"{config['code']['commit']}:{name}"], cwd=ROOT
+            )
+            if hashlib.sha256(original).hexdigest() != config["code"]["files"][name]:
+                raise ValueError("original source config identity changed")
+            old, new = json.loads(original), json.loads(committed)
+            old.pop("operations", None)
+            new.pop("operations", None)
+            if old != new:
+                raise ValueError("operational resume cannot change experiment conditions")
+    return expected
+
+
+def verify(run: Path, *, operation_revision: dict | None = None) -> dict:
     run = inside(run)
     receipt = _json(run / "seal.json")
     if receipt.get("schema") != "open_shogiai_evaluator_seal/v1":
@@ -303,7 +349,8 @@ def verify(run: Path) -> dict:
         raise ValueError("run belongs to another execution root")
     if receipt["code_commit"] != config["code"]["commit"]:
         raise ValueError("sealed commit identity mismatch")
-    for name, expected in config["code"]["files"].items():
+    code_files = _operation_code(run, config, operation_revision)
+    for name, expected in code_files.items():
         _reference(inside(name), expected)
     if set(config["runtime"]) != set(RUNTIME_SOURCES):
         raise ValueError("incomplete runtime snapshot")
@@ -312,8 +359,11 @@ def verify(run: Path) -> dict:
         if path.parent != run / "runtime":
             raise ValueError("runtime must be copied inside this run")
         _reference(path, ref["sha256"])
-    for ref in config["inputs"].values():
-        _reference(inside(ref["path"]), ref["sha256"])
+    for key, ref in config["inputs"].items():
+        expected = ref["sha256"]
+        if key == "source_config" and ref["path"] == "configs/evaluator-main.json":
+            expected = code_files.get(ref["path"], expected)
+        _reference(inside(ref["path"]), expected)
     return config
 
 
@@ -528,6 +578,8 @@ def _lease(run: Path, inherited_fd: int | None = None):
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     else:
         descriptor = inherited_fd
+        if descriptor < 3:
+            raise ValueError("lease must not alias standard streams")
         observed, expected = os.fstat(descriptor), path.stat()
         if (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
             raise ValueError("inherited lease belongs to another run")
@@ -537,6 +589,284 @@ def _lease(run: Path, inherited_fd: int | None = None):
     finally:
         # Do not LOCK_UN: children inherit the same open-file description.
         os.close(descriptor)
+
+
+def _launch(run: Path, command_args: list[str], log_name: str, lease: int):
+    """Own fresh parent log handles only through spawn; children own dup2 copies.
+
+    A detached macOS PTY may remain in the descriptor table after revocation but
+    fail fstat during Python's init_sys_streams. Never inherit runner stdin.
+    Only the live lease is passed between this process tree, never saved for resume.
+    Teacher/native protocol pipes are separately owned by their existing clients.
+    """
+    if lease < 3 or Path(log_name).name != log_name:
+        raise ValueError("invalid launcher lease/log")
+    os.fstat(lease)
+    with inside(run / log_name, exists=False).open("ab") as log:
+        return subprocess.Popen(
+            command_args,
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            close_fds=True,
+            start_new_session=True,
+            pass_fds=(lease,),
+        )
+
+
+def _remember_error(state: dict, phase: str, error: BaseException) -> None:
+    state.setdefault("errors", []).append(
+        {"phase": phase, "traceback": "".join(traceback.format_exception(error))}
+    )
+
+
+def _save_state(run: Path, state: dict) -> None:
+    try:
+        atomic(run / "state.json", encoded(state))
+    except OSError as error:
+        # A diagnostic write failure must not erase the original exception chain.
+        primary = "\n".join(item["traceback"] for item in state.get("errors", []))
+        if primary:
+            raise RuntimeError(
+                f"state persistence failed; original failures:\n{primary}"
+            ) from error
+        raise
+
+
+def _resume_snapshot(run: Path, config: dict) -> dict:
+    """Read durable shards and cursors under the lease; never repair data in place."""
+    from .evaluator_data import Replay
+
+    data = run / "data"
+    if (data / "generation.json").read_bytes() != encoded(config["generation"]):
+        raise ValueError("generation cursor belongs to another configuration")
+    inventory, games, rows = {}, set(), 0
+    for path in sorted((data / "games").glob("*.receipt.json")):
+        path = inside(path)
+        saved = _json(path)
+        game = saved["game"]
+        if game in games or path.name != f"{game:06d}.json.receipt.json":
+            raise ValueError("duplicate or misnamed trajectory")
+        shard = inside(path.with_name(f"{game:06d}.json.gz"))
+        _reference(shard, saved["sha256"])
+        raw = json.loads(gzip.decompress(shard.read_bytes()))
+        if raw["game"] != game or len(raw["records"]) != saved["rows"]:
+            raise ValueError("trajectory/receipt row mismatch")
+        games.add(game)
+        rows += saved["rows"]
+        for item in (shard, path):
+            inventory[str(item.relative_to(run))] = digest(item)
+    if (data / "inherited.json").exists():
+        for saved in _json(data / "inherited.json")["games"]:
+            _reference(data / "games" / f"{saved['game']:06d}.json.gz", saved["sha256"])
+            _reference(
+                data / "games" / f"{saved['game']:06d}.json.receipt.json", saved["receipt_sha256"]
+            )
+    progress = (
+        _json(data / "generation-progress.json")
+        if (data / "generation-progress.json").exists()
+        else {}
+    )
+    if len(games) < progress.get("games", 0):
+        raise ValueError("committed trajectories disappeared behind progress cursor")
+    db_path = inside(data / "tasks.sqlite3")
+    with contextlib.closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as db:
+        if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise ValueError("invalid recovery ledger")
+        checkpoints = dict(db.execute("SELECT game,payload FROM checkpoints"))
+        counters = dict(db.execute("SELECT name,value FROM counters"))
+        tasks = dict(db.execute("SELECT status,count(*) FROM tasks GROUP BY status"))
+        ledger_sha = hashlib.sha256(encoded(list(db.execute("SELECT * FROM tasks ORDER BY id"))))
+    pending = {}
+    replay = None
+    try:
+        for game, payload in checkpoints.items():
+            value = json.loads(payload)
+            if game not in games:
+                if value["ply"] != len(value["moves"]):
+                    raise ValueError("checkpoint ply/history mismatch")
+                if replay is None:
+                    replay = Replay(ROOT, config["generation"])
+                position = replay.ask(reset=value["initial_sfen"], successors=True)
+                for move in value["moves"]:
+                    position = replay.ask(movement=move, successors=True)
+                if position["sfen"] != value["sfen"]:
+                    raise ValueError("checkpoint native replay mismatch")
+                pending[str(game)] = {
+                    "ply": value["ply"],
+                    "rows": len(value["records"]),
+                    "sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                }
+    finally:
+        if replay is not None:
+            replay.close()
+    # Preserve unreceipted output and atomic-write remnants; generation resumes
+    # from the transaction cursor and cached accepted tasks, never from temp bytes.
+    for path in (data / "games").glob("*"):
+        path = inside(path)
+        if path.is_file() and str(path.relative_to(run)) not in inventory:
+            if path.name.endswith(".json.gz"):
+                raw = json.loads(gzip.decompress(path.read_bytes()))
+                if raw["game"] not in checkpoints:
+                    raise ValueError("uncommitted trajectory lacks durable cursor")
+            inventory[str(path.relative_to(run))] = digest(path)
+    snapshot = {
+        "games": len(games),
+        "rows": rows,
+        "files": inventory,
+        "pending": pending,
+        "tasks": tasks,
+        "counters": counters,
+        "ledger_sha256": ledger_sha.hexdigest(),
+    }
+    prior = _state(run)
+    if prior.get("execution_attempt"):
+        prefix = run / "attempts" / f"{prior['execution_attempt']:06d}"
+        previous_path = Path(f"{prefix}-pause.json")
+        if not previous_path.exists():
+            previous_path = prefix.with_suffix(".json")
+        previous = _json(previous_path)["snapshot"]
+        for name, sha in previous["files"].items():
+            if name.endswith(".receipt.json"):
+                _reference(run / name, sha)
+                shard = name.replace(".receipt.json", ".gz")
+                _reference(run / shard, previous["files"][shard])
+        if any(
+            counters.get(key, -1) < value
+            for key, value in previous["counters"].items()
+            if key != "hard_seconds"
+        ):
+            raise ValueError("cumulative execution budget decreased")
+        if tasks.get("accepted", 0) < previous["tasks"].get("accepted", 0):
+            raise ValueError("accepted task cursor decreased")
+    return snapshot
+
+
+def _startup_recoverable(run: Path, state: dict) -> bool:
+    if state.get("startup_failure") == "before_spawn":
+        return True
+    # Compatibility for the original pre-interpreter failure, which could not
+    # write a stage registration or structured failure receipt.
+    if state.get("reason") != "stage_exit_1" or state.get("stage") != "generate":
+        return False
+    receipt = _json(run / "stage-process.json") if (run / "stage-process.json").exists() else {}
+    if receipt.get("pid") == state.get("stage_pid"):
+        return False
+    log = inside(run / f"generate-{state.get('retries', {}).get('generate', 0)}.log")
+    with log.open("rb") as stream:
+        stream.seek(max(0, log.stat().st_size - 4096))
+        tail = stream.read()
+    return (
+        b"Fatal Python error: init_sys_streams: can't initialize sys standard streams\n" in tail
+        and b"OSError: [Errno 9] Bad file descriptor\n" in tail
+        and tail.rstrip().endswith(b"<no Python frame>")
+        and state.get("cleanup", {}).get("remaining_processes") == {}
+        and not state.get("errors")
+    )
+
+
+def _resume_idle_state(run: Path) -> dict:
+    current = _state(run)
+    pending = current["status"] == "running" and current.get("reason") == "startup_pending"
+    if pending:
+        attempt = _json(run / "attempts" / f"{current['execution_attempt']:06d}.json")
+        if attempt["operation_revision"] != current.get("operation_revision") or current.get("pid"):
+            raise ValueError("invalid interrupted startup attempt")
+    if not pending and current["status"] not in {"ready_for_luna", "stopped", "needs_astra"}:
+        raise ValueError("resume requires a paused run or confirmed startup failure")
+    if current["status"] == "needs_astra" and not _startup_recoverable(run, current):
+        raise ValueError("failure is outside startup recovery; Astra review required")
+    for pid_key, identity_key in (("pid", "process_identity"), ("stage_pid", "stage_identity")):
+        if (
+            current.get(identity_key)
+            and read_process_identity(current.get(pid_key)) == current[identity_key]
+        ):
+            raise ValueError("live process prevents resume")
+    if _residual_stage_group(run) is not None:
+        raise ValueError("residual stage group prevents resume")
+    return current
+
+
+def _approve_operations(run: Path) -> dict:
+    """Astra's explicit one-time code review; resume never approves a new hash."""
+    with _lease(run):
+        _resume_idle_state(run)
+        config, code = _json(run / "run.json"), _code_identity()
+        if set(code["files"]) != set(config["code"]["files"]):
+            raise ValueError("operational resume cannot add/remove sealed code files")
+        changed = {
+            name: sha for name, sha in code["files"].items() if sha != config["code"]["files"][name]
+        }
+        revision = {
+            "schema": "open_shogiai_operation_revision/v1",
+            "run_sha256": digest(run / "run.json"),
+            "original_code_commit": config["code"]["commit"],
+            "commit": code["commit"],
+            "files": changed,
+        }
+        config = verify(run, operation_revision=revision)
+        _require_migration(run, config)
+        _resume_snapshot(run, config)
+        path = run / "operations" / f"{hashlib.sha256(encoded(revision)).hexdigest()}.json"
+        if not path.exists():
+            atomic(path, encoded(revision))
+        ref = _reference(path)
+        atomic(run / "approved-operation.json", encoded(ref))
+        return ref
+
+
+def _prepare_resume(run: Path) -> tuple[dict, dict]:
+    current = _resume_idle_state(run)
+    ref = _json(run / "approved-operation.json")
+    revision_path = inside(ref["path"])
+    if revision_path.parent != run / "operations":
+        raise ValueError("approved operation outside run")
+    _reference(revision_path, ref["sha256"])
+    revision = _json(revision_path)
+    config = verify(run, operation_revision=revision)
+    code = _code_identity()
+    if code["files"] != {**config["code"]["files"], **revision["files"]}:
+        raise ValueError("resume code differs from Astra-approved operation revision")
+    _require_migration(run, config)
+    snapshot = _resume_snapshot(run, config)
+    for stage in STAGES:
+        if (run / f"{stage}-complete.json").exists():
+            _verify_completion(run, stage, config)
+    attempts = run / "attempts"
+    number = 1 + max(
+        (int(p.stem) for p in attempts.glob("[0-9]*.json") if p.stem.isdigit()), default=0
+    )
+    record = {
+        "schema": "open_shogiai_execution_attempt/v1",
+        "number": number,
+        "at": time.time(),
+        "previous_state": current,
+        "snapshot": snapshot,
+        "operation_revision": _reference(revision_path),
+        "interpreter": sys.executable,
+        "cwd": str(ROOT),
+        "stdin": "DEVNULL",
+        "logs": {},
+    }
+    for name in ("supervisor.log", f"generate-{current.get('retries', {}).get('generate', 0)}.log"):
+        path = run / name
+        if path.exists():
+            record["logs"][name] = {"bytes": path.stat().st_size, "sha256": digest(path)}
+    atomic(attempts / f"{number:06d}.json", encoded(record))
+    pending = {
+        k: v
+        for k, v in current.items()
+        if k in ("schema", "run_id", "run_sha256", "began_at", "initial_swap_bytes", "retries")
+    }
+    pending.update(
+        status="running",
+        reason="startup_pending",
+        execution_attempt=number,
+        operation_revision=record["operation_revision"],
+    )
+    _save_state(run, pending)
+    return config, pending
 
 
 def _process_table() -> dict[int, tuple[int, int, str, int]]:
@@ -751,9 +1081,7 @@ def status(run: Path) -> dict:
     progress_path = run / "data" / "generation-progress.json"
     if progress_path.exists():
         value["generation"] = _json(progress_path)
-        value["completed_trajectories"] = value["generation"].get(
-            "games", value["completed_trajectories"]
-        )
+        value["generation"]["games"] = value["completed_trajectories"]
     valid_files = list((run / "data" / "games").glob("*.receipt.json"))
     value["last_valid_output_at"] = max((p.stat().st_mtime for p in valid_files), default=None)
     if (run / "fit" / "progress.json").exists():
@@ -835,34 +1163,38 @@ def migrate(run: Path) -> dict:
             return receipt
 
 
-def start(run: Path, *, pause_after_new_games: int | None = None) -> dict:
-    config = verify(run)
-    _require_migration(run, config)
+def start(
+    run: Path, *, pause_after_new_games: int | None = None, recover_startup: bool = False
+) -> dict:
     if pause_after_new_games is not None:
         _number(pause_after_new_games, 1, 12, "probe trajectory bound")
     try:
         with _lease(run) as lease:
-            current = _state(run)
-            residual = _residual_stage_group(run)
-            if residual is not None:
-                current.update(
-                    status="needs_astra",
-                    reason="residual_stage_group_unproven",
-                    residual_group=residual,
-                )
-                atomic(run / "state.json", encoded(current))
-                return current
-            if current.get("status") in {"awaiting_astra_browser", "awaiting_astra_review"}:
-                for stage in STAGES:
-                    _verify_completion(run, stage, config)
-                if current["status"] == "awaiting_astra_review":
-                    _reference(run / "candidate-review.json", current["review_sha256"])
-                return current
-            if current["status"] == "needs_astra":
-                return current
-            _clear_stop(run)
-            with inside(run / "supervisor.log", exists=False).open("ab") as log:
-                process = subprocess.Popen(
+            if recover_startup:
+                config, current = _prepare_resume(run)
+            else:
+                config = verify(run)
+                _require_migration(run, config)
+                current = _state(run)
+                residual = _residual_stage_group(run)
+                if residual is not None:
+                    current.update(
+                        status="needs_astra",
+                        reason="residual_stage_group_unproven",
+                        residual_group=residual,
+                    )
+                    _save_state(run, current)
+                    return current
+                if current["status"] in {
+                    "needs_astra",
+                    "awaiting_astra_browser",
+                    "awaiting_astra_review",
+                }:
+                    return current
+            try:
+                _clear_stop(run)
+                process = _launch(
+                    run,
                     [
                         sys.executable,
                         "-m",
@@ -877,12 +1209,35 @@ def start(run: Path, *, pause_after_new_games: int | None = None) -> dict:
                             else []
                         ),
                     ],
-                    cwd=ROOT,
-                    stdout=log,
-                    stderr=log,
-                    start_new_session=True,
-                    pass_fds=(lease,),
+                    "supervisor.log",
+                    lease,
                 )
+            except (OSError, ValueError) as error:
+                _remember_error(current, "supervisor_spawn", error)
+                current.update(
+                    status="needs_astra",
+                    reason="supervisor_spawn_failed",
+                    startup_failure="before_spawn",
+                )
+                _save_state(run, current)
+                raise
+            if recover_startup:
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    observed = _state(run)
+                    if observed.get("pid") == process.pid:
+                        return observed
+                    if process.poll() is not None:
+                        current.update(
+                            status="needs_astra",
+                            reason="supervisor_bootstrap_failed",
+                            supervisor_returncode=process.returncode,
+                        )
+                        _save_state(run, current)
+                        return current
+                    time.sleep(0.05)
+                # Retain the live child's lease and pending attempt; never spawn again.
+                raise RuntimeError("supervisor acknowledgement timed out; inspect status and pause")
             return {
                 "status": "starting",
                 "pid": process.pid,
@@ -895,6 +1250,54 @@ def start(run: Path, *, pause_after_new_games: int | None = None) -> dict:
             stop(run)
             current["status"] = "supervisor_missing_stop_requested"
         return current
+
+
+def pause(run: Path) -> dict:
+    stop(run)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        try:
+            with _lease(run):
+                current = _state(run)
+                if any(
+                    current.get(key) and read_process_identity(current.get(pid)) == current[key]
+                    for pid, key in (("pid", "process_identity"), ("stage_pid", "stage_identity"))
+                ):
+                    time.sleep(0.05)
+                    continue
+                if _residual_stage_group(run) is not None:
+                    raise ValueError("pause has an unproven residual group")
+                if current["status"] not in {"stopped", "ready_for_luna"}:
+                    raise ValueError("pause cannot clear a failure or unfinished startup")
+                try:
+                    from .evaluator_ledger import export_queue
+
+                    config = verify(run)
+                    snapshot = _resume_snapshot(run, config)
+                    export_queue(run / "data")
+                    progress = {k: snapshot[k] for k in ("games", "rows", "tasks")}
+                    atomic(
+                        run / "data/generation-progress.json",
+                        encoded({**progress, "status": "paused"}),
+                    )
+                    current.update(
+                        status="ready_for_luna", reason="requested_pause", generation=progress
+                    )
+                    if current.get("execution_attempt"):
+                        atomic(
+                            run / "attempts" / f"{current['execution_attempt']:06d}-pause.json",
+                            encoded({"state": current, "snapshot": snapshot}),
+                        )
+                except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+                    _remember_error(current, "pause", error)
+                    current.update(status="needs_astra", reason="pause_verification_failed")
+                    _save_state(run, current)
+                    raise
+                _save_state(run, current)
+                return current
+        except BlockingIOError:
+            time.sleep(0.1)
+    raise RuntimeError("pause did not release the lease within its deadline")
 
 
 def stop(run: Path) -> dict:
@@ -1207,85 +1610,77 @@ def _run_stage(
     process, owned, failure = None, {}, None
     limits = config["resources"]
     try:
-        with inside(run / f"{stage}-{state['retries'].get(stage, 0)}.log", exists=False).open(
-            "ab"
-        ) as log:
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    MODULE,
-                    "stage",
-                    str(run.relative_to(ROOT)),
-                    stage,
-                    "--lease-fd",
-                    str(lease),
-                    *(
-                        ["--pause-after-new-games", str(state["probe_new_games"])]
-                        if state.get("probe_new_games") is not None
-                        else []
-                    ),
-                ],
-                cwd=ROOT,
-                stdout=log,
-                stderr=log,
-                start_new_session=True,
-                pass_fds=(lease,),
-            )
-            state.update(stage_pid=process.pid, stage_identity=read_process_identity(process.pid))
-            atomic(run / "state.json", encoded(state))
-            signature, last_progress = None, time.monotonic()
-            while True:
-                rows = _stage_group_snapshot(process, state["stage_identity"])
-                if rows[process.pid][2].startswith("Z"):
-                    break
-                if (run / "STOP").exists():
-                    failure = "requested_stop"
-                    break
-                current = _progress_signature(run, stage)
-                if current != signature:
-                    signature, last_progress = current, time.monotonic()
-                rss, owned = _sample_owned(process, owned)
-                free, swap = shutil.disk_usage(run).free, _swap_bytes()
-                memory_free = (
-                    _memory_free_percent() if "minimum_memory_free_percent" in limits else None
-                )
-                metric = {
-                    "memory_free_percent": memory_free,
-                    "at": time.time(),
-                    "stage": stage,
-                    "stage_pid": process.pid,
-                    "rss_bytes": rss,
-                    "free_bytes": free,
-                    "swap_bytes": swap,
-                    "progress": signature,
-                }
-                with inside(run / "monitor.jsonl", exists=False).open("ab") as monitor:
-                    monitor.write(encoded(metric) + b"\n")
-                state["owned_processes"] = {str(pid): identity for pid, identity in owned.items()}
-                atomic(run / "state.json", encoded(state))
-                if time.time() - state["began_at"] > limits["maximum_wall_seconds"]:
-                    failure = "wall_limit"
-                elif (
-                    memory_free is not None and memory_free < limits["minimum_memory_free_percent"]
-                ):
-                    failure = "memory_pressure_limit"
-                elif rss > limits["maximum_process_rss_gib"] * 1024**3:
-                    failure = "memory_limit"
-                elif free < limits["free_space_floor_gib"] * 1024**3:
-                    failure = "space_limit"
-                elif (
-                    swap - state["initial_swap_bytes"] > limits["maximum_swap_growth_gib"] * 1024**3
-                ):
-                    failure = "swap_limit"
-                elif time.monotonic() - last_progress > limits["stalled_seconds"]:
-                    failure = "no_actual_progress"
-                if failure:
-                    break
-                time.sleep(limits["monitor_interval_seconds"])
-            if failure is None and (run / "STOP").exists():
+        process = _launch(
+            run,
+            [
+                sys.executable,
+                "-m",
+                MODULE,
+                "stage",
+                str(run.relative_to(ROOT)),
+                stage,
+                "--lease-fd",
+                str(lease),
+                *(
+                    ["--pause-after-new-games", str(state["probe_new_games"])]
+                    if state.get("probe_new_games") is not None
+                    else []
+                ),
+            ],
+            f"{stage}-{state['retries'].get(stage, 0)}.log",
+            lease,
+        )
+        state.update(stage_pid=process.pid, stage_identity=read_process_identity(process.pid))
+        atomic(run / "state.json", encoded(state))
+        signature, last_progress = None, time.monotonic()
+        while True:
+            rows = _stage_group_snapshot(process, state["stage_identity"])
+            if rows[process.pid][2].startswith("Z"):
+                break
+            if (run / "STOP").exists():
                 failure = "requested_stop"
+                break
+            current = _progress_signature(run, stage)
+            if current != signature:
+                signature, last_progress = current, time.monotonic()
+            rss, owned = _sample_owned(process, owned)
+            free, swap = shutil.disk_usage(run).free, _swap_bytes()
+            memory_free = (
+                _memory_free_percent() if "minimum_memory_free_percent" in limits else None
+            )
+            metric = {
+                "memory_free_percent": memory_free,
+                "at": time.time(),
+                "stage": stage,
+                "stage_pid": process.pid,
+                "rss_bytes": rss,
+                "free_bytes": free,
+                "swap_bytes": swap,
+                "progress": signature,
+            }
+            with inside(run / "monitor.jsonl", exists=False).open("ab") as monitor:
+                monitor.write(encoded(metric) + b"\n")
+            state["owned_processes"] = {str(pid): identity for pid, identity in owned.items()}
+            atomic(run / "state.json", encoded(state))
+            if time.time() - state["began_at"] > limits["maximum_wall_seconds"]:
+                failure = "wall_limit"
+            elif memory_free is not None and memory_free < limits["minimum_memory_free_percent"]:
+                failure = "memory_pressure_limit"
+            elif rss > limits["maximum_process_rss_gib"] * 1024**3:
+                failure = "memory_limit"
+            elif free < limits["free_space_floor_gib"] * 1024**3:
+                failure = "space_limit"
+            elif swap - state["initial_swap_bytes"] > limits["maximum_swap_growth_gib"] * 1024**3:
+                failure = "swap_limit"
+            elif time.monotonic() - last_progress > limits["stalled_seconds"]:
+                failure = "no_actual_progress"
+            if failure:
+                break
+            time.sleep(limits["monitor_interval_seconds"])
     except (OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.SubprocessError) as error:
+        _remember_error(state, "stage_spawn" if process is None else "supervision", error)
+        if process is None:
+            state["startup_failure"] = "before_spawn"
         failure = f"supervision_error:{type(error).__name__}:{error}"
     finally:
         if process is not None:
@@ -1306,7 +1701,13 @@ def _run_stage(
                 sqlite3.Error,
                 subprocess.SubprocessError,
             ) as error:
+                _remember_error(state, "cleanup", error)
                 failure = f"cleanup_error:{type(error).__name__}:{error}"
+    if process is not None:
+        if failure == "requested_stop" and process.returncode not in (0, PAUSED_EXIT):
+            failure = f"stage_exit_{process.returncode}_during_stop"
+        elif failure is None and process.returncode == PAUSED_EXIT and (run / "STOP").exists():
+            failure = "requested_stop"
     return (
         process.returncode if process is not None and process.returncode is not None else -1,
         failure,
@@ -1355,6 +1756,9 @@ def work(
             "retries": retries,
             "status": "running",
         }
+        for key in ("operation_revision", "execution_attempt"):
+            if key in prior:
+                state[key] = prior[key]
         if pause_after_new_games is not None:
             _number(pause_after_new_games, 1, 12, "probe trajectory bound")
             state["probe_new_games"] = pause_after_new_games
@@ -1379,6 +1783,7 @@ def work(
                 while True:
                     state.update(stage=stage, status="running", stage_started_at=time.time())
                     state.pop("reason", None)
+                    state.pop("startup_failure", None)
                     atomic(run / "state.json", encoded(state))
                     returncode, failure = _run_stage(run, stage, config, state, lease)
                     if failure or returncode:
@@ -1431,11 +1836,21 @@ def work(
             sqlite3.Error,
             subprocess.SubprocessError,
         ) as error:
+            _remember_error(state, "work", error)
             state.update(status="needs_astra", reason=f"{type(error).__name__}:{error}")
         finally:
             for sig, handler in previous_handlers.items():
                 signal.signal(sig, handler)
-            atomic(run / "state.json", encoded(state))
+            if state.get("execution_attempt"):
+                try:
+                    atomic(
+                        run / "attempts" / f"{state['execution_attempt']:06d}-result.json",
+                        encoded(state),
+                    )
+                except OSError as error:
+                    _remember_error(state, "attempt_result", error)
+                    state.update(status="needs_astra", reason="attempt_result_write_failed")
+            _save_state(run, state)
         return state
 
 
@@ -1636,7 +2051,20 @@ def stage_run(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=("seal", "migrate", "start", "probe", "stop", "status", "work", "stage")
+        "command",
+        choices=(
+            "seal",
+            "approve-operations",
+            "migrate",
+            "start",
+            "resume",
+            "pause",
+            "probe",
+            "stop",
+            "status",
+            "work",
+            "stage",
+        ),
     )
     parser.add_argument("path")
     parser.add_argument("stage", nargs="?", choices=STAGES)
@@ -1646,16 +2074,38 @@ def main():
     path = inside(args.path)
     if args.command == "seal":
         result = seal(path)
+    elif args.command == "approve-operations":
+        result = _approve_operations(path)
     elif args.command == "migrate":
         result = migrate(path)
     elif args.command == "stage":
-        result = stage_run(
-            path, args.stage, args.lease_fd, pause_after_new_games=args.pause_after_new_games
-        )
+        try:
+            result = stage_run(
+                path, args.stage, args.lease_fd, pause_after_new_games=args.pause_after_new_games
+            )
+        except InterruptedError as error:
+            if (
+                error.errno is not None
+                or str(error)
+                not in {
+                    "requested stop; completed trajectories retained",
+                    "stop requested before stage launch",
+                    "training stopped with coherent resume checkpoint",
+                    "arena stopped with retained game receipts",
+                }
+                or not (path / "STOP").exists()
+            ):
+                raise
+            print(json.dumps({"status": "paused", "reason": str(error)}), flush=True)
+            raise SystemExit(PAUSED_EXIT) from None
     elif args.command == "work":
         result = work(path, args.lease_fd, pause_after_new_games=args.pause_after_new_games)
     elif args.command == "probe":
         result = start(path, pause_after_new_games=args.pause_after_new_games or 1)
+    elif args.command == "resume":
+        result = start(path, pause_after_new_games=args.pause_after_new_games, recover_startup=True)
+    elif args.command == "pause":
+        result = pause(path)
     else:
         result = {"start": start, "stop": stop, "status": status}[args.command](path)
     print(json.dumps(result, ensure_ascii=False, allow_nan=False), flush=True)

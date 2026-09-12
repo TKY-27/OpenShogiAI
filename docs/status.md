@@ -1,9 +1,11 @@
 # 現在の状態と再開契約
 
-2026-09-12、停止した防御強化runを復旧し、実resume検証後 **`ready_for_luna`** で正常pause。本学習は未開始。
+2026-09-12、起動時EBADFの運転修正を検証中。実状態は **`needs_astra`**、本学習は未開始。
+前回の内部probe成功だけでは、Lunaの別プロセス起動を実証できていなかった。
 親は `defense-20260912-main-r1`、後継は **`defense-20260912-recovery-r3`**。
 唯一の現行機械契約は [configs/evaluator-main.json](../configs/evaluator-main.json)。
-後継のseal・移行・実resume検証は完了。Lunaは下記startで同じ進捗を引き継ぐ。
+後継のseal・移行と212 trajectoryを保持。Lunaの正式再開は以下のresumeを使う。
+EBADF修正後の別プロセス2回検証を完了するまでreadyとはしない。
 本書が人間向けの正本で、過去工程はGit履歴に残す。
 
 ## 原因・保全・来歴
@@ -82,6 +84,8 @@ CPU4thread、batch256、最大12,288 updates/8巡/1行8露出。評価・選抜�
 Astraはコード/採用条件/契約と短試験を担当。ユーザーが次に開くLuna Max/maxが本学習を実行する。
 本学習は承認済み。契約内の復旧・保留・補充・段階進行は再承認不要。
 Luna子エージェントやAstra長時間監視を使わず、実行中のコード変更・再sealをしない。
+停止中の起動・log管理だけの修正は、Astraがcommit後に運転revisionを承認し、
+同じrunのattemptへ記録する。検証済みresume/pauseはLunaが再承認なしで実行できる。
 契約外のモデル/ラベル設計はAstraへ返し、全工程終了は`awaiting_astra_review`。
 定跡なし、第三者教師はoffline学習のみ、pure非終端評価に手作り点を混ぜない。
 本番一モデル、開発比較選択の方針を維持。本作業はOSUIを変更しない。
@@ -104,14 +108,25 @@ cwdはOpenShogiAI Gitルート。後継の実行正本は
 親 `main/` の`needs_astra`を直接解除しない。学習準備を一からやり直す運転ではない。
 
 ```sh
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r3
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r3
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r3
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 </dev/null
 ```
 
-`start`がresumeコマンド。Astraの一度だけの準備はseal→migrate→probe。
-Lunaは実施済み移行をやり直さず、ready状態からstartする。
-## 完了した検証・実行identity
+確認は同moduleの`status`、正式pauseは以下。再開コマンドは毎回同一で、別実験・全データ複製・再sealは不要。
+
+```sh
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/defense-20260912/recovery-r3 </dev/null
+```
+
+resumeはlease取得、残留process確認、承認済みcode/input hash、確定shard/receipt、
+SQLite整合・未完了cursorのnative再生を検証し、元state/log prefixと運転revisionを
+`attempts/`に保存して状態遷移と起動を行う。元`run.json`と`seal.json`は不変。
+Astraの`approve-operations`は運転code review後の一回の準備で、stateをreadyに書き換えない。
+Lunaは承認済みhashを使い、別commitの運転codeを自動承認しない。
+教師・データ意味・学習・資源・評価条件の変更は、この運転復旧の対象外。
+データ書込みのEBADF、未知のstage失敗、診断/cleanup保存失敗を安全な再試行に分類しない。
+pauseは専用終了codeと全process/lease解放、保存済み進捗を確認してreadyへ戻す。
+
+## 前回の内部probeと不変の実験identity
 
 - code commit: `623d203898d7487921e0599d8500c946978e3544`
 - sealed run SHA-256: `507e535f946756a3bb43243450df68fd58c11cc95e7883659de5574fe2637152`
