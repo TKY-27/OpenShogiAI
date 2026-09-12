@@ -1,12 +1,65 @@
 # 現在の状態と再開契約
 
-2026-09-12、起動時EBADFの運転修正を検証中。実状態は **`needs_astra`**、本学習は未開始。
-前回の内部probe成功だけでは、Lunaの別プロセス起動を実証できていなかった。
-親は `defense-20260912-main-r1`、後継は **`defense-20260912-recovery-r3`**。
+2026-09-12、EBADFの運転修正後、**別OSプロセスから正式resume→pauseを2回実証済み**。
+実状態は **`ready_for_luna`**。214 / 3,072 trajectory、12,062 rows、accepted 301 task、deferred 1。
+本学習は未開始。親は `defense-20260912-main-r1`、対象は **`defense-20260912-recovery-r3`**。
 唯一の現行機械契約は [configs/evaluator-main.json](../configs/evaluator-main.json)。
-後継のseal・移行と212 trajectoryを保持。Lunaの正式再開は以下のresumeを使う。
-EBADF修正後の別プロセス2回検証を完了するまでreadyとはしない。
-本書が人間向けの正本で、過去工程はGit履歴に残す。
+同じrun・既存データ・比較重みを維持し、新しい実験やデータ複製は作っていない。
+本書が人間向けの正本で、Lunaは「操作」のresumeコマンドを使う。
+
+## 起動EBADFの原因と今回の検証
+
+完全な元ログはPythonの `init_sys_streams`、`OSError: [Errno 9] Bad file descriptor`、
+`<no Python frame>`。生成moduleの実行前で、旧D12未達とは別件。
+元の実起動は `uv run --frozen python -m open_shogi_training.evaluator_run start ...`、
+同じGitルートで `tty: true`。旧`start`（623d203の865行）と`_run_stage`（1213行）はstdin未指定で、
+CLI端末のFD0をsupervisor、stageへ暗黙継承していた。
+
+macOSでは制御PTYのsession owner終了後、保持中slave FDの`fcntl(F_GETFD)`は成功しても
+`fstat`がEBADFになる。これを別Pythonへ継承すると元ログと同じfatal/exit1を再現した。
+CPython 3.12.13の`Python/pylifecycle.c:2580`でstdinを構築し、
+`Modules/_io/fileio.c:443,453-454`のfstat/EBADF分岐から、`pylifecycle.c:2636`のfatalへ至る。
+元PTY所有PID・実際の失効イベントは記録されていないため、そのPIDまで実測したとはしない。
+
+修正は共通`_launch`で毎回stdinをDEVNULL、stdout/stderrを新しく開いたappend logへ結ぶ。
+親はspawn後に自身のlog handleを閉じ、子はdup2された独立FDを使う。
+leaseだけをその生存process treeへ継承し、再開時はlockを新規openする。FD番号を再開資産にしない。
+USI教師とnative replayのstdin/stdout PIPE・読み出しは変更していない。
+診断は元tracebackとcleanup失敗を別々に保持する。STOPとexit1を正常pauseへ変換せず、
+専用終了code75と保存成功を確認する。結果保存失敗や未知のEBADFはneeds_astraに残す。
+
+運転code commit: `e7edb5026a0976856ef0b9d6e7d84b3b02a35d9a`。
+承認済み運転revision SHA-256:
+`0e54f1be931f51ac1685f26d1a813690924333de2973b4febdbd9636386476b9`。
+元のrun/seal/使用commitは不変で、今回の実行は`attempts/000001.json`、`000002.json`へ紐付く。
+
+| 別プロセスの実行 | trajectory | rows | accepted task | supervisor / stage PID | resumeからpause完了 |
+| --- | --- | --- | --- | --- | --- |
+| attempt 1 | 212 → 213（game213確定） | 11,966 → 12,022 | 75 → 207 | 5628 / 5636 | 35.876秒 |
+| attempt 2 | 213 → 214（game214確定） | 12,022 → 12,062 | 207 → 301 | 6010 / 6017 | 35.800秒 |
+
+両回とも同じuv/interpreter（Python 3.12.13、`.venv/bin/python3`）、cwd、設定、
+DEVNULL stdinの非対話CLIを使い、正式pauseでprocess/lease解放後に次のCLIを起動した。
+新112手/56行と80手/40行は保存receipt/hashとnative全着手再生を再確認。
+旧212組のshard/receipt、旧75 accepted task、元deferred taskと2M/32M消費履歴、
+game211の58行/116手/乱数checkpointは不変。deferredは全体停止にならず後続へ進んだ。
+第1pauseのgame214/ply0を第2resumeが完走し、現在の次cursorはgame215/ply0。
+hard共有累積は360 → 362試行、2,207.048 → 2,215.622秒。元期限・swap基準・retriesは不変。
+ログは元failure prefixを保持して追記され、新しいEBADFなし。
+
+最終状態はsupervisor/stageとも非生存、lease非保持、`lsof +D`でrun内open fileなし、fit未作成。
+4監督標本のメモリ空き最小56%、swap最大3,746,100,674 bytes、所有RSS最大1,303,478,272 bytes。
+`make check`はPython1,048件、Rust、format/lint、権利/境界/provenance、native build、
+決定的Wasm再生成照合までPASS。失効PTY/closed stdin・closed log・spawn直前EBADF、
+承認後code drift、cursor破損、不正pause、結果保存失敗、二重起動、後段の共通launcher経路を検証。
+テスト用データは隔離fixtureで、本番データに混ぜていない。
+
+証拠は `local/runs/defense-20260912/ebadf-evidence/` の元ログ・元起動command、
+`round-1.json`、`round-2.json`、`processes-1.json`、`processes-2.json`、`make-check.log`。
+最終 `final-verification.json` SHA-256:
+`e0c95bb770ab1ac5b2a2a0a456bd5fa4b97b1269decae30ef42d34778274ec63`。
+PTY隔離再現は `local/ebadf-diagnostics/receipt.json` と実CPythonソースに保持。
+本学習・大規模Arena・OSUI・main統合・公開・deployは実行していない。
 
 ## 原因・保全・来歴
 
