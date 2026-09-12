@@ -508,13 +508,18 @@ def focus_quality(games) -> dict:
             ):
                 if not isinstance(observation, dict):
                     continue
-                missing = observation.get("status") == "unlabeled_incomplete_depth"
+                missing = observation.get("status") in (
+                    "unlabeled_incomplete_depth",
+                    "unlabeled_deferred",
+                )
                 if missing:
                     if "score" in observation or "candidates" in observation:
                         raise ValueError(
                             "unlabeled optional observation contains a fabricated label"
                         )
-                    if not observation.get("failure_receipt"):
+                    if not observation.get("failure_receipt") and not observation.get(
+                        "ledger_task"
+                    ):
                         raise ValueError(
                             "unlabeled optional observation lacks retained failure evidence"
                         )
@@ -550,17 +555,23 @@ def focus_gate(output: Path, config: dict) -> dict:
 
     games = []
     for path in sorted((output / "games").glob("*.json.gz")):
-        receipt = json.loads(path.with_suffix(".receipt.json").read_text())
+        receipt_path = path.with_suffix(".receipt.json")
+        if config.get("recovery_policy") and not receipt_path.exists():
+            continue  # Output-before-receipt is not committed label evidence.
+        receipt = json.loads(receipt_path.read_text())
         if digest(path) != receipt["sha256"]:
             raise ValueError("focus quality source identity changed")
         game = json.loads(gzip.decompress(path.read_bytes()))
         for row in game["records"]:
             deviation = row.get("deviation")
             for observation in (deviation, deviation.get("recovery") if deviation else None):
-                if (
-                    isinstance(observation, dict)
-                    and observation.get("status") == "unlabeled_incomplete_depth"
+                if isinstance(observation, dict) and observation.get("status") in (
+                    "unlabeled_incomplete_depth",
+                    "unlabeled_deferred",
                 ):
+                    if observation.get("ledger_task"):
+                        _validate_deferred_observation(output, observation, config)
+                        continue
                     ref = output / observation["failure_receipt"]
                     if (
                         not ref.resolve().is_relative_to((output / "failures").resolve())
@@ -585,6 +596,51 @@ def focus_gate(output: Path, config: dict) -> dict:
         or report["completion_rate"] >= campaign["minimum_focus_completion_rate"]
     )
     atomic(output / "focus-quality.json", encoded(report))
-    if not report["passed"]:
+    if not report["passed"] and not config.get("recovery_policy"):
         raise ValueError("optional focus completeness gate failed; Astra review required")
     return report
+
+
+def _validate_deferred_observation(output: Path, observation: dict, config: dict) -> None:
+    import sqlite3
+
+    if not config.get("recovery_policy") or observation.get("status") != "unlabeled_deferred":
+        raise ValueError("ledger missing label requires the recovery acceptance contract")
+    path = output / "tasks.sqlite3"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("missing-label ledger missing or linked")
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+        row = db.execute(
+            "SELECT identity,status,attempts FROM tasks WHERE id=?", (observation["ledger_task"],)
+        ).fetchone()
+        counters = dict(db.execute("SELECT name,value FROM counters"))
+    if row is None:
+        raise ValueError("missing-label task not found")
+    identity, status, attempts = json.loads(row[0]), row[1], json.loads(row[2])
+    if (
+        identity["sfen"] != observation["sfen"]
+        or identity["branch"] not in ("deviation", "recovery")
+        or status != "deferred"
+        or not (
+            len(attempts) == 2
+            or (
+                len(attempts) == 1
+                and (
+                    sum(
+                        a.get("elapsed_s", config["recovery_policy"]["maximum_attempt_seconds"])
+                        for a in attempts
+                    )
+                    + config["recovery_policy"]["maximum_attempt_seconds"]
+                    > config["recovery_policy"].get("maximum_task_seconds", float("inf"))
+                    or counters.get("hard_attempts", 0)
+                    >= config["recovery_policy"]["maximum_hard_attempts"]
+                    or counters.get("hard_seconds", 0)
+                    + config["recovery_policy"]["maximum_attempt_seconds"]
+                    > config["recovery_policy"]["maximum_hard_seconds"]
+                )
+            )
+        )
+        or identity["teacher"] != config["teacher_binary_sha256"]
+        or identity["teacher_config"] != config["teacher_config_sha256"]
+    ):
+        raise ValueError("missing-label task identity or exhausted budget mismatch")

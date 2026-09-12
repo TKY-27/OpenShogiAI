@@ -105,13 +105,13 @@ than claiming byte equality with the original data. Do not automatically rerun o
 
 [Status](status.md) is the human handoff; [evaluator-main.json](../configs/evaluator-main.json)
 is the one current machine-readable plan. The sealed executable copy is
-`local/runs/defense-20260912/main/run.json`, with `seal.json` and `state.json` alongside.
+`local/runs/defense-20260912/recovery-r2/run.json`, with `seal.json` and `state.json` alongside.
 Do not infer a run name from old r3 directories. From this Git root:
 
 ```sh
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/main
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/main
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/main
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r2
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r2
 ```
 
 `start` resumes the same stopped run. It cannot restart `needs_astra` or an awaiting-review
@@ -135,7 +135,9 @@ All play is book-free. Training may use offline scenarios and the existing hash-
 The teacher binary (GPL-3.0) and its separately licensed evaluation assets (MIT) remain local,
 with the install manifest, original notices and exact hashes. No new public archive is required.
 The new run accepts completed-depth labels only, clears teacher TT before every independent
-analysis, and preserves rejected incomplete output before its one bounded retry.
+analysis. A root depth miss becomes a durable local task with shared finite retry accounting.
+The successor retains the parent shards and incomplete history; coverage gates, not universal
+root success, control training. Consult the current contract for queue and replenishment limits.
 
 Real 3/10-minute paired games and an offline fixed-node move screen are separate measurements.
 Only one validation-selected candidate receives the fixed comparisons; development test never

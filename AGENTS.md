@@ -30,3 +30,8 @@
 - `docs/status.md` links the sole current execution contract. Operational results may change;
   sealed source/config hashes may not. Learning approval does not authorize model publication,
   public-default promotion, main merge, deployment or paid compute.
+- A single incomplete fixed-depth teacher label, including a root, is a local deferred task
+  under the current recovery contract, never a fabricated label or automatic whole-run failure.
+  Resume preserves cumulative attempts and lineage. Training requires the sealed coverage
+  manifest; exhausted cohort budgets, systemic faults, integrity and resource failures remain
+  stage stop conditions. A new acceptance policy requires Astra and a successor contract.

@@ -62,6 +62,7 @@ def put(path: Path, content: bytes = b"fixture") -> Path:
 def prepared(tmp_path, monkeypatch):
     config = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
     config["generation"].pop("defense_campaign", None)
+    config["generation"].pop("recovery_policy", None)
     config["evaluation"].pop("groups", None)
     config["evaluation"]["startpos_demonstration_games"] = 8
     monkeypatch.setattr(runner, "ROOT", tmp_path)
@@ -687,3 +688,205 @@ def test_dataset_reference_cannot_escape_before_prepare_opens_it(prepared):
     atomic(path, encoded(manifest))
     with pytest.raises(ValueError, match="local file names"):
         runner._dataset(run, config)
+
+
+def test_probe_preserves_resource_baselines_and_does_not_enter_training(prepared, monkeypatch):
+    _, run, _, _, _ = prepared
+    prior = runner._state(run)
+    prior.update(began_at=time.time() - 600, initial_swap_bytes=12345, retries={"generate": 1})
+    atomic(run / "state.json", encoded(prior))
+    launches = []
+
+    def completed_probe(_run, stage, _config, state, _lease):
+        launches.append(stage)
+        assert state["probe_new_games"] == 1
+        atomic(
+            run / "generation-probe.json",
+            encoded(
+                {
+                    "run_sha256": digest(run / "run.json"),
+                    "result": {"status": "paused", "games": 212, "deferred": 1},
+                }
+            ),
+        )
+        return 0, None
+
+    monkeypatch.setattr(runner, "_run_stage", completed_probe)
+    result = runner.work(run, pause_after_new_games=1)
+    assert result["status"] == "ready_for_luna"
+    assert result["generation"]["deferred"] == 1
+    assert result["began_at"] == prior["began_at"]
+    assert result["initial_swap_bytes"] == 12345
+    assert result["retries"] == {"generate": 1}
+    assert launches == ["generate"]
+    assert not (run / "generate-complete.json").exists()
+    assert not (run / "fit").exists()
+
+
+def test_stage_probe_does_not_publish_false_generation_completion(prepared, monkeypatch):
+    _, run, _, _, _ = prepared
+    monkeypatch.setattr(runner, "_register_stage_group", lambda *_a: {})
+    called = []
+
+    def paused(_root, _output, _generation, *, pause_after_new_games):
+        called.append(pause_after_new_games)
+        return {"status": "paused", "games": 1, "deferred": 2}
+
+    monkeypatch.setattr(runner, "generate", paused)
+    result = runner.stage_run(run, "generate", pause_after_new_games=1)
+    assert result["status"] == "paused"
+    assert called == [1]
+    assert not (run / "generate-complete.json").exists()
+    assert runner._json(run / "generation-probe.json")["result"] == result
+
+
+def test_probe_does_not_swallow_integrity_failure(prepared, monkeypatch):
+    _, run, _, _, _ = prepared
+    monkeypatch.setattr(runner, "_swap_bytes", lambda: 0)
+    monkeypatch.setattr(runner, "_run_stage", lambda *_a: (1, None))
+    result = runner.work(run, pause_after_new_games=1)
+    assert result["status"] == "needs_astra"
+    assert result["reason"] == "stage_exit_1"
+
+
+def test_manifest_supplement_preserves_first_version_and_is_finite(prepared, monkeypatch):
+    from open_shogi_training import evaluator_coverage
+
+    _, run, config, _, _ = prepared
+    data = run / "data"
+    calls = []
+
+    def preparation(*_args):
+        value = {"version": 1 if not calls else 2}
+        atomic(data / "dataset/manifest.json", encoded(value))
+        atomic(data / "dataset-generated/manifest.json", encoded(value))
+        return value
+
+    monkeypatch.setattr(runner, "prepare", preparation)
+    monkeypatch.setattr(
+        evaluator_coverage,
+        "coverage_report",
+        lambda *_a: {"passed": False, "reasons": ["unique_new_train"]},
+    )
+
+    def supplement(_root, _data, _generation, *, supplemental):
+        assert supplemental is True
+        calls.append("supplement")
+        return {"status": "complete"}
+
+    monkeypatch.setattr(runner, "generate", supplement)
+    monkeypatch.setattr(runner, "_dataset", lambda *_a: {"version": 2})
+    result = runner._prepare_recovery(run, config)
+    assert result == {"version": 2}
+    assert calls == ["supplement"]
+    archives = list((data / "manifest-attempts").glob("*/dataset/manifest.json"))
+    assert len(archives) == 1
+    assert json.loads(archives[0].read_text()) == {"version": 1}
+    assert json.loads((data / "dataset/manifest.json").read_text()) == {"version": 2}
+
+
+def test_manifest_coverage_pass_with_deferred_needs_no_supplement(prepared, monkeypatch):
+    from open_shogi_training import evaluator_coverage
+
+    _, run, config, _, _ = prepared
+    monkeypatch.setattr(runner, "prepare", lambda *_a: {"accepted": True})
+    monkeypatch.setattr(
+        evaluator_coverage,
+        "coverage_report",
+        lambda *_a: {"passed": True, "deferred_roots": 1, "reasons": []},
+    )
+    monkeypatch.setattr(runner, "_dataset", lambda *_a: {"accepted": True})
+
+    def forbidden(*_a, **_kw):
+        pytest.fail("qualified manifest must progress without waiting for zero deferred")
+
+    monkeypatch.setattr(runner, "generate", forbidden)
+    assert runner._prepare_recovery(run, config) == {"accepted": True}
+
+
+@pytest.mark.parametrize("interrupted_name", ["dataset-generated", "dataset"])
+def test_manifest_archive_resume_after_each_committed_rename(
+    prepared, monkeypatch, interrupted_name
+):
+    from open_shogi_training import evaluator_coverage
+
+    _, run, config, _, _ = prepared
+    data = run / "data"
+    calls = []
+
+    def preparation(*_args):
+        value = {"version": 2 if calls else 1}
+        for name in ("dataset", "dataset-generated"):
+            atomic(data / name / "manifest.json", encoded(value))
+        return value
+
+    monkeypatch.setattr(runner, "prepare", preparation)
+    monkeypatch.setattr(
+        evaluator_coverage,
+        "coverage_report",
+        lambda *_a: {
+            "passed": False,
+            "reasons": ["unique_new_train"],
+        },
+    )
+    monkeypatch.setattr(runner, "_dataset", lambda *_a: {"version": 2})
+
+    def supplement(*_a, **_kw):
+        calls.append(1)
+        return {"status": "complete"}
+
+    monkeypatch.setattr(runner, "generate", supplement)
+    rename = Path.rename
+
+    def interrupted(path, target):
+        result = rename(path, target)
+        if path == data / interrupted_name:
+            raise OSError("injected interruption after committed rename")
+        return result
+
+    monkeypatch.setattr(Path, "rename", interrupted)
+    with pytest.raises(OSError, match="injected interruption"):
+        runner._prepare_recovery(run, config)
+    monkeypatch.setattr(Path, "rename", rename)
+    assert runner._prepare_recovery(run, config) == {"version": 2}
+    assert len(calls) == 1
+    assert not (data / "manifest-supplement.json").exists()
+    archives = list((data / "manifest-attempts").glob("*/dataset/manifest.json"))
+    assert len(archives) == 1
+    assert json.loads(archives[0].read_text()) == {"version": 1}
+
+
+def test_generation_progress_uses_accepted_tasks_not_retry_heartbeats(prepared):
+    from open_shogi_training.evaluator_ledger import Ledger
+
+    _, run, _, _, _ = prepared
+    ledger = Ledger(run / "data")
+    key, _ = ledger.task({"game": 1, "ply": 1})
+    before = runner._progress_signature(run, "generate")
+    ledger.begin(key, 2_000_000)
+    assert runner._progress_signature(run, "generate") == before
+    ledger.finish(key, "accepted", result={"quality": "exact"})
+    assert runner._progress_signature(run, "generate") != before
+    ledger.close()
+
+
+def test_recovery_execution_requires_committed_migration(prepared):
+    _, run, config, _, _ = prepared
+    config["generation"]["recovery_policy"] = {"enabled": True}
+    config["recovery_from"] = {"run_id": "parent"}
+    with pytest.raises(FileNotFoundError):
+        runner._require_migration(run, config)
+    atomic(run / "data/inherited.json", encoded({"games": [0, 1]}))
+    atomic(
+        run / "migration.json",
+        encoded(
+            {
+                "run_sha256": digest(run / "run.json"),
+                "inherited_sha256": digest(run / "data/inherited.json"),
+            }
+        ),
+    )
+    runner._require_migration(run, config)
+    atomic(run / "data/inherited.json", encoded({"games": []}))
+    with pytest.raises(ValueError, match="artifact changed"):
+        runner._require_migration(run, config)

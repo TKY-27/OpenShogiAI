@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -118,6 +119,38 @@ def _validate_config(config: dict) -> None:
     _hash(generation["teacher_binary_sha256"])
     if generation.get("development_exclusions_path"):
         _hash(generation["development_exclusions_sha256"])
+    policy = generation.get("recovery_policy")
+    if policy:
+        if policy.get("schema") != "open_shogiai_label_recovery/v1":
+            raise ValueError("unknown label recovery contract")
+        for name, expected in (
+            ("main_nodes", 2_000_000),
+            ("hard_nodes", 32_000_000),
+            ("maximum_attempts_per_task", 2),
+            ("maximum_task_nodes", 34_000_000),
+            ("maximum_search_seconds", 60),
+            ("ready_seconds", 5),
+            ("stop_seconds", 1),
+            ("quit_seconds", 1),
+            ("startup_seconds", 10),
+            ("maximum_attempt_seconds", 75),
+            ("maximum_task_seconds", 150),
+            ("maximum_worker_restarts", 3),
+            ("maximum_supplemental_games", 192),
+            ("maximum_supplemental_per_family", 16),
+        ):
+            if policy.get(name) != expected:
+                raise ValueError(f"unreviewed recovery budget: {name}")
+        for name, expected in (
+            ("maximum_hard_attempts", 8192),
+            ("maximum_hard_seconds", 43200),
+            ("inherited_hard_attempts", 359),
+            ("inherited_hard_seconds", 2205.209),
+        ):
+            if policy.get(name) != expected:
+                raise ValueError(f"unreviewed shared hard-queue budget: {name}")
+        if policy.get("unique_data_goal") != config["unique_data_goal"]:
+            raise ValueError("recovery coverage cannot weaken the learning data goal")
     training = config["training"]
     if training["device"] != "cpu":
         raise ValueError("only the measured CPU training route is enabled")
@@ -185,7 +218,8 @@ def _validate_config(config: dict) -> None:
             machine.get("transitions")
             != {
                 "ready_for_luna": ["running"],
-                "running": ["stopped", "needs_astra", "awaiting_astra_review"],
+                "running": (["ready_for_luna"] if generation.get("recovery_policy") else [])
+                + ["stopped", "needs_astra", "awaiting_astra_review"],
                 "stopped": ["running"],
                 "needs_astra": [],
                 "awaiting_astra_review": [],
@@ -313,6 +347,43 @@ def seal(config_path: Path) -> dict:
         raise ValueError("run already exists; use status/start to resume its immutable contract")
     generation = config["generation"]
     inputs = {"source_config": _reference(config_path)}
+    inherited = {}
+    parent = (
+        config.get("recovery_from")
+        if generation.get("defense_campaign") and generation.get("recovery_policy")
+        else None
+    )
+    if parent:
+        parent_run = inside(parent["path"])
+        with _lease(parent_run):
+            parent_state = _state(parent_run)
+            if status(parent_run)["process_alive"] or _residual_stage_group(parent_run) is not None:
+                raise ValueError("parent run still active; recovery requires a stopped writer")
+            if parent_state["status"] != "needs_astra" or parent_state.get("stage") != "generate":
+                raise ValueError("recovery requires the reviewed stopped generation stage")
+            if (parent_run / "fit").exists():
+                raise ValueError("generation recovery cannot migrate training state")
+            inputs["parent_contract"] = _reference(parent_run / "run.json", parent["run_sha256"])
+            inputs["parent_state"] = _reference(parent_run / "state.json", parent["state_sha256"])
+            inputs["parent_inventory"] = _reference(
+                inside(parent["inventory_path"]), parent["inventory_sha256"]
+            )
+            inputs["parent_compatibility"] = _reference(
+                inside(parent["compatibility_path"]), parent["compatibility_sha256"]
+            )
+            hard_evidence = generation["recovery_policy"]["hard_budget_evidence"]
+            inputs["parent_hard_budget"] = _reference(
+                inside(hard_evidence["path"]), hard_evidence["sha256"]
+            )
+            parent_config = _json(parent_run / "run.json")
+            if parent_config["run_id"] != parent["run_id"]:
+                raise ValueError("parent run ID mismatch")
+            inherited = {
+                key: parent_state[key] for key in ("began_at", "initial_swap_bytes", "retries")
+            }
+            inherited["parent_run_id"] = parent["run_id"]
+            inherited["parent_state_sha256"] = parent["state_sha256"]
+
     for name, path_key, hash_key in (
         ("leaf", "leaf_path", "leaf_sha256"),
         ("teacher_config", "teacher_config_path", "teacher_config_sha256"),
@@ -413,6 +484,7 @@ def seal(config_path: Path) -> dict:
                     "run_id": config["run_id"],
                     "pid": None,
                     "run_sha256": receipt["run_sha256"],
+                    **inherited,
                 }
             ),
         )
@@ -658,6 +730,14 @@ def status(run: Path) -> dict:
     if value["lease_held"] and not value["process_alive"]:
         value["supervision"] = "supervisor_missing; retained stage lease prevents another writer"
     value["completed_trajectories"] = len(list((run / "data" / "games").glob("*.receipt.json")))
+    progress_path = run / "data" / "generation-progress.json"
+    if progress_path.exists():
+        value["generation"] = _json(progress_path)
+        value["completed_trajectories"] = value["generation"].get(
+            "games", value["completed_trajectories"]
+        )
+    valid_files = list((run / "data" / "games").glob("*.receipt.json"))
+    value["last_valid_output_at"] = max((p.stat().st_mtime for p in valid_files), default=None)
     if (run / "fit" / "progress.json").exists():
         value["training"] = _json(run / "fit" / "progress.json")
     if (run / "data" / "dataset" / "manifest.json").exists():
@@ -677,8 +757,71 @@ def _clear_stop(run: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def start(run: Path) -> dict:
+def _require_migration(run: Path, config: dict) -> None:
+    if config.get("recovery_from") and config["generation"].get("recovery_policy"):
+        receipt = _json(run / "migration.json")
+        if receipt.get("run_sha256") != digest(run / "run.json"):
+            raise ValueError("migration belongs to another run")
+        _reference(run / "data/inherited.json", receipt["inherited_sha256"])
+
+
+def migrate(run: Path) -> dict:
+    """One idempotent parent-shard and failure-history import before any execution."""
+    from .defense_scenarios import assignment, rotate_sfen
+    from .evaluator_data import START
+    from .evaluator_ledger import export_queue, import_failure, migrate_generation
+
+    with _lease(run):
+        config = verify(run)
+        if (run / "migration.json").exists():
+            _require_migration(run, config)
+            return _json(run / "migration.json")
+        if _state(run)["status"] != "ready_for_luna" or _residual_stage_group(run) is not None:
+            raise ValueError("migration requires a new idle successor")
+        parent = config["recovery_from"]
+        parent_run = inside(parent["path"])
+        with _lease(parent_run):
+            if status(parent_run)["process_alive"] or _residual_stage_group(parent_run) is not None:
+                raise ValueError("parent writer is active")
+            generation = config["generation"]
+            report = migrate_generation(ROOT, parent_run / "data", run / "data", generation)
+            failures = []
+            for ref in parent["failures"]:
+                path = inside(ref["path"])
+                _reference(path, ref["sha256"])
+                evidence = _json(path)
+                if (
+                    evidence["game"],
+                    evidence["ply"],
+                    evidence["branch"],
+                    evidence["error_type"],
+                ) != (211, 116, "root", "USIIncompleteDepthError"):
+                    raise ValueError("failure is outside the reviewed recovery task")
+                failures.append(path)
+            if len(failures) != 2:
+                raise ValueError("both consumed teacher attempts are required")
+            _, variant = assignment(generation, 211)
+            imported = import_failure(
+                run / "data", generation, failures, rotate_sfen(START) if variant % 2 else START
+            )
+            atomic(run / "data/generation.json", encoded(generation))
+            export_queue(run / "data")
+            receipt = {
+                "schema": "open_shogiai_recovery_migration/v1",
+                "run_sha256": digest(run / "run.json"),
+                "inherited_sha256": digest(run / "data/inherited.json"),
+                "inherited_games": len(report["games"]),
+                "imported_failure": imported,
+            }
+            atomic(run / "migration.json", encoded(receipt))
+            return receipt
+
+
+def start(run: Path, *, pause_after_new_games: int | None = None) -> dict:
     config = verify(run)
+    _require_migration(run, config)
+    if pause_after_new_games is not None:
+        _number(pause_after_new_games, 1, 12, "probe trajectory bound")
     try:
         with _lease(run) as lease:
             current = _state(run)
@@ -710,6 +853,11 @@ def start(run: Path) -> dict:
                         str(run.relative_to(ROOT)),
                         "--lease-fd",
                         str(lease),
+                        *(
+                            ["--pause-after-new-games", str(pause_after_new_games)]
+                            if pause_after_new_games is not None
+                            else []
+                        ),
                     ],
                     cwd=ROOT,
                     stdout=log,
@@ -780,6 +928,23 @@ def _progress_signature(run: Path, stage: str) -> tuple:
             raise ValueError("unexpected symlink in stage output")
         if stat.S_ISREG(info.st_mode):
             observed.append((info.st_size, info.st_mtime_ns))
+    if stage == "generate" and (run / "data/tasks.sqlite3").exists():
+        with sqlite3.connect(
+            f"file:{inside(run / 'data/tasks.sqlite3')}?mode=ro", uri=True, timeout=3
+        ) as db:
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+            ).fetchone()
+            count, updated = (
+                db.execute(
+                    "SELECT count(*),max(updated) FROM tasks WHERE status='accepted'"
+                ).fetchone()
+                if exists
+                else (0, None)
+            )
+        # Only accepted task publication is progress; retry/heartbeat writes are not.
+        if count:
+            observed.append((count, int(updated * 1_000_000_000)))
     return (
         len(observed),
         sum(size for size, _ in observed),
@@ -801,6 +966,14 @@ def _dataset(run: Path, config: dict) -> dict:
                 raise ValueError("dataset references must be local file names")
             inside(directory / path)  # Reject links before prepare reads the referenced bytes.
     result = prepare(ROOT, run / "data", config["generation"], config["excluded_development_sfens"])
+    if config["generation"].get("recovery_policy"):
+        from .evaluator_coverage import coverage_report
+
+        coverage = coverage_report(run / "data", config["generation"], result)
+        if not coverage["passed"]:
+            raise ValueError(
+                "finite recovery coverage insufficient: " + ",".join(coverage["reasons"])
+            )
     if config["generation"].get("defense_campaign"):
         goal = config["unique_data_goal"]
         if (
@@ -822,6 +995,53 @@ def _dataset(run: Path, config: dict) -> dict:
             int((train_groups == i).sum()) < goal["minimum_train_rows_per_group"] for i in range(4)
         ):
             raise ValueError("insufficient training stratum; refuse small-set exposure inflation")
+    return result
+
+
+def _prepare_recovery(run: Path, config: dict) -> dict:
+    """Freeze each attempted manifest; supplement once within the sealed range."""
+    from .evaluator_coverage import coverage_report
+
+    data = run / "data"
+    generation = config["generation"]
+    transaction = data / "manifest-supplement.json"
+    if transaction.exists():
+        pending = _json(transaction)
+        _hash(pending["manifest_sha256"])
+        archive = inside(data / "manifest-attempts" / pending["manifest_sha256"])
+    else:
+        manifest = prepare(ROOT, data, generation, config["excluded_development_sfens"])
+        coverage = coverage_report(data, generation, manifest)
+        if coverage["passed"]:
+            return _dataset(run, config)
+        manifest_sha = digest(data / "dataset/manifest.json")
+        archive = data / "manifest-attempts" / manifest_sha
+        archive.mkdir(parents=True, exist_ok=True)
+        pending = {"manifest_sha256": manifest_sha, "phase": "archiving", "coverage": coverage}
+        atomic(transaction, encoded(pending))
+    if pending["phase"] == "archiving":
+        # Persist the journal before either rename. Existing destinations mean that
+        # individual rename committed before interruption; never re-create that source.
+        for name in ("dataset-generated", "dataset"):
+            source, destination = data / name, archive / name
+            if destination.exists():
+                if source.exists():
+                    raise ValueError("manifest archive has conflicting source and destination")
+                continue
+            if source.exists():
+                source.rename(destination)
+        _reference(archive / "dataset/manifest.json", pending["manifest_sha256"])
+        atomic(archive / "coverage.json", encoded(pending["coverage"]))
+        pending["phase"] = "supplementing"
+        atomic(transaction, encoded(pending))
+    if pending["phase"] != "supplementing":
+        raise ValueError("unknown manifest supplement transaction")
+    result = generate(ROOT, data, generation, supplemental=True)
+    if result.get("status") != "complete":
+        raise ValueError("finite supplemental generation exhausted: " + str(result.get("status")))
+    prepare(ROOT, data, generation, config["excluded_development_sfens"])
+    result = _dataset(run, config)
+    transaction.unlink()
     return result
 
 
@@ -902,6 +1122,8 @@ def _completion_artifacts(run: Path, stage: str) -> list[dict]:
         "audit": [run / "model-audit.json", run / "development-test.json"],
         "arena": [run / "arena" / "arena.json", run / "arena" / "plan.json"],
     }[stage]
+    if stage == "generate" and _json(run / "run.json")["generation"].get("recovery_policy"):
+        paths.append(run / "data/recovery-queue.json")
     if stage == "arena":
         for attempt in _json(run / "arena" / "arena.json")["attempts"]:
             paths.extend(
@@ -958,6 +1180,11 @@ def _run_stage(
                     stage,
                     "--lease-fd",
                     str(lease),
+                    *(
+                        ["--pause-after-new-games", str(state["probe_new_games"])]
+                        if state.get("probe_new_games") is not None
+                        else []
+                    ),
                 ],
                 cwd=ROOT,
                 stdout=log,
@@ -1010,7 +1237,7 @@ def _run_stage(
                 time.sleep(limits["monitor_interval_seconds"])
             if failure is None and (run / "STOP").exists():
                 failure = "requested_stop"
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.SubprocessError) as error:
         failure = f"supervision_error:{type(error).__name__}:{error}"
     finally:
         if process is not None:
@@ -1024,7 +1251,13 @@ def _run_stage(
                     failure = "owned_process_cleanup_incomplete"
                 else:
                     _mark_group_cleaned(run, process)
-            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                sqlite3.Error,
+                subprocess.SubprocessError,
+            ) as error:
                 failure = f"cleanup_error:{type(error).__name__}:{error}"
     return (
         process.returncode if process is not None and process.returncode is not None else -1,
@@ -1032,9 +1265,12 @@ def _run_stage(
     )
 
 
-def work(run: Path, inherited_fd: int | None = None) -> dict:
+def work(
+    run: Path, inherited_fd: int | None = None, *, pause_after_new_games: int | None = None
+) -> dict:
     with _lease(run, inherited_fd) as lease:
         config = verify(run)
+        _require_migration(run, config)
         residual = _residual_stage_group(run)
         if residual is not None:
             state = _json(run / "state.json")
@@ -1071,6 +1307,9 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
             "retries": retries,
             "status": "running",
         }
+        if pause_after_new_games is not None:
+            _number(pause_after_new_games, 1, 12, "probe trajectory bound")
+            state["probe_new_games"] = pause_after_new_games
         if state["process_identity"] is None:
             raise RuntimeError("supervisor process identity unavailable")
         previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
@@ -1079,6 +1318,9 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
         try:
             atomic(run / "state.json", encoded(state))
             for stage in STAGES:
+                if pause_after_new_games is not None and stage != "generate":
+                    state.update(status="ready_for_luna", reason="generation_probe_complete")
+                    break
                 verify(run)
                 if (run / "STOP").exists():
                     state.update(status="stopped", reason="requested_stop")
@@ -1105,6 +1347,16 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
                             reason=failure or f"stage_exit_{returncode}",
                         )
                         break
+                    if pause_after_new_games is not None and stage == "generate":
+                        pause = _json(run / "generation-probe.json")
+                        if pause["run_sha256"] != digest(run / "run.json"):
+                            raise ValueError("probe receipt belongs to another run")
+                        state.update(
+                            status="ready_for_luna",
+                            reason="generation_probe_complete",
+                            generation=pause["result"],
+                        )
+                        break
                     _verify_completion(run, stage, config)
                     break
                 if state["status"] != "running":
@@ -1123,7 +1375,14 @@ def work(run: Path, inherited_fd: int | None = None) -> dict:
                     stage="complete",
                     completed_at=time.time(),
                 )
-        except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as error:
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            KeyError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as error:
             state.update(status="needs_astra", reason=f"{type(error).__name__}:{error}")
         finally:
             for sig, handler in previous_handlers.items():
@@ -1177,11 +1436,18 @@ def _candidate_review(run: Path) -> dict:
     return result
 
 
-def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
+def stage_run(
+    run: Path,
+    stage: str,
+    inherited_fd: int | None = None,
+    *,
+    pause_after_new_games: int | None = None,
+) -> dict:
     if stage not in STAGES:
         raise ValueError("unknown stage")
     with _lease(run, inherited_fd):
         config = verify(run)
+        _require_migration(run, config)
         state = _state(run)
         if state["status"] in {"needs_astra", "awaiting_astra_review", "awaiting_astra_browser"}:
             raise ValueError(
@@ -1197,11 +1463,31 @@ def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
         _register_stage_group(run, stage)
         generation = config["generation"]
         if stage == "generate":
+            if pause_after_new_games is not None:
+                _number(pause_after_new_games, 1, 12, "probe trajectory bound")
+                result = generate(
+                    ROOT, run / "data", generation, pause_after_new_games=pause_after_new_games
+                )
+                verify(run)
+                atomic(
+                    run / "generation-probe.json",
+                    encoded({"run_sha256": digest(run / "run.json"), "result": result}),
+                )
+                return result
             result = generate(ROOT, run / "data", generation)
-            if result.get("games") != generation["games"]:
+            if generation.get("recovery_policy"):
+                if result.get("status") != "complete":
+                    raise ValueError(
+                        "finite generation coverage exhausted: " + str(result.get("status"))
+                    )
+                _prepare_recovery(run, config)
+                result = _json(run / "data/generation-complete.json")
+            if not generation.get("recovery_policy") and result.get("games") != generation["games"]:
                 raise ValueError("generation stopped before the planned trajectory count")
         elif stage == "prepare":
             result = prepare(ROOT, run / "data", generation, config["excluded_development_sfens"])
+            if generation.get("recovery_policy"):
+                result = _dataset(run, config)
         else:
             _dataset(run, config)
             if stage == "train":
@@ -1301,18 +1587,27 @@ def stage_run(run: Path, stage: str, inherited_fd: int | None = None) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("seal", "start", "stop", "status", "work", "stage"))
+    parser.add_argument(
+        "command", choices=("seal", "migrate", "start", "probe", "stop", "status", "work", "stage")
+    )
     parser.add_argument("path")
     parser.add_argument("stage", nargs="?", choices=STAGES)
     parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--pause-after-new-games", type=int, default=None)
     args = parser.parse_args()
     path = inside(args.path)
     if args.command == "seal":
         result = seal(path)
+    elif args.command == "migrate":
+        result = migrate(path)
     elif args.command == "stage":
-        result = stage_run(path, args.stage, args.lease_fd)
+        result = stage_run(
+            path, args.stage, args.lease_fd, pause_after_new_games=args.pause_after_new_games
+        )
     elif args.command == "work":
-        result = work(path, args.lease_fd)
+        result = work(path, args.lease_fd, pause_after_new_games=args.pause_after_new_games)
+    elif args.command == "probe":
+        result = start(path, pause_after_new_games=args.pause_after_new_games or 1)
     else:
         result = {"start": start, "stop": stop, "status": status}[args.command](path)
     print(json.dumps(result, ensure_ascii=False, allow_nan=False), flush=True)

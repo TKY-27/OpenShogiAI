@@ -1,7 +1,7 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "defense-20260912-main-r1",
-  "output": "local/runs/defense-20260912/main",
+  "run_id": "defense-20260912-recovery-r2",
+  "output": "local/runs/defense-20260912/recovery-r2",
   "seed": 20260912,
   "generation": {
     "first_game": 0,
@@ -226,6 +226,53 @@
       },
       "maximum_unlabeled_focus": 200,
       "minimum_focus_completion_rate": 0.95
+    },
+    "recovery_policy": {
+      "schema": "open_shogiai_label_recovery/v1",
+      "parent_generation_sha256": "20b7d9b2972e6cc2161c07eecd5e3336055821a5c07aa85d05c3c162fa02664b",
+      "main_nodes": 2000000,
+      "hard_nodes": 32000000,
+      "maximum_attempts_per_task": 2,
+      "maximum_attempt_seconds": 75,
+      "maximum_task_seconds": 150,
+      "maximum_task_nodes": 34000000,
+      "maximum_worker_restarts": 3,
+      "maximum_supplemental_games": 192,
+      "maximum_supplemental_per_family": 16,
+      "minimum_completed_per_family": 240,
+      "maximum_deferred_roots": 96,
+      "maximum_deferred_per_family": 8,
+      "minimum_focus_stratum_requests": 20,
+      "minimum_focus_stratum_completion_rate": 0.95,
+      "unique_data_goal": {
+        "expected_unique_positions": [
+          400000,
+          1200000
+        ],
+        "minimum_train_positions": 400000,
+        "minimum_new_train_positions": 150000,
+        "minimum_train_rows_per_group": 10000,
+        "minimum_evaluation_rows_per_group": 128,
+        "report_actual_counts": true,
+        "independence": "12 predefined scenario families; all variants/colors share family split; shared and old-r3 split symmetries excluded. Not independent human games."
+      },
+      "health_window_tasks": 32,
+      "health_failure_tasks": 24,
+      "health_minimum_games": 8,
+      "maximum_hard_attempts": 8192,
+      "maximum_hard_seconds": 43200,
+      "inherited_hard_attempts": 359,
+      "inherited_hard_seconds": 2205.209,
+      "hard_requested_node_ceiling": 262144000000,
+      "hard_budget_evidence": {
+        "path": "local/runs/defense-20260912/recovery-evidence/inherited-hard-budget.json",
+        "sha256": "66f4ac4a3514853f68e202d1dbb6d3cef4025249b84dc7b40e6c041f73dda74c"
+      },
+      "maximum_search_seconds": 60,
+      "ready_seconds": 5,
+      "stop_seconds": 1,
+      "quit_seconds": 1,
+      "startup_seconds": 10
     }
   },
   "training": {
@@ -317,6 +364,7 @@
         "running"
       ],
       "running": [
+        "ready_for_luna",
         "stopped",
         "needs_astra",
         "awaiting_astra_review"
@@ -333,12 +381,12 @@
   "operations": {
     "cwd": ".",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/main",
-    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/main",
-    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/main",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/main",
-    "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/main arena",
-    "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/main audit",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r2",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r2",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run start local/runs/defense-20260912/recovery-r2",
+    "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r2 arena",
+    "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r2 audit",
     "export": "best runtime export is atomically published by train; audit uses that checkpoint-bound export",
     "stages": [
       "generate",
@@ -347,29 +395,54 @@
       "audit",
       "arena"
     ],
-    "state": "local/runs/defense-20260912/main/state.json",
-    "best": "local/runs/defense-20260912/main/fit/best.osaval03",
-    "resume_checkpoint": "local/runs/defense-20260912/main/fit/resume.json",
-    "logs": "local/runs/defense-20260912/main/{supervisor.log,monitor.jsonl,*-0.log}",
-    "outputs": "local/runs/defense-20260912/main/data/dataset/manifest.json; local/runs/defense-20260912/main/development-test.json; local/runs/defense-20260912/main/arena/arena.json",
+    "state": "local/runs/defense-20260912/recovery-r2/state.json",
+    "best": "local/runs/defense-20260912/recovery-r2/fit/best.osaval03",
+    "resume_checkpoint": "local/runs/defense-20260912/recovery-r2/fit/resume.json",
+    "logs": "local/runs/defense-20260912/recovery-r2/{supervisor.log,monitor.jsonl,*-0.log}",
+    "outputs": "local/runs/defense-20260912/recovery-r2/data/dataset/manifest.json; local/runs/defense-20260912/recovery-r2/development-test.json; local/runs/defense-20260912/recovery-r2/arena/arena.json",
     "cleanup_allowlist": [
       "fit/checkpoint-*.pt older than latest two after hash/open-file check",
       "data/dataset-building incomplete owned staging after containment/link/open-file verification"
     ],
     "recovery": [
-      "requested STOP resumes same immutable config, source shards, optimizer/RNG/sampler/offset",
-      "one SIGTERM/SIGINT stage retry, no threshold change",
-      "incomplete teacher depth only: retry same depth once at 32M nodes with Clear_Hash, retain rejected output",
-      "Optional D16 incomplete at 32M is typed missing, never scalar fallback; retain rejected evidence, require >=95% completion and <=200 missing focus observations before training. Root D12 and all protocol/identity failures remain fatal."
+      "Resume valid parent shards and exact cursor under revision 2; preserve original deadline, swap baseline and retries. No training checkpoint exists before train.",
+      "Typed incomplete depth is excluded from labels and deferred to a finite fair hard queue; root incomplete alone never stops the run. Main 2M plus hard 32M share persistent two-attempt/34M-node/120-second task budget, including imported attempts.",
+      "Worker communication failure restarts only that worker within its persisted recovery budget. Independent-task health circuit and integrity/resource failures stop the affected stage.",
+      "Complete accepted manifests may retain bounded local deferrals; unmet coverage automatically uses sealed same-family supplementation then returns only the deficient stage to Astra.",
+      "Probe runs only generation through the supervised resume path and pauses ready_for_luna before preparation/training.",
+      "34M is the cumulative requested node budget; teacher node counters may overshoot their request. Persist observed nodes and enforce each 60-second wall deadline. Teacher circuit uses 24 failures in the latest 32 distinct tasks across at least 8 games."
     ],
     "return_to_astra": [
-      "any identity/lineage/protocol/numerical failure",
-      "resource limit or exhausted retry",
-      "insufficient unique data or group coverage",
+      "identity, split, corruption, numerical or illegal-move integrity failure",
+      "resource danger or independent-task teacher-health circuit",
+      "coverage remains insufficient after finite hard-queue and same-family supplementation",
       "awaiting_astra_review after valid fixed evaluation regardless of win rate"
     ],
     "acquisition": "All inputs already local; hash-pinned Apery 2.0.0 engine GPL-3.0 and separately licensed evaluation MIT; own generated trajectories. Verify sealed inputs before generation, seal actual dataset manifest during prepare; no additional public archive acquisition.",
     "cwd_identity": "OpenShogiAI Git root; absolute execution_cwd is bound in the ignored sealed run.json",
-    "review_result": "local/runs/defense-20260912/main/candidate-review.json"
+    "review_result": "local/runs/defense-20260912/recovery-r2/candidate-review.json",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run probe local/runs/defense-20260912/recovery-r2 --pause-after-new-games 1",
+    "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r2"
+  },
+  "contract_revision": 2,
+  "recovery_from": {
+    "run_id": "defense-20260912-main-r1",
+    "path": "local/runs/defense-20260912/main",
+    "run_sha256": "3d9cc476e58631f56e6e18323df50c2b547aa993a118b0b6fe577631ae69583b",
+    "state_sha256": "29d4ca21cb194e2ad680928f4004a738e2dd9011754366a873cc2db27b2bbf15",
+    "inventory_path": "local/runs/defense-20260912/recovery-evidence-r2/inventory.json",
+    "inventory_sha256": "1b29a86a37f9839b38df4f61cce24adbc804ddae61b020c1390645e90750137a",
+    "compatibility_path": "local/runs/defense-20260912/recovery-evidence/parent-label-compatibility.json",
+    "compatibility_sha256": "06ee97e7e0a692626ca1bfd560e373ad071b0407f52e552d47859f02767b61b9",
+    "failures": [
+      {
+        "path": "local/runs/defense-20260912/main/data/failures/000211-ply0116-root-59d4b9bf64004507b4fda5a9fc3d01cf.json",
+        "sha256": "cce115dd6b9f145f597fa6aca99292b3e3ecf866a1f7cce5d062c95985996c4c"
+      },
+      {
+        "path": "local/runs/defense-20260912/main/data/failures/000211-ply0116-root-feb0e95a401148549b4d4d422a109ceb.json",
+        "sha256": "ecde9b959f27c5d09b1d793188186905ccb2a09a1262d55b4d9328039f43bcd0"
+      }
+    ]
   }
 }

@@ -25,8 +25,10 @@ from open_shogi_training.labeling.usi import (
 from .helpers import make_fake_project
 
 
+@pytest.mark.parametrize("identity_unavailable", [False, True])
 def test_rss_monitor_preserves_a_process_exit_racing_with_measurement(
     monkeypatch: pytest.MonkeyPatch,
+    identity_unavailable: bool,
 ) -> None:
     class ExitingProcess:
         pid = 123
@@ -43,11 +45,15 @@ def test_rss_monitor_preserves_a_process_exit_racing_with_measurement(
             return self.returncode
 
     process = ExitingProcess()
-    monkeypatch.setattr(
-        usi_module,
-        "_teacher_process_tree_rss_bytes",
-        lambda _pid, *, retained_identities: (None, {}),
-    )
+
+    def measurement(_pid, *, retained_identities):
+        if identity_unavailable:
+            raise usi_module._USIRssIdentityUnavailableError(
+                "teacher process identity became unavailable"
+            )
+        return None, {}
+
+    monkeypatch.setattr(usi_module, "_teacher_process_tree_rss_bytes", measurement)
     monitor = usi_module._RssMonitor(
         process,
         process_start_identity="process-start",
@@ -62,7 +68,7 @@ def test_rss_monitor_preserves_a_process_exit_racing_with_measurement(
     assert process.returncode == 7
 
 
-@pytest.mark.parametrize("unavailable", [True, False])
+@pytest.mark.parametrize("unavailable", [True, False, "identity"])
 def test_live_teacher_rss_monitor_fails_closed_and_kills_on_unavailable_or_over_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -72,6 +78,10 @@ def test_live_teacher_rss_monitor_fails_closed_and_kills_on_unavailable_or_over_
 
     def measurement(leader_pid: int, *, retained_identities=None):
         assert retained_identities is not None
+        if unavailable == "identity":
+            raise usi_module._USIRssIdentityUnavailableError(
+                "teacher process identity became unavailable"
+            )
         if unavailable:
             return None, {}
         identity = usi_module._read_process_start_identity(leader_pid)
@@ -711,3 +721,108 @@ def test_terminal_opt_in_preserves_normal_multipv_labels(tmp_path):
         {"kind": "mate", "value": -3},
         {"kind": "cp", "value": -7},
     ]
+
+
+def test_fixed_depth_requires_native_verified_candidate_count() -> None:
+    candidate = parse_info_line(
+        "info depth 12 seldepth 20 nodes 20 score cp 1 pv 7g7f", expected_multipv=1
+    )
+    assert candidate is not None
+    with pytest.raises(usi_module.USIIncompleteDepthError, match="required exact MultiPV"):
+        usi_module._finish_search(
+            "bestmove 7g7f",
+            {1: candidate},
+            expected_multipv=3,
+            expected_candidates=3,
+            elapsed_ms=1,
+        )
+    result = usi_module._finish_search(
+        "bestmove 7g7f",
+        {1: candidate},
+        expected_multipv=3,
+        expected_candidates=1,
+        elapsed_ms=1,
+    )
+    usi_module._validate_completed_depth(result, 12, 100)
+
+
+@pytest.mark.parametrize("bound", ["lowerbound", "upperbound"])
+def test_fixed_depth_does_not_reuse_exact_score_superseded_by_bound(tmp_path, monkeypatch, bound):
+    config, _, _ = make_fake_project(tmp_path)
+    with USIEngine(config, tmp_path) as engine:
+        engine.identity = usi_module.USIIdentity("test", None, ("Clear_Hash",))
+        monkeypatch.setattr(engine, "new_game", lambda: None)
+        monkeypatch.setattr(engine, "_send", lambda _: None)
+        lines = iter(
+            [
+                "info depth 12 seldepth 20 nodes 20 multipv 1 score cp 1 pv 7g7f",
+                f"info depth 12 seldepth 20 nodes 21 multipv 1 score cp 2 {bound} pv 7g7f",
+                "bestmove 7g7f",
+            ]
+        )
+        monkeypatch.setattr(engine, "_readline", lambda *_: next(lines))
+        with pytest.raises(usi_module.USIIncompleteDepthError, match="required exact MultiPV"):
+            engine.analyze("state b - 1", depth=12, nodes=100, expected_candidates=1)
+        assert engine.pid is not None  # Complete bestmove consumed; no worker failure.
+        assert bound in engine.search_diagnostics["stdout_tail"]
+
+
+@pytest.mark.parametrize("error_type", [usi_module.USITimeoutError, USIProcessError])
+def test_single_attempt_transport_failure_closes_worker_without_hidden_retry(
+    tmp_path, monkeypatch, error_type
+):
+    config, _, _ = make_fake_project(tmp_path)
+    engine = USIEngine(config, tmp_path)
+    engine.start()
+    monkeypatch.setattr(engine, "new_game", lambda: None)
+    monkeypatch.setattr(engine, "_send", lambda _: None)
+    monkeypatch.setattr(engine, "_send_stop_after_timeout", lambda: None)
+
+    def fail(*_):
+        raise error_type("injected transport failure")
+
+    monkeypatch.setattr(engine, "_readline", fail)
+    with pytest.raises(error_type, match="injected transport"):
+        engine.analyze("state b - 1")
+    assert engine.pid is None
+    assert engine.restart_count == 0
+
+
+def test_original_root_failure_tail_is_incomplete_even_with_depth_twelve_info() -> None:
+    # Minimal immutable excerpt of game 211 / ply 116 (no private path or teacher asset).
+    # D12 upperbound is followed by Apery's final completed_depth=11 reprint.
+    lines = [
+        "info depth 12 seldepth 14 multipv 1 score cp -3380 nodes 2001030 pv 3b4c",
+        "info depth 12 seldepth 17 multipv 2 score cp -6984 nodes 2001030 pv 3e4f",
+        "info depth 12 seldepth 6 multipv 3 score mate -7 upperbound nodes 2001030 pv 3e2d",
+        "info depth 11 seldepth 6 multipv 3 score mate -7 nodes 2001030 pv 3e2d",
+        "info depth 11 seldepth 17 multipv 2 score cp -6984 nodes 2001030 pv 3e4f",
+        "info depth 11 seldepth 14 multipv 1 score cp -3380 nodes 2001030 pv 3b4c",
+    ]
+    candidates = {}
+    for line in lines:
+        candidate = parse_info_line(line, expected_multipv=3)
+        if candidate is not None:
+            candidates[candidate.multipv] = candidate
+    result = usi_module._finish_search(
+        "bestmove 3b4c", candidates, expected_multipv=3, expected_candidates=3, elapsed_ms=1266
+    )
+    with pytest.raises(usi_module.USIIncompleteDepthError, match="fixed depth"):
+        usi_module._validate_completed_depth(result, 12, 2_000_000)
+
+
+@pytest.mark.parametrize("previously_started", [False, True])
+def test_durable_caller_owns_restart_when_teacher_dies_between_tasks(tmp_path, previously_started):
+    config, _, _ = make_fake_project(tmp_path)
+    engine = USIEngine(config, tmp_path)
+    try:
+        if previously_started:
+            engine.start()
+            engine._process.kill()
+            engine._process.wait(timeout=1)
+        with pytest.raises(USIProcessError, match="durable caller must restart"):
+            engine.analyze("state b - 1", auto_start=False)
+        assert engine.restart_count == 0
+        assert engine._process is None or engine._process.poll() is not None
+    finally:
+        engine.close()

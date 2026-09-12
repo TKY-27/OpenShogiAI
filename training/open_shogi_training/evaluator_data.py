@@ -6,6 +6,7 @@ Raw observations are retained; mate scores never become scalar centipawns.
 
 from __future__ import annotations
 
+import errno
 import gzip
 import hashlib
 import json
@@ -22,6 +23,15 @@ from pathlib import Path
 
 import numpy as np
 
+from .evaluator_ledger import (
+    DeferredTaskError,
+    Ledger,
+    export_queue,
+    pack_result,
+    restore_rng,
+    task_identity,
+    unpack_result,
+)
 from .labeling.config import load_teacher_config
 from .labeling.usi import USIEngine, USIError, USIIncompleteDepthError, USITerminalResult
 from .phase10r_model import parse_sfen
@@ -48,11 +58,18 @@ def digest(path: Path) -> str:
 def atomic(path: Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("wb") as f:
-        f.write(value)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temporary, path)
+    for attempt in range(3):
+        try:
+            with temporary.open("wb") as f:
+                f.write(value)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, path)
+            return
+        except OSError as error:
+            if error.errno not in (errno.EAGAIN, errno.EINTR, errno.EBUSY) or attempt == 2:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def partition(game: int, seed: int) -> str:
@@ -142,6 +159,39 @@ def teacher_config(root: Path, config: dict):
     original = load_teacher_config(root / config["teacher_config_path"])
     return replace(
         original,
+        timeouts=replace(
+            original.timeouts,
+            ready_ms=int(
+                config.get("recovery_policy", {}).get(
+                    "ready_seconds", original.timeouts.ready_ms / 1000
+                )
+                * 1000
+            ),
+            startup_ms=int(
+                config.get("recovery_policy", {}).get(
+                    "startup_seconds", original.timeouts.startup_ms / 1000
+                )
+                * 1000
+            ),
+            stop_ms=int(
+                config.get("recovery_policy", {}).get(
+                    "stop_seconds", original.timeouts.stop_ms / 1000
+                )
+                * 1000
+            ),
+            quit_ms=int(
+                config.get("recovery_policy", {}).get(
+                    "quit_seconds", original.timeouts.quit_ms / 1000
+                )
+                * 1000
+            ),
+            search_ms=int(
+                config.get("recovery_policy", {}).get(
+                    "maximum_search_seconds", original.timeouts.search_ms / 1000
+                )
+                * 1000
+            ),
+        ),
         binary_sha256=config["teacher_binary_sha256"],
         threads=1,
         hash_mb=64,
@@ -194,10 +244,111 @@ def _validated_teacher_terminal(result: USITerminalResult, state: dict, ply: int
     }
 
 
+def _ledger_observation(teacher, state, *, root, output, config, game, ply, branch, moves, records):
+    from .labeling.usi import USIProcessError, USIProtocolError, USIResourceError, USITimeoutError
+
+    ledger = Ledger(output)
+    key, saved = ledger.task(task_identity(config, game, ply, branch, state, moves))
+    try:
+        if saved["status"] == "accepted":
+            result = unpack_result(saved["result"])
+            return result, _validated_teacher_terminal(result, state, ply) if isinstance(
+                result, USITerminalResult
+            ) else None
+        if saved["status"] == "deferred":
+            raise DeferredTaskError(key)
+        attempts = len(saved["attempts"])
+        if attempts >= 2:
+            ledger.finish(key, "deferred")
+            raise DeferredTaskError(key)
+        nodes = (
+            config["teacher_retry_nodes"]
+            if any(a["outcome"] == "USIIncompleteDepthError" for a in saved["attempts"])
+            else config["teacher_nodes"]
+        )
+        try:
+            ledger.begin(key, nodes, policy=config["recovery_policy"])
+        except DeferredTaskError as error:
+            raise DeferredTaskError(key) from error
+        began = time.monotonic()
+        try:
+            result = teacher.analyze(
+                state["sfen"],
+                nodes=nodes,
+                depth=config["teacher_depth"],
+                expected_candidates=min(3, len(state["successors"])),
+                auto_start=False,
+            )
+            terminal = (
+                _validated_teacher_terminal(result, state, ply)
+                if isinstance(result, USITerminalResult)
+                else None
+            )
+            if not terminal:
+                legal = {child["move"] for child in state["successors"]}
+                if any(c.pv[0] not in legal for c in result.candidates):
+                    raise ValueError("teacher proposed illegal move")
+            ledger.finish(
+                key,
+                "accepted",
+                result=pack_result(result),
+                evidence={"outcome": "accepted", "elapsed_s": time.monotonic() - began},
+            )
+            return result, terminal
+        except USIResourceError:
+            raise
+        except (USIIncompleteDepthError, USIProcessError, USITimeoutError) as error:
+            status = "hard" if attempts == 0 else "deferred"
+            ledger.finish(
+                key,
+                status,
+                evidence={
+                    "outcome": type(error).__name__,
+                    "elapsed_s": time.monotonic() - began,
+                    "stdout_tail": getattr(error, "stdout_tail", "")[-16384:],
+                    "stderr_tail": getattr(error, "stderr_tail", "")[-8192:],
+                    "bestmove": getattr(error, "bestmove_line", None),
+                },
+            )
+            if not isinstance(error, USIIncompleteDepthError):
+                teacher.close()
+                while True:
+                    restarts = ledger.increment("worker_restarts")
+                    if restarts > config["recovery_policy"]["maximum_worker_restarts"]:
+                        raise USIProcessError("worker recovery budget exhausted") from error
+                    try:
+                        teacher.start()
+                        break
+                    except (USIProcessError, USITimeoutError):
+                        teacher.close()  # Only typed connection failures consume another slot.
+            ledger.check_health()
+            raise DeferredTaskError(key) from error
+        except (USIProtocolError, ValueError) as error:
+            ledger.finish(
+                key, "failed", evidence={"outcome": type(error).__name__, "error": str(error)}
+            )
+            raise
+    finally:
+        ledger.close()
+
+
 def _teacher_observation(
     teacher, state, *, root, output, config, game, ply, branch, moves, records
 ):
     """Keep rejected teacher evidence before propagating its fail-closed exception."""
+    if config.get("recovery_policy"):
+        return _ledger_observation(
+            teacher,
+            state,
+            root=root,
+            output=output,
+            config=config,
+            game=game,
+            ply=ply,
+            branch=branch,
+            moves=moves,
+            records=records,
+        )
     try:
         if config.get("teacher_depth") is not None:
             result = teacher.analyze_with_retry(
@@ -271,6 +422,21 @@ def _optional_focus_observation(*args, **kwargs):
     """Only an exhausted optional depth budget becomes explicit missing evidence."""
     try:
         return _teacher_observation(*args, **kwargs)
+    except DeferredTaskError:
+        # Finish the bounded optional candidate group before its immutable shard commit.
+        # Both attempts are charged in the same ledger; no outer retry resets them.
+        try:
+            return _teacher_observation(*args, **kwargs)
+        except DeferredTaskError as exhausted:
+            ledger = Ledger(kwargs["output"])
+            saved = ledger.get(str(exhausted))
+            ledger.close()
+            return None, {
+                "status": "unlabeled_deferred",
+                "ledger_task": str(exhausted),
+                "failure_kind": saved["attempts"][-1]["outcome"],
+                "recovery": "not_attempted",
+            }
     except USIIncompleteDepthError as error:
         return None, {
             "status": "unlabeled_incomplete_depth",
@@ -295,11 +461,21 @@ def _terminal_counts(records: list[dict]) -> dict[str, int]:
 
 def _generate_group(root_name: str, output_name: str, config: dict, games: list[int]) -> list[dict]:
     root, output = Path(root_name), Path(output_name)
+    if all((output / "games" / f"{game:06d}.json.receipt.json").exists() for game in games):
+        reports = []
+        for game in games:
+            target = output / "games" / f"{game:06d}.json.gz"
+            saved = json.loads(target.with_suffix(".receipt.json").read_text())
+            if digest(target) != saved["sha256"]:
+                raise ValueError("completed trajectory corrupted")
+            reports.append(saved)
+        return reports
     reports = []
     unlabeled_in_worker = 0
     replay = Replay(root, config)
     campaign = config.get("defense_campaign")
     probe, branch_replay = None, None
+    ledger = Ledger(output) if config.get("recovery_policy") else None
     try:
         if campaign:
             from .defense_scenarios import R3Probe
@@ -333,23 +509,51 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                     prefix = [rotate_move(m) if variant % 2 else m for m in family["moves"]]
                 state = replay.ask(reset=initial, successors=True)
                 records, moves, trajectory_outcome = [], [], None
-                for ply in range(config["max_plies"]):
+                checkpoint = ledger.load_checkpoint(game) if ledger else None
+                first_ply = 0
+                if checkpoint:
+                    records, moves = checkpoint["records"], checkpoint["moves"]
+                    rng.setstate(restore_rng(checkpoint["rng"]))
+                    for move in moves:
+                        state = replay.ask(movement=move, successors=True)
+                    if state["sfen"] != checkpoint["sfen"]:
+                        raise ValueError("checkpoint replay/history mismatch")
+                    first_ply = checkpoint["ply"]
+                deferred = False
+                for ply in range(first_ply, config["max_plies"]):
+                    if ledger:
+                        ledger.checkpoint(
+                            game,
+                            {
+                                "records": records,
+                                "moves": moves,
+                                "rng": rng.getstate(),
+                                "ply": ply,
+                                "sfen": state["sfen"],
+                                "initial_sfen": initial,
+                                "status": "pending",
+                            },
+                        )
                     if (output / "STOP").exists():
                         raise InterruptedError("requested stop; completed trajectories retained")
                     if state["terminal"] != "None":
                         break
-                    result, terminal = _teacher_observation(
-                        teacher,
-                        state,
-                        root=root,
-                        output=output,
-                        config=config,
-                        game=game,
-                        ply=ply,
-                        branch="root",
-                        moves=moves,
-                        records=records,
-                    )
+                    try:
+                        result, terminal = _teacher_observation(
+                            teacher,
+                            state,
+                            root=root,
+                            output=output,
+                            config=config,
+                            game=game,
+                            ply=ply,
+                            branch="root",
+                            moves=moves,
+                            records=records,
+                        )
+                    except DeferredTaskError:
+                        deferred = True
+                        break
                     if terminal is not None:
                         records.append(
                             {
@@ -397,11 +601,15 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                                 campaign or weak["move"] not in {c.pv[0] for c in result.candidates}
                             )
                         ):
-                            child_state = (
-                                branch_replay.ask(reset=weak["sfen"], successors=True)
-                                if campaign
-                                else {**weak, "sfen": weak["sfen"]}
-                            )
+                            if campaign:
+                                branch_replay.ask(reset=initial, successors=True)
+                                for history_move in moves:
+                                    branch_replay.ask(movement=history_move, successors=True)
+                                child_state = branch_replay.ask(
+                                    movement=weak["move"], successors=True
+                                )
+                            else:
+                                child_state = {**weak, "sfen": weak["sfen"]}
                             child_config = config
                             if campaign:
                                 child_config = {
@@ -421,7 +629,7 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                                 game=game,
                                 ply=ply + 1,
                                 branch="deviation",
-                                moves=moves,
+                                moves=[*moves, weak["move"]],
                                 records=[*records, record],
                             )
                             record["deviation"] = {
@@ -490,11 +698,15 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                             d = record.get("deviation")
                             missing = sum(
                                 isinstance(observation, dict)
-                                and observation.get("status") == "unlabeled_incomplete_depth"
+                                and observation.get("status")
+                                in ("unlabeled_incomplete_depth", "unlabeled_deferred")
                                 for observation in (d, d.get("recovery") if d else None)
                             )
                             unlabeled_in_worker += missing
-                            if unlabeled_in_worker > campaign["maximum_unlabeled_focus"]:
+                            if (
+                                not ledger
+                                and unlabeled_in_worker > campaign["maximum_unlabeled_focus"]
+                            ):
                                 atomic(
                                     output / f"focus-limit-{games[0]}.json",
                                     encoded(
@@ -523,6 +735,8 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                             raise ValueError("offline prefix no longer legal")
                     moves.append(choice)
                     state = replay.ask(movement=choice, successors=True)
+                if deferred:
+                    continue
                 raw = {
                     "schema": SCHEMA,
                     "game": game,
@@ -566,7 +780,8 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                         ).hexdigest(),
                         unlabeled_focus=sum(
                             isinstance(observation, dict)
-                            and observation.get("status") == "unlabeled_incomplete_depth"
+                            and observation.get("status")
+                            in ("unlabeled_incomplete_depth", "unlabeled_deferred")
                             for r in records
                             for d in [r.get("deviation")]
                             for observation in (d, d.get("recovery") if d else None)
@@ -585,6 +800,8 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
                 atomic(output / f"worker-{games[0]}.json", encoded(saved))
     finally:
         replay.close()
+        if ledger:
+            ledger.close()
         if probe is not None:
             probe.close()
         if branch_replay is not None:
@@ -592,7 +809,43 @@ def _generate_group(root_name: str, output_name: str, config: dict, games: list[
     return reports
 
 
-def generate(root: Path, output: Path, config: dict) -> dict:
+def _drain_hard_queue(root: Path, output: Path, config: dict):
+    for _round in range(config["max_plies"]):
+        ledger = Ledger(output)
+        pending = list(
+            ledger.db.execute(
+                "SELECT DISTINCT json_extract(identity,'$.game') FROM tasks "
+                "WHERE status='hard' AND json_extract(identity,'$.branch')='root'"
+            )
+        )
+        ledger.close()
+        if not pending:
+            break
+        # Interleave defense/attack with other groups, retaining ascending order in each bucket.
+        priority, ordinary = [], []
+        for (game,) in pending:
+            from .defense_scenarios import assignment
+
+            family, _ = assignment(config, game)
+            (priority if family["group"] in ("defense", "attack_end") else ordinary).append(game)
+        hard_games = []
+        while priority or ordinary:
+            if priority:
+                hard_games.append(priority.pop(0))
+            if ordinary:
+                hard_games.append(ordinary.pop(0))
+        for game in hard_games:
+            _generate_group(str(root), str(output), config, [game])
+
+
+def generate(
+    root: Path,
+    output: Path,
+    config: dict,
+    *,
+    pause_after_new_games: int | None = None,
+    supplemental: bool = False,
+) -> dict:
     for path_key, sha_key in [
         ("replay_path", "replay_sha256"),
         ("leaf_path", "leaf_sha256"),
@@ -610,24 +863,63 @@ def generate(root: Path, output: Path, config: dict) -> dict:
         raise ValueError("generation config changed; new run required")
     atomic(identity, encoded(config))
     start = config.get("first_game", 0)
-    expected = {f"{game:06d}.json.gz" for game in range(start, start + config["games"])}
+    limit = config["games"] + config.get("recovery_policy", {}).get("maximum_supplemental_games", 0)
+    expected = {f"{game:06d}.json.gz" for game in range(start, start + limit)}
     if any(p.name not in expected for p in (output / "games").glob("*.json.gz")):
         raise ValueError("unexpected trajectory outside the sealed generation range")
-    groups = [
-        list(range(start + i, start + config["games"], config["workers"]))
-        for i in range(config["workers"])
-    ]
-    all_reports = []
-    with ProcessPoolExecutor(max_workers=config["workers"]) as pool:
-        futures = [
-            pool.submit(_generate_group, str(root), str(output), config, g) for g in groups if g
+    if config.get("recovery_policy"):
+        all_reports = []
+        new_games = 0
+        # Main tasks get one finite pass before hard tasks; every queued game gets a turn.
+        ranges = [list(range(start, start + config["games"]))]
+        for games in ranges:
+            for game in games:
+                present = (output / "games" / f"{game:06d}.json.receipt.json").exists()
+                reports = _generate_group(str(root), str(output), config, [game])
+                all_reports.extend(reports)
+                new_games += bool(reports) and not present
+                if pause_after_new_games is not None and new_games >= pause_after_new_games:
+                    ledger = Ledger(output)
+                    progress = {
+                        "status": "paused",
+                        "games": len(list((output / "games").glob("*.receipt.json"))),
+                        "tasks": ledger.summary(),
+                    }
+                    ledger.close()
+                    export_queue(output)
+                    atomic(output / "generation-progress.json", encoded(progress))
+                    return progress
+        _drain_hard_queue(root, output, config)
+        from .evaluator_coverage import coverage_report
+
+        export_queue(output)
+        coverage = coverage_report(output, config)
+        if supplemental or not coverage.get("passed", coverage.get("eligible", False)):
+            supplemental = config["recovery_policy"].get("maximum_supplemental_games", 192)
+            for game in range(start + config["games"], start + config["games"] + supplemental):
+                _generate_group(str(root), str(output), config, [game])
+            _drain_hard_queue(root, output, config)
+            export_queue(output)
+            coverage = coverage_report(output, config)
+        all_reports = [
+            json.loads(p.read_text()) for p in sorted((output / "games").glob("*.receipt.json"))
         ]
-        for future in as_completed(futures):
-            try:
-                all_reports.extend(future.result())
-            except BaseException:
-                (output / "STOP").touch()
-                raise
+    else:
+        groups = [
+            list(range(start + i, start + config["games"], config["workers"]))
+            for i in range(config["workers"])
+        ]
+        all_reports = []
+        with ProcessPoolExecutor(max_workers=config["workers"]) as pool:
+            futures = [
+                pool.submit(_generate_group, str(root), str(output), config, g) for g in groups if g
+            ]
+            for future in as_completed(futures):
+                try:
+                    all_reports.extend(future.result())
+                except BaseException:
+                    (output / "STOP").touch()
+                    raise
     report = {
         "schema": SCHEMA,
         "games": len(all_reports),
@@ -665,7 +957,17 @@ def generate(root: Path, output: Path, config: dict) -> dict:
                 "they are not independent human games."
             ),
         )
-    if {r["game"] for r in all_reports} != set(range(start, start + config["games"])):
+    if config.get("recovery_policy"):
+        report["coverage"] = coverage
+        report["status"] = (
+            "complete"
+            if coverage.get("passed", coverage.get("eligible", False))
+            else "coverage_exhausted"
+        )
+        if report["status"] != "complete":
+            atomic(output / "generation-progress.json", encoded(report))
+            return report
+    elif {r["game"] for r in all_reports} != set(range(start, start + config["games"])):
         raise ValueError("generation did not complete its exact trajectory set")
     atomic(output / "generation-complete.json", encoded(report))
     return report
@@ -684,7 +986,7 @@ def _observations(game: dict):
             position_hash(observation["sfen"])
             for observation in (deviation, recovery)
             if isinstance(observation, dict)
-            and observation.get("status") == "unlabeled_incomplete_depth"
+            and observation.get("status") in ("unlabeled_incomplete_depth", "unlabeled_deferred")
         }
         for c in row["candidates"]:
             if c["child_terminal"] != "None" or position_hash(c["child_sfen"]) in masked:
@@ -697,13 +999,16 @@ def _observations(game: dict):
                 index,
                 c["pv"][0],
             )
-        if row["deviation"] and row["deviation"].get("status") != "unlabeled_incomplete_depth":
+        if row["deviation"] and row["deviation"].get("status") not in (
+            "unlabeled_incomplete_depth",
+            "unlabeled_deferred",
+        ):
             d = row["deviation"]
             score = d["terminal_outcome"] if d.get("terminal_outcome") is not None else d["score"]
             yield d["sfen"], score, "deviation", row["ply"] + 1, index, d["move"]
-            if (
-                isinstance(d.get("recovery"), dict)
-                and d["recovery"].get("status") != "unlabeled_incomplete_depth"
+            if isinstance(d.get("recovery"), dict) and d["recovery"].get("status") not in (
+                "unlabeled_incomplete_depth",
+                "unlabeled_deferred",
             ):
                 r = d["recovery"]
                 yield r["sfen"], r["score"], "recovery", row["ply"] + 2, index, r["reply"]
@@ -733,6 +1038,10 @@ def _prepare(
         raise ValueError("preparation generation config changed")
     start = config.get("first_game", 0)
     expected_games = set(range(start, start + config["games"]))
+    if config.get("recovery_policy"):
+        expected_games = {
+            json.loads(p.read_text())["game"] for p in (output / "games").glob("*.receipt.json")
+        }
     actual_paths = {p.name for p in (output / "games").glob("*.json.gz")}
     if actual_paths != {f"{game:06d}.json.gz" for game in expected_games}:
         raise ValueError("source trajectory set incomplete or contains unexpected games")

@@ -74,12 +74,16 @@ class USIResourceError(USIProcessError):
     category = "memory_limit"
 
 
+class _USIRssIdentityUnavailableError(USIResourceError):
+    """The process-table row vanished before its start identity could be read."""
+
+
 class USIProtocolError(USIError):
     category = "protocol"
 
 
 class USIIncompleteDepthError(USIProtocolError):
-    """No labels accepted; a caller may retry its sealed larger node ceiling once."""
+    """Recoverable incomplete label; the durable caller owns all retry budgets."""
 
     category = "incomplete_depth"
 
@@ -117,6 +121,7 @@ class USICandidate:
     depth: int
     seldepth: int
     nodes: int
+    bound: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -126,6 +131,7 @@ class USICandidate:
             "depth": self.depth,
             "seldepth": self.seldepth,
             "nodes": self.nodes,
+            **({"bound": self.bound} if self.bound is not None else {}),
         }
 
 
@@ -319,6 +325,17 @@ class _RssMonitor:
                     self._process.pid,
                     retained_identities=self._observed_identities,
                 )
+            except _USIRssIdentityUnavailableError as error:
+                # ps and the identity read are separate observations. A normal
+                # exit between them is a process failure, not measured overflow.
+                # A still-live teacher remains fail-closed after the same bounded
+                # exit grace used when the complete process row disappears.
+                if self._process.poll() is None:
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        self._process.wait(timeout=_RSS_EXIT_GRACE_SECONDS)
+                if self._process.poll() is None:
+                    self._fail(str(error), self._observed_identities)
+                return
             except USIResourceError as error:
                 self._fail(str(error), self._observed_identities)
                 return
@@ -560,13 +577,24 @@ class USIEngine:
         self._ready()
 
     def analyze(
-        self, sfen: str, *, nodes: int | None = None, depth: int | None = None
+        self,
+        sfen: str,
+        *,
+        nodes: int | None = None,
+        depth: int | None = None,
+        expected_candidates: int | None = None,
+        auto_start: bool = True,
     ) -> USISearchResult | USITerminalResult:
         """Analyze one independent SFEN, issuing stop before a timeout failure."""
 
         self._search_stdout_tail = b""
         self._search_bestmove_line = None
-        self._ensure_started()
+        if type(auto_start) is not bool:
+            raise ValueError("auto_start must be boolean")
+        if auto_start:
+            self._ensure_started()
+        elif self._process is None or self._process.poll() is not None or self.identity is None:
+            raise USIProcessError("teacher is not running; durable caller must restart it")
         requested_nodes = self.config.nodes if nodes is None else nodes
         if isinstance(requested_nodes, bool) or not isinstance(requested_nodes, int):
             raise ValueError("nodes must be an integer")
@@ -576,6 +604,11 @@ class USIEngine:
             raise ValueError("depth must be an integer in 1..64")
         if depth is not None and self.config.threads != 1:
             raise ValueError("completed-depth teacher labels require one thread")
+        if expected_candidates is not None and (
+            type(expected_candidates) is not int
+            or not 1 <= expected_candidates <= self.config.multipv
+        ):
+            raise ValueError("expected_candidates must be in 1..MultiPV")
         _validate_sfen_command(sfen)
         if depth is not None:
             # Apery's usinewgame clears search histories but deliberately retains TT.
@@ -583,7 +616,13 @@ class USIEngine:
             if self.identity is None or "Clear_Hash" not in self.identity.declared_options:
                 raise USIProtocolError("completed-depth teacher must declare Clear_Hash")
             self._send("setoption name Clear_Hash")
-        self.new_game()
+        if auto_start:
+            self.new_game()
+        else:
+            # Do not call new_game(), whose legacy convenience path auto-starts.
+            # A process exit between tasks or commands belongs to the ledger.
+            self._send("usinewgame")
+            self._ready()
         self._send(f"position sfen {sfen}")
         started = time.monotonic()
         self._send(f"go nodes {requested_nodes}" + (f" depth {depth}" if depth is not None else ""))
@@ -602,9 +641,16 @@ class USIEngine:
                 if lines > self.config.protocol_limits.max_search_lines:
                     raise self._protocol_error("teacher search exceeded the output-line bound")
                 if line.startswith("info "):
-                    parsed = parse_info_line(line, expected_multipv=self.config.multipv)
+                    parsed = parse_info_line(
+                        line,
+                        expected_multipv=self.config.multipv,
+                        include_bounded=depth is not None,
+                    )
                     if parsed is not None:
-                        candidates[parsed.multipv] = parsed
+                        if parsed.bound is not None:
+                            candidates.pop(parsed.multipv, None)
+                        else:
+                            candidates[parsed.multipv] = parsed
                     continue
                 if line.startswith("bestmove "):
                     elapsed_ms = max(0, round((time.monotonic() - started) * 1_000))
@@ -614,20 +660,31 @@ class USIEngine:
                         expected_multipv=self.config.multipv,
                         elapsed_ms=elapsed_ms,
                         allow_terminal_outcomes=self._allow_terminal_outcomes,
+                        expected_candidates=expected_candidates,
                     )
                     if depth is not None and isinstance(result, USISearchResult):
                         _validate_completed_depth(result, depth, requested_nodes)
                     self._assert_executable_metadata_unchanged()
                     return result
                 raise self._protocol_error(f"unexpected search output: {line!r}")
-        except USITimeoutError:
+        except USITimeoutError as error:
             self._send_stop_after_timeout()
+            error.stdout_tail = self.search_diagnostics["stdout_tail"]
+            error.bestmove_line = self._search_bestmove_line
+            self.close()  # Never let delayed output become the next task's reply.
+            raise
+        except USIProcessError as error:
+            error.stdout_tail = self.search_diagnostics["stdout_tail"]
+            error.bestmove_line = self._search_bestmove_line
+            self.close()
             raise
         except USIProtocolError as error:
             error.stdout_tail = self.search_diagnostics["stdout_tail"]
             error.bestmove_line = self._search_bestmove_line
             if not error.stderr_tail:
                 error.stderr_tail = self.stderr_tail
+            if not isinstance(error, USIIncompleteDepthError):
+                self.close()
             raise
 
     def analyze_with_retry(
@@ -646,7 +703,7 @@ class USIEngine:
                         self.restart_count += 1
                     self.start()
                 return self.analyze(sfen, nodes=nodes, depth=depth)
-            except USIProtocolError:
+            except (USIProtocolError, USIResourceError):
                 self.close()
                 raise
             except (USIProcessError, USITimeoutError) as error:
@@ -910,7 +967,9 @@ class USIEngine:
             raise USIProcessError(f"teacher runtime identity drifted: {error}") from error
 
 
-def parse_info_line(line: str, *, expected_multipv: int) -> USICandidate | None:
+def parse_info_line(
+    line: str, *, expected_multipv: int, include_bounded: bool = False
+) -> USICandidate | None:
     """Parse a complete scored PV info line, preserving cp versus mate."""
 
     tokens = line.split(" ")
@@ -920,7 +979,7 @@ def parse_info_line(line: str, *, expected_multipv: int) -> USICandidate | None:
         return None
     integers: dict[str, int] = {}
     score: USIScore | None = None
-    score_is_bounded = False
+    bound: str | None = None
     pv: tuple[str, ...] | None = None
     index = 1
     while index < len(tokens):
@@ -941,7 +1000,7 @@ def parse_info_line(line: str, *, expected_multipv: int) -> USICandidate | None:
             score = USIScore(kind, value)
             index += 3
             if index < len(tokens) and tokens[index] in {"lowerbound", "upperbound"}:
-                score_is_bounded = True
+                bound = tokens[index]
                 index += 1
             continue
         if token == "pv":
@@ -975,7 +1034,7 @@ def parse_info_line(line: str, *, expected_multipv: int) -> USICandidate | None:
         raise USIProtocolError("MultiPV search info omitted multipv rank")
     if not 1 <= rank <= expected_multipv:
         raise USIProtocolError(f"multipv rank {rank} exceeds configured MultiPV")
-    if score_is_bounded:
+    if bound is not None and not include_bounded:
         return None
     return USICandidate(
         multipv=rank,
@@ -984,6 +1043,7 @@ def parse_info_line(line: str, *, expected_multipv: int) -> USICandidate | None:
         depth=integers["depth"],
         seldepth=integers["seldepth"],
         nodes=integers["nodes"],
+        bound=bound,
     )
 
 
@@ -1025,6 +1085,8 @@ def _validate_completed_depth(result: USISearchResult, depth: int, node_cap: int
     finish the requested depth *before* reaching its independent node ceiling.
     The historical node-only API remains unchanged for frozen evidence readers.
     """
+    if any(candidate.bound is not None for candidate in result.candidates):
+        raise USIIncompleteDepthError("teacher final score is bounded")
     if any(candidate.depth != depth for candidate in result.candidates):
         raise USIIncompleteDepthError("teacher did not complete the requested fixed depth")
     if any(candidate.nodes >= node_cap for candidate in result.candidates):
@@ -1048,6 +1110,7 @@ def _finish_search(
     expected_multipv: int,
     elapsed_ms: int,
     allow_terminal_outcomes: bool = False,
+    expected_candidates: int | None = None,
 ) -> USISearchResult | USITerminalResult:
     tokens = bestmove_line.split(" ")
     if len(tokens) not in {2, 4} or tokens[0] != "bestmove":
@@ -1064,6 +1127,11 @@ def _finish_search(
     if len(tokens) == 4 and (tokens[2] != "ponder" or _USI_MOVE_RE.fullmatch(tokens[3]) is None):
         raise USIProtocolError("malformed bestmove ponder suffix")
     observed_ranks = set(candidates)
+    if expected_candidates is not None and observed_ranks != set(range(1, expected_candidates + 1)):
+        raise USIIncompleteDepthError(
+            "teacher did not complete the required exact MultiPV set: "
+            f"expected={expected_candidates}, observed={sorted(observed_ranks)}"
+        )
     if not observed_ranks:
         raise USIProtocolError("teacher emitted no complete unbounded MultiPV rank")
     contiguous_ranks = set(range(1, max(observed_ranks) + 1))
@@ -1255,6 +1323,6 @@ def _teacher_process_tree_rss_bytes(
     for pid in selected:
         identity = _read_process_start_identity(pid)
         if identity is None:
-            raise USIResourceError("teacher process identity became unavailable")
+            raise _USIRssIdentityUnavailableError("teacher process identity became unavailable")
         identities[pid] = identity
     return sum(processes[pid][2] for pid in selected) * 1024, identities
