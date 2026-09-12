@@ -1,9 +1,9 @@
 # 現在の状態と再開契約
 
-2026-09-12、停止した防御強化runの復旧コードを検証中。本学習は未開始。
+2026-09-12、停止した防御強化runを復旧し、実resume検証後 **`ready_for_luna`** で正常pause。本学習は未開始。
 親は `defense-20260912-main-r1`、後継は **`defense-20260912-recovery-r3`**。
 唯一の現行機械契約は [configs/evaluator-main.json](../configs/evaluator-main.json)。
-後継のseal・移行・実resume検証が完了するまでは実行しない。
+後継のseal・移行・実resume検証は完了。Lunaは下記startで同じ進捗を引き継ぐ。
 本書が人間向けの正本で、過去工程はGit履歴に残す。
 
 ## 原因・保全・来歴
@@ -39,7 +39,8 @@ D12の全rank exact値、同じ要求深度、ノード上限未到達、合法P
 低深度結果やbestmoveだけの値を主学習へ入れず、未完了rootでrolloutを推測継続しない。
 
 通常要求2M、深度未達の難局面要求32M、task合計2試行・要求34M。
-検索60秒、ready5秒、stop/quit各1秒。終了処理込みの試行予算75秒、task累積150秒。通信障害は該当教師をclose/handshakeし同じ2Mで再試行する。
+検索60秒、ready5秒、stop/quit各1秒。終了処理込みの試行予算75秒、task累積150秒。
+契約の120秒表記は検索待ち2回の合計で、通信・終了処理込みの値は75/150秒。通信障害は該当教師をclose/handshakeし同じ2Mで再試行する。
 worker復旧はstartup10秒/ready5秒、永続累積3回。再起動で予算を戻さない。ノード数はgo要求の上限であり、
 教師の停止検査による実ノード超過も診断に保持し、壁時計で有限化する。
 難局面全体は8,192試行・43,200秒（12時間）以内。
@@ -110,4 +111,38 @@ PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run 
 
 `start`がresumeコマンド。Astraの一度だけの準備はseal→migrate→probe。
 Lunaは実施済み移行をやり直さず、ready状態からstartする。
-検証とGit配送の最終結果は実resume確認後に本書へ追記する。
+## 完了した検証・実行identity
+
+- code commit: `623d203898d7487921e0599d8500c946978e3544`
+- sealed run SHA-256: `507e535f946756a3bb43243450df68fd58c11cc95e7883659de5574fe2637152`
+- label recovery契約revision: 2。r3は承認済みresource epochを含む後継実行identity。
+- 復旧実装commit: `e9fba70caa425d53bd0db6cb359cb6eb1df15bd3`
+
+実probeはgame211/ply116を2試行消費済みdeferredのまま扱い、その後game212を確定。
+新しい防御群 `opposed_silver_pressure` / development_test / variant17は63plyでnative終局、
+32行・96候補・deviation6・recovery6、focus欠測0。生成処理10.895秒。
+全完了件数は212、延べ行11,966。新規教師task75 accepted、旧root1 deferred。
+既存211 shardと親snapshotの全hashが不変。未完了58行を件数へ混ぜていない。
+
+主経路の次の未着手IDは213。0..210と212のreceiptは再利用され、211はledgerの
+`f8f2dff6f48b86f6090e48053e82e31f5213e3da0e16506a1232e034499a3d01`
+に2M/32Mの2試行と116手の履歴を保持する。
+難局面共有累積は360試行、観測2,207.048秒（旧359試行を含む）。
+新shard SHAは `7044458baa54f4286521f91c0eee291b50fc6aec2a78f03bc211f5a04eb06d74`。
+
+実probe後はsupervisor/stageとも終了、lease解放、fit未作成、学習未開始。
+監督標本のメモリ空き指標最小77%、swap最大4,014,798,274 bytesで承認基準内。
+最終実証は `local/runs/defense-20260912/recovery-evidence-r2/final-verification.json`、
+SHA `e5150a14b66199e2b2dd1eaefa2159173878b7990428ab34a15273820c73bb26`。
+`recovery-evidence-r2`という証拠フォルダ名は保持しており、実証対象runは明示的にr3。
+
+最終`make check`はPython1,030件、Rust、format/lint、権利/境界/provenance、native build、
+決定的Wasm再生成照合までPASS。実SIGKILL、commit直前/直後の実process exit137、
+再開時の重複/試行reset防止、複数task未達・次task進行、bound/不完全MultiPV、
+通信/再接続/終了race、群別不足、有限補充、manifest退避中断、局所保留付き段階進行を試験。
+一時I/OのEBUSY/EAGAIN/EINTRだけ最大3回とし、EIO等は隠さず停止する。
+全障害ゼロや本学習の正常終了率は保証しない。今回の局所未完了が全体停止へ伝播しないことを
+実教師・実resume・確定shardで確認した。
+
+変更は関連枝 `codex/core-prototype` のみへ通常pushし、既存draft PR #1を更新済み。
+main統合・公開・重み配布・force-pushは実施しない。Lunaが読むのは本書と上記sealed runのみ。
