@@ -1,14 +1,23 @@
 # 現在の状態と次工程
 
-2026-09-12、序盤・受け・反撃の本学習契約をAstraが準備中。
+2026-09-12、序盤・受け・反撃の本学習契約を固定し、**`ready_for_luna`**で停止。
 今回のrun IDは **`defense-20260912-main-r1`**。r3とは別runで、本学習は未起動。
-学習は承認済みで、再承認は不要。短い経路・停止再開・export確認と重要レビュー後に
-`ready_for_luna`へ固定する。正本はこの文書一つとし、過去の工程記録はGit履歴に残す。
+学習は承認済みで再承認不要。短い経路・停止再開・export確認と重要レビューは完了。
+本学習のsupervisor／stage／leaseは存在せず、Lunaの別セッションによる開始待ち。
+正本はこの文書一つとし、過去の工程記録はGit履歴に残す。
 
 唯一の現行機械契約は [configs/evaluator-main.json](../configs/evaluator-main.json)。
-seal後の実行正本は `local/runs/defense-20260912/main/run.json`、状態は同じ場所の
+seal済みの実行正本は `local/runs/defense-20260912/main/run.json`、状態は同じ場所の
 `state.json`、code commitとrun hashは`seal.json`。名前から古いr3へ切り替えない。
 `awaiting_astra_review`なら再準備・再学習せず、下記のAstraレビュー工程へ進む。
+
+- code commit: `ea7dc1376a30ead0b9571fbe640e24f513198f4c`
+- run SHA-256: `3d9cc476e58631f56e6e18323df50c2b547aa993a118b0b6fe577631ae69583b`
+- exclusions SHA-256: `0574747158aec48357a360f8ada3d2c84d2d088209017bd173bb2d54eb6d3126`
+- OSUI commit: `2cc89a9cac4129f5cf9bb3745471843c88ea34e2`
+
+両code commitを既存`codex/core-prototype`へpush済み。双方draft PR #1を維持し、
+main merge／公開既定昇格／重み配布は実施しない。statusだけの後続commitでcode不一致にはしない。
 
 ## 固定方針と分担
 
@@ -132,11 +141,13 @@ native/Wasmは20根・769子でcp/WDL差0。145.4秒は旧9完了rawの検証再
 今回の削除総量は285,084,223 bytes（約271.9MiB）、終了時の空きは約222GiB。
 最終`make check`はPython987件、Rust、format/lint、権利・境界・provenance、native build、
 決定的Wasm再生成照合がPASS。最後のstatus検査追加後もrunner44件とlintがPASS。
-`make pure-build`／`make frozen-smoke`もPASS。commit/push/sealは確定後に記録する。
+`make pure-build`／`make frozen-smoke`もPASS。seal後のstatusは`ready_for_luna`、
+process_alive=false／stage_alive=false／lease_held=false／completed_trajectories=0を確認。
+両PRのremote必須CIは未設定で、ローカル検証・差分レビューの結果を記載したdraftのまま。
 
 ## Lunaへの引継ぎと学習後のAstra工程
 
-準備完了後は契約の`operations.start/status/stop/resume`と[development](development.md)を使う。
+Lunaは契約の`operations.start/status/stop/resume`と[development](development.md)を使う。
 コード・学習設定・Git枝を実行中に変えず、運転結果だけを更新する。
 `needs_astra`は事前定義外の復旧をせず戻す。全工程完了は`awaiting_astra_review`。
 
