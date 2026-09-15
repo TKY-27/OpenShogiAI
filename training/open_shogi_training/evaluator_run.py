@@ -65,6 +65,14 @@ RESOURCE_POLICY = {
     "sustained_samples": 2,
     "cooperative_stop_seconds": 80,
 }
+CALENDAR_POLICY = {
+    "revision": "finite-work-v1",
+    "run_id": "defense-20260912-recovery-r3",
+    "authorization": "explicit_user_calendar_limit_removal_20260915",
+    "calendar_wall_limit_seconds": None,
+    "historical_active_seconds": None,
+    "accounting": "retain task and evaluation consumption; historical total active time unknown",
+}
 OPERATIONAL_FILES = {"training/open_shogi_training/evaluator_run.py", "configs/evaluator-main.json"}
 
 
@@ -333,6 +341,22 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         if revision["resource_policy"] != RESOURCE_POLICY:
             raise ValueError("unrecognized resource policy revision")
         config["_resource_policy"] = revision["resource_policy"]
+    if "calendar_policy" in revision:
+        if (
+            revision["calendar_policy"] != CALENDAR_POLICY
+            or config["run_id"] != CALENDAR_POLICY["run_id"]
+        ):
+            raise ValueError("unrecognized calendar policy or unauthorized run")
+        _reference(run / "seal.json", revision["original_seal"]["sha256"])
+        if revision["original_maximum_wall_seconds"] != config["resources"]["maximum_wall_seconds"]:
+            raise ValueError("original calendar budget changed")
+        previous = revision.get("supersedes")
+        if previous:
+            path = inside(previous["path"])
+            if path.parent != run / "operations":
+                raise ValueError("previous operation outside run")
+            _reference(path, previous["sha256"])
+        config["_calendar_policy"] = revision["calendar_policy"]
     expected = {**config["code"]["files"], **revision["files"]}
     for name, sha in revision["files"].items():
         committed = subprocess.check_output(
@@ -838,7 +862,7 @@ def _resume_idle_state(run: Path) -> dict:
     return current
 
 
-def _approve_operations(run: Path) -> dict:
+def _approve_operations(run: Path, *, abolish_calendar_limit: bool = False) -> dict:
     """Astra's explicit one-time code review; resume never approves a new hash."""
     with _lease(run):
         _resume_idle_state(run)
@@ -857,6 +881,26 @@ def _approve_operations(run: Path) -> dict:
         }
         if config.get("resource_epoch"):
             revision["resource_policy"] = RESOURCE_POLICY
+        previous_ref, previous = None, {}
+        if (run / "approved-operation.json").exists():
+            previous_ref = _json(run / "approved-operation.json")
+            previous_path = inside(previous_ref["path"])
+            if previous_path.parent != run / "operations":
+                raise ValueError("approved operation outside run")
+            _reference(previous_path, previous_ref["sha256"])
+            previous = _json(previous_path)
+        if abolish_calendar_limit or "calendar_policy" in previous:
+            revision.update(
+                calendar_policy=CALENDAR_POLICY,
+                original_seal=_reference(run / "seal.json"),
+                original_maximum_wall_seconds=config["resources"]["maximum_wall_seconds"],
+                supersedes=previous_ref,
+            )
+            # Retrying after pointer publication must reuse the same approval.
+            if {k: v for k, v in previous.items() if k != "supersedes"} == {
+                k: v for k, v in revision.items() if k != "supersedes"
+            }:
+                revision = previous
         config = verify(run, operation_revision=revision)
         _require_migration(run, config)
         _resume_snapshot(run, config)
@@ -866,6 +910,14 @@ def _approve_operations(run: Path) -> dict:
         ref = _reference(path)
         atomic(run / "approved-operation.json", encoded(ref))
         return ref
+
+
+def _record_resume(run: Path, status: str, reason: str, **details) -> None:
+    # Caller owns the writer lease; an old rejection cannot overwrite a newer start.
+    atomic(
+        run / "last-resume.json",
+        encoded({"at": time.time(), "status": status, "reason": reason, **details}),
+    )
 
 
 def _prepare_resume(run: Path) -> tuple[dict, dict]:
@@ -889,6 +941,20 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
         raise ValueError("swap recovery requires reviewed resource policy")
     if "_resource_policy" in config:
         admission = _resource_admission(run, config, current)
+        atomic(
+            run / "last-resume.json",
+            encoded(
+                {
+                    "at": time.time(),
+                    "status": "admitted" if admission["safe"] else "blocked",
+                    "reason": admission["reason"],
+                    "previous_attempt": current.get("execution_attempt"),
+                    "previous_stop_reason": current.get("reason"),
+                    "operation_revision": ref,
+                    "resource_admission": admission,
+                }
+            ),
+        )
         if not admission["safe"]:
             # Preserve a fatal record verbatim; rejected admission never clears it.
             if current["status"] != "needs_astra":
@@ -1153,6 +1219,8 @@ def status(run: Path) -> dict:
         value["lease_held"] = True
     if value["lease_held"] and not value["process_alive"]:
         value["supervision"] = "supervisor_missing; retained stage lease prevents another writer"
+    if (run / "last-resume.json").exists():
+        value["latest_resume"] = _json(run / "last-resume.json")
     value["completed_trajectories"] = len(list((run / "data" / "games").glob("*.receipt.json")))
     progress_path = run / "data" / "generation-progress.json"
     if progress_path.exists():
@@ -1170,6 +1238,121 @@ def status(run: Path) -> dict:
         summary = _json(run / "fit" / "training.json")
         value.update(training_status=summary["status"], best_sha256=summary["best_sha256"])
     return value
+
+
+def diagnose(run: Path, *, _lease_held: bool = False) -> dict:
+    """Read-only resume checks; distinguish previous failure from present admission."""
+    report = {"at": time.time(), "checks": {}, "unchecked": [], "resume": "blocked"}
+    checks = report["checks"]
+
+    def check(name, action):
+        try:
+            value = action()
+            checks[name] = {"status": "pass"}
+            return value
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            KeyError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as error:
+            checks[name] = {"status": "blocked", "reason": f"{type(error).__name__}:{error}"}
+            return None
+
+    current = check("state", lambda: _state(run))
+    if current:
+        report["previous_attempt"] = {
+            "number": current.get("execution_attempt"),
+            "status": current["status"],
+            "reason": current.get("reason"),
+        }
+    if (run / "last-resume.json").exists():
+        report["latest_resume"] = check(
+            "last_resume_record", lambda: _json(run / "last-resume.json")
+        )
+    try:
+        with contextlib.nullcontext() if _lease_held else _lease(run):
+            checks["lease"] = {"status": "pass"}
+            check("idle_processes_and_recovery", lambda: _resume_idle_state(run))
+
+            def approved():
+                ref = _json(run / "approved-operation.json")
+                path = inside(ref["path"])
+                if path.parent != run / "operations":
+                    raise ValueError("approved operation outside run")
+                _reference(path, ref["sha256"])
+                _reference(run / "run.json", _json(run / "seal.json")["run_sha256"])
+                config = _json(run / "run.json")
+                _validate_config(config)
+                revision = _json(path)
+                _operation_code(run, config, revision)
+                check("approved_code_seal_inputs", lambda: verify(run, operation_revision=revision))
+
+                def committed_code():
+                    if _code_identity()["files"] != {
+                        **config["code"]["files"],
+                        **revision["files"],
+                    }:
+                        raise ValueError(
+                            "resume code differs from Astra-approved operation revision"
+                        )
+
+                check("committed_code", committed_code)
+                return config
+
+            config = check("approved_operation", approved)
+            if config is not None:
+                check("migration", lambda: _require_migration(run, config))
+                snapshot = check(
+                    "data_receipts_ledger_cursor", lambda: _resume_snapshot(run, config)
+                )
+                if snapshot:
+                    report["progress"] = {k: v for k, v in snapshot.items() if k != "files"}
+                for stage in STAGES:
+                    if (run / f"{stage}-complete.json").exists():
+                        check(
+                            stage + "_completion",
+                            lambda stage=stage: _verify_completion(run, stage, config),
+                        )
+                if current:
+                    checks["calendar"] = {
+                        "status": "blocked" if _calendar_expired(config, current) else "pass"
+                    }
+                    if checks["calendar"]["status"] == "blocked":
+                        checks["calendar"]["reason"] = "wall_limit"
+                    report["time_accounting"] = {
+                        "calendar_policy": config.get("_calendar_policy"),
+                        "historical_began_at": current.get("began_at"),
+                        "historical_calendar_limit_seconds": config["resources"][
+                            "maximum_wall_seconds"
+                        ],
+                        "calendar_elapsed_seconds": time.time()
+                        - current.get("began_at", time.time()),
+                        "total_active_seconds": None,
+                    }
+            else:
+                report["unchecked"].extend(["migration", "data", "stage_completions", "calendar"])
+            observed = check(
+                "resource_measurement",
+                lambda: _resource_sample(run, _process_table()[os.getpid()][1]),
+            )
+            if observed:
+                report["current_resource_sample"] = observed
+                if config is not None:
+                    condition = _resource_condition(observed, None, config, admission=True)
+                    checks["current_resource_condition"] = {
+                        "status": "pass" if condition == "warming" else "blocked",
+                        "reason": condition,
+                    }
+            report["unchecked"].append("fresh consecutive resource admission at resume")
+    except BlockingIOError:
+        checks["lease"] = {"status": "blocked", "reason": "another writer holds lease"}
+        report["unchecked"].extend(["code", "data", "resources"])
+    if all(v["status"] == "pass" for v in checks.values()):
+        report["resume"] = "eligible_pending_resource_admission"
+    return report
 
 
 def _clear_stop(run: Path) -> None:
@@ -1247,7 +1430,25 @@ def start(
     try:
         with _lease(run) as lease:
             if recover_startup:
-                config, current = _prepare_resume(run)
+                try:
+                    config, current = _prepare_resume(run)
+                except (
+                    OSError,
+                    ValueError,
+                    RuntimeError,
+                    KeyError,
+                    sqlite3.Error,
+                    subprocess.SubprocessError,
+                ) as error:
+                    report = diagnose(run, _lease_held=True)
+                    _record_resume(
+                        run,
+                        "blocked",
+                        str(error),
+                        checks=report["checks"],
+                        unchecked=report["unchecked"],
+                    )
+                    raise
                 if current.get("resume_blocked"):
                     return current
             else:
@@ -1298,12 +1499,26 @@ def start(
                     startup_failure="before_spawn",
                 )
                 _save_state(run, current)
+                if recover_startup:
+                    _record_resume(
+                        run,
+                        "blocked",
+                        current["reason"],
+                        execution_attempt=current.get("execution_attempt"),
+                    )
                 raise
             if recover_startup:
                 deadline = time.monotonic() + 30
                 while time.monotonic() < deadline:
                     observed = _state(run)
                     if observed.get("pid") == process.pid:
+                        _record_resume(
+                            run,
+                            "started",
+                            "supervisor_acknowledged",
+                            execution_attempt=observed.get("execution_attempt"),
+                            pid=process.pid,
+                        )
                         return observed
                     if process.poll() is not None:
                         current.update(
@@ -1312,9 +1527,22 @@ def start(
                             supervisor_returncode=process.returncode,
                         )
                         _save_state(run, current)
+                        _record_resume(
+                            run,
+                            "blocked",
+                            current["reason"],
+                            execution_attempt=current.get("execution_attempt"),
+                        )
                         return current
                     time.sleep(0.05)
                 # Retain the live child's lease and pending attempt; never spawn again.
+                _record_resume(
+                    run,
+                    "unconfirmed",
+                    "supervisor_acknowledgement_timeout",
+                    execution_attempt=current.get("execution_attempt"),
+                    pid=process.pid,
+                )
                 raise RuntimeError("supervisor acknowledgement timed out; inspect status and pause")
             return {
                 "status": "starting",
@@ -1327,6 +1555,8 @@ def start(
         raise
     except BlockingIOError:
         current = status(run)
+        if recover_startup:
+            current["resume_blocked"] = {"safe": False, "reason": "lease_held"}
         if not current["process_alive"] and (current["stage_alive"] or current.get("stage_group")):
             stop(run)
             current["status"] = "supervisor_missing_stop_requested"
@@ -1510,6 +1740,14 @@ def _resource_condition(
     return "safe"
 
 
+def _calendar_expired(config: dict, state: dict) -> bool:
+    # Calendar age is historical metadata, not active computation consumption.
+    return "_calendar_policy" not in config and (
+        time.time()
+        >= state.get("began_at", time.time()) + config["resources"]["maximum_wall_seconds"]
+    )
+
+
 def _resource_admission(run: Path, config: dict, state: dict) -> dict:
     """Finite pre-launch wait; no teacher/task wall budget runs during admission."""
     started, samples, consecutive, reason = time.monotonic(), [], 0, "warming"
@@ -1519,10 +1757,7 @@ def _resource_admission(run: Path, config: dict, state: dict) -> dict:
         if (stop_path.stat().st_mtime_ns if stop_path.exists() else None) != stop_stamp:
             reason = "requested_stop"
             break
-        if (
-            time.time()
-            >= state.get("began_at", time.time()) + config["resources"]["maximum_wall_seconds"]
-        ):
+        if _calendar_expired(config, state):
             reason = "wall_limit"
             break
         try:
@@ -1844,7 +2079,7 @@ def _run_stage(
                 fresh = _resource_sample(run, _process_table()[os.getpid()][1])
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 return -1, f"resource_wait:measurement_unavailable:{error}"
-            if time.time() >= state["began_at"] + limits["maximum_wall_seconds"]:
+            if _calendar_expired(config, state):
                 return -1, "wall_limit"
             if (
                 fresh["monotonic"] - previous["monotonic"]
@@ -1958,7 +2193,7 @@ def _run_stage(
                 monitor.write(encoded(metric) + b"\n")
             state["owned_processes"] = {str(pid): identity for pid, identity in owned.items()}
             atomic(run / "state.json", encoded(state))
-            if time.time() - state["began_at"] > limits["maximum_wall_seconds"]:
+            if _calendar_expired(config, state):
                 failure = "wall_limit"
             elif sample is not None:
                 pass  # The reviewed multi-signal policy above owns resource decisions.
@@ -2063,7 +2298,13 @@ def work(
         if prior["status"] in {"needs_astra", "awaiting_astra_review", "awaiting_astra_browser"}:
             return prior
         began = prior.get("began_at", time.time())
-        _number(began, 0, time.time(), "began_at", integer=False)
+        _number(
+            began,
+            0,
+            math.inf if "_calendar_policy" in config else time.time(),
+            "began_at",
+            integer=False,
+        )
         initial_swap = prior.get("initial_swap_bytes")
         initial_swap = _swap_bytes() if initial_swap is None else initial_swap
         _number(initial_swap, 0, 1024**5, "initial_swap_bytes")
@@ -2403,6 +2644,7 @@ def main():
             "probe",
             "stop",
             "status",
+            "diagnose",
             "work",
             "stage",
         ),
@@ -2411,12 +2653,17 @@ def main():
     parser.add_argument("stage", nargs="?", choices=STAGES)
     parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--pause-after-new-games", type=int, default=None)
+    parser.add_argument("--abolish-calendar-limit", action="store_true")
     args = parser.parse_args()
     path = inside(args.path)
+    if args.abolish_calendar_limit and args.command != "approve-operations":
+        parser.error("--abolish-calendar-limit is only valid with approve-operations")
     if args.command == "seal":
         result = seal(path)
     elif args.command == "approve-operations":
-        result = _approve_operations(path)
+        result = _approve_operations(path, abolish_calendar_limit=args.abolish_calendar_limit)
+    elif args.command == "diagnose":
+        result = diagnose(path)
     elif args.command == "migrate":
         result = migrate(path)
     elif args.command == "stage":
