@@ -1,79 +1,118 @@
 # 現在の状態と再開契約
 
 2026-09-15、対象は **`defense-20260912-recovery-r3`**（親 `defense-20260912-main-r1`）。
-現在の実停止はattempt 4の **`needs_astra / swap_limit`**。
-543 trajectory / 30,571 rows、accepted 45,067 task / deferred 21 / hard 10、running 0。
-最新の未完了cursorはgame554 / ply61 / 部分31行。件数から再開位置を算出しない。
-SQLite整合・確定receipt/hash・task identity/payload・未完了cursorのnative再生を再確認した。
-本学習は未開始。r3・比較重み・既存生成データ・封印済みrun/sealは保持する。
-
+**現在は`ready_for_luna / requested_pause`、attempt 6。別プロセス2回の通常resumeで有効出力の増加を確認し、正常pause済み。**
 本書が人間向けの正本。科学的条件は [configs/evaluator-main.json](../configs/evaluator-main.json)
-とsealed run、運用policyは承認済み`operations/` revisionを参照する。
-**継承した72時間の絶対期限（2026-09-15 14:15:44 JST）は超過している。無承認で延長せず、実再開試験・Luna継続は保留。**
-以下の2026-09-12の実績は過去の証拠であり、今回の実再開PASSではない。
+と不変のsealed run、通常resumeの運用条件は同runの`approved-operation.json`が指すrevisionを使う。
 
-## 資源監視・再開の運用改訂（macos-attempt-v1）
+## 今回の期限廃止と再開確認
 
-attempt 4の比較は`17,997,758,464 - 4,191,221,186 > 512 MiB`。
-基準はattempt開始値ではなく9月12日承認のr3 resource epoch。元親値1,500,313,026も保持されている。
-標本時刻1789444062.332198、stage PID19124起動から約0.169秒、所有RSS26,148,864 bytes。
-stage起動直後の標本であり、教師の起動を示す証拠はない。中断中のMac全体の増加が比較へ入っていた。
-OSAI消費量とは断定しない。attempt 4の新規出力はない。
+ユーザーの2026-09-15の明示承認により、このrunに限って**固定暦日期限を廃止する**。
+旧期限は`state.began_at = 1789190144.143338`（親runから継承）＋
+`resources.maximum_wall_seconds = 259200`秒、2026-09-15 14:15:44.143338 JST。
+`_resource_admission`、stage起動直前、supervisor監視ループの3経路で同じ値を参照していた。
+旧attempt 4の終了理由`needs_astra / swap_limit`と、今回の起動前拒否`wall_limit`は別である。
+旧期限拒否ではattempt 5、教師、出力は発生していない。
 
-計測元の意味はApple公開実装で確認した。
-[sysctl](https://github.com/apple-oss-distributions/system_cmds/blob/main/sysctl/sysctl.c)の
-`vm.swapusage used`は現在使用量で、`total`や累積swapoutではない。表示MはMiB、小数2桁丸め
-（旧bytes値にも約0.005 MiBの表示精度限界がある）。
-[vm_stat](https://github.com/apple-oss-distributions/system_cmds/blob/main/vm_stat/vm_stat.c)の
-Swapoutsはboot中の累積ページ数であり、実機は16,384 bytes/page。圧縮セグメントのswap活動量で、
-RSSやswap使用量と同じ量ではない。boot識別とpage sizeを伴う差分だけを使う。
-[pressure sysctl](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_memorystatus_notify.c)
-は内部enumではなくdispatch flags（1 normal / 2 warning / 4 critical）を返す。
-[memory_pressure](https://github.com/apple-oss-distributions/system_cmds/blob/main/memory_pressure/memory_pressure.c)
-の`-Q`はquietな照会であり、圧力生成オプションを使わない。空き割合は当該指標として扱う。
+新運用`finite-work-v1`は次の絶対期限や代替の総時間上限を設けない。
+中断・修正待ち・ユーザーpause・resource_wait・プロセス不在を計算消費とは数えない。
+`began_at`は履歴として保持し、時計巻戻しでも開始時刻との大小だけで拒否しない。
+カレンダー経過は診断に別表示。過去の総実稼働秒は**不明（null）**とし、0や暦日差に置換しない。
+教師task・hard queue・評価の既存実消費、有限試行、nodes/timeout、生成/補充目標、
+12,288 updates等の学習上限、評価計画、無進捗30分・資源安全条件は維持する。
+有限仕事量の完了または既定の停止条件までであり、無限探索や品質基準の緩和ではない。
 
-45秒・4標本の実測はswap16,980 MiBで一定、swapout差分0 pages、pressure normal、
-メモリ空き指標70%、ディスク空き約144 GiB（`shutil.disk_usage`/`df`）。OSAI教師/nativeプロセスなし、lease/残留groupなし。
-これは観測時点の状態であり、次のresumeでは必ず再計測する。
+移行は既存`approve-operations --abolish-calendar-limit`でAstraが一度だけ適用する。
+運転code commit/hash、元seal、元calendar上限、前operation参照、承認理由を同runの
+`operations/`へ記録する。原子的な参照更新の前後で中断しても再実行で同revisionを再利用する。
+元run/seal・旧承認・失敗・DB/payloadを保持し、通常resumeとsupervisor/child/後段stageは
+stateに記録した同じ運用revisionを検証する。Lunaの追加フラグ・JSON手編集・再sealは不要。
+科学的設定、教師品質、採用条件、sampling/split、coverage、学習率/更新数/評価は変更しない。
 
-- 履歴のrun初期snapshotは不変。起動直前のattempt baselineはID・boot・時刻・元/単位を付け、
-  attempt記録へ一度だけ保存する。同attemptで取り直して上限を回避しない。
-- 起動前は15秒間隔、初回標本＋3連続の安全な差分（通常約45秒）、最大5標本。
-  待機間隔の合計は最大60秒、各取得25秒以内を要求し、取得時間込みでも最大185秒。
-  normal、空き指標55%以上、空きdisk62 GiB以上、所有RSS9.6 GiB以下、
-  swap使用量増加/swapout活動各1 MiB/s以下を要求する。計測失敗・古い標本・boot/counter不連続は保留。
-- 実行中は15秒間隔。critical pressure、空き指標20%未満、disk60 GiB未満、所有RSS12 GiB超は即停止。
-  warning/空き指標50%未満、swap活動8 MiB/s超は2連続で停止。
-  attempt増分512 MiB超かつ使用量増加1 MiB/s超も2連続で停止する。単に高swapというだけでは停止しない。
-  通常の保存待ちは最大80秒、criticalは即時停止処理。正式pauseの待機は最大120秒。
-  generateで監督自身が送った終了信号だけは、保存cursor/資産検証後に再開可能とする。
-  所有RSSはsupervisorとstage groupの共有メモリを含む近似合計で、ホストswapをOSAIへ帰属させない。
-- 待機は既存schemaの`stopped / resource_wait`（実行中停止理由は`resource_wait:詳細`）。
-  finite admissionが回復しなければ終了し、新task/attemptを増やさない。正式resumeで再試行できる。
-  自動再開は行わない。ユーザー停止は`stopped / requested_stop`、正式pause完了は
-  `ready_for_luna / requested_pause`で区別し、ユーザーのresumeまで停止する。
-- 旧swap_limitだけのneeds_astraは、attempt結果一致・cleanup・lease・process・code/policy・
-  資産/SQLite/cursor・現在資源の検証後に正式resumeで回復する。他原因の重大停止は解除しない。
-  強制中断後のrunningも残留writerなしを検証して同cursorから再開する。
-- 運用改訂を`approve-operations`でcommitとpolicyへhash-bindし、元run/sealは編集しない。
-  資源の累積ピーク・各標本・待機時間・停止理由と旧attemptを保持する。
-  期限、task試行/難queue会計、教師深度/nodes/Threads/Hash、学習条件、評価条件は変更しない。
+`macos-attempt-v1`の既存資源修正とDEVNULL共通launcherは現codeで有効。
+旧swap epochとの差だけでは停止せず、15秒間隔の実圧力・swap使用量/活動率・所有RSS・
+diskを確認する。起動は初回＋3連続安全差分、最大5標本の有限待機。
+normal・空き指標55%以上・disk62 GiB以上・RSS9.6 GiB以下・swap各1 MiB/s以下が回復条件。
+実行中はcritical/空き20%未満・disk60 GiB未満・RSS12 GiB超で即停止、
+warning/空き50%未満・swap活動8 MiB/s超等は2連続で停止する。
+危険/計測不成立はresource_wait。旧swap停止の原本はそのまま保存し、最新の起動保留を別表示する。
+重大故障や破損は解除せず、手動pauseは次の明示resumeまで保持する。
 
-運転code commit: `946be86`（主修正`b55916a`）。承認済みoperation revision SHA-256:
-`2b112c409d97cad5761f032767ca5c000033c2df47b3da05f4b0ac3c6a1c5085`。
-`approved-operation.json`が次のresumeへ渡す正本。attempt 4のstate中の旧revisionは停止履歴として保持する。
-証拠は`local/runs/defense-20260912/resource-evidence/`。
-今回の実再開2回・新規有効出力増加は**未実施（絶対期限超過）**。
-資源注入/監督/resume回帰51件、既存launcher/resumeと合わせて125件PASS。旧baseline、高swap安全/危険、実page size、短いノイズと
-継続負荷、boot/counter不連続、計測不能、有限待機/回復、期限/attempt基準保持、
-旧swap停止限定解除、他重大停止/二重起動拒否、ユーザー停止、後段stage移行、前bootの履歴を保持した新attempt開始を検証した。
-正式resumeも別プロセス・stdin=/dev/nullで実行し、`wall_limit`の事前拒否を確認。
-旧state・attempt 4・run/seal・生成データは不変、attempt 5は作られていない。
-この拒否確認を実生成の再開PASSとは扱わない。
-最終code `946be86`の`make check`はPython1,099件・Rust・format/lint・locked依存・
-権利/境界/provenance・native build・決定的Wasm照合までPASS。
-ログは`resource-evidence/make-check-946be86.log`。
-本学習・実生成2回のpause/resume・OSUI・main merge・昇格・deployは未実施。
+起動診断は同moduleの`diagnose`（読み取り専用）。lease/process、承認code/seal/input、
+移行、receipt/SQLite/cursor、期限、現在資源をまとめ、依存条件で調べられないものは未確認とする。
+`status`は`latest_resume`と旧attemptのstate/reasonを分ける。通常resumeの最新結果は
+`last-resume.json`へ保存し、旧attempt-resultを起動拒否で上書きしない。
+
+修正前の実確認：543 trajectory / 30,571 rows、accepted 45,067 / deferred 21 / hard 10。
+最新有効receiptはgame553、最新未完了はgame554 / ply61 / 部分31行。
+hard共有累積963試行 / 4,526.367442550106秒。SQLite・全receipt/hash・task identity/payload・
+全未完了cursorのnative再生は正常。件数から再開位置を算出せず、ledgerから継続する。
+family coverage 43–47件は必要240件未満。accepted task数をcoverageや行数と混同しない。
+prepare/train/audit/arena/exportは未開始。現在のcoverageを合格扱いにしない。
+
+### 実再開の結果（PASS）
+
+運転code commit **`7c212f2e838146bdf3212f4ee8a5b36abfb66a53`**。
+旧operation `2b112c40…`から新operation
+`25b025bc84fb34a380e38742c20b72d13026e5fa017e45a3d5d0c199ab70d4ff`へ正式移行した。
+`finite-work-v1`と`macos-attempt-v1`を同時に検証・採用する。
+
+| 別プロセスの通常resume | 新規確定receipt | trajectory | rows | accepted task | supervisor / stage PID |
+| --- | --- | --- | --- | --- | --- |
+| attempt 5 | game230、132ply / 66行 | 543 → 544 | 30,571 → 30,637 | 45,067 → 45,082 | 43490 / 43503 |
+| attempt 6 | game251、176ply / 88行 | 544 → 545 | 30,637 → 30,725 | 45,082 → 45,102 | 44602 / 44615 |
+
+両回とも同じcwd・uv/Python・stdin=/dev/null・上記通常resumeを別CLIプロセスから実行し、
+正式pause完了後に次回を起動した。追加probeフラグは使っていない。
+起動資源確認は45.596秒 / 46.293秒。短い出力確認とpauseだけで本生成全量は実行しない。
+永続難queueから未完了game230とgame251を継続して完了した。元部分行を既存完走行へ重複加算しない。
+game554/ply61/部分31行のcheckpoint hashは不変。旧543組（1,086ファイル）のshard/receipt hash、
+元45,067 accepted task、run/seal、旧停止attempt、開始日時、retriesを保持した。
+両新receiptのhash/行数、全132/176着手と最終局面をnativeで再生確認した。
+
+現在 **545 trajectory / 30,725 rows、accepted 45,102 / deferred 22 / hard 7 / running 0**。
+hard共有累積は963 → 965 → 966試行、4,526.367 → 4,531.574 → 4,558.645秒。
+未達taskを局所deferredへ移し、教師深度や採用条件を緩めず継続した。
+family coverageは**44–47 / 必要240**で不合格。元のcoverage関数で確認し、
+診断出力だけを証拠フォルダへ保存した。prepare/train/audit/arena/exportは未開始で、fitも存在しない。
+
+4監督標本はすべてsafe、メモリ空き指標最小62%、所有RSS最大1,517,273,088 bytes、
+disk空き最小154,096,541,696 bytes。最終はsupervisor/stage非生存・残留groupなし・lease解放。
+次のresumeは改めて有限資源admissionを行う。恒久的な資源充足を保証するものではない。
+現在の起動阻害条件は解消済み。coverage不足は残りの有限生成・再解析・補充で判定する次工程の条件である。
+
+最終運転codeの`make check`は**Python1,122件、Rust、format/lint、locked依存、
+権利/境界/provenance、native build、決定的Wasm照合までPASS**。
+追加23件と既存起動/資源/resumeを合わせ143件PASS。時計の前進/巻戻し、旧swap回復、
+全stageへの運用伝播、元sealと予算保持、承認参照の原子的公開前中断と再実行、
+破損/二重起動/危険資源拒否、ユーザーpause、最新起動結果のlease内保存を検証した。
+既存D12未達・EBADF・resource_wait/boot変更・coverage不成立/成立fixtureの回帰も通過した。
+
+証拠は`local/runs/defense-20260912/deadline-evidence/`。
+`final-verification.json` SHA-256:
+`c43a5af1d3f7f17b536091e3ba40d77affcb5ec7877953a619081a604a48bb45`。
+全体checkログは`make-check-7c212f2.log`。原本・運用承認・実出力・診断をローカル保持し、Gitへ入れない。
+
+## Lunaの正式操作
+
+cwdはOpenShogiAI Gitルート。別の新規Luna Max/maxセッションが使う実在コマンド：
+
+```sh
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 </dev/null
+```
+
+正常pause：
+
+```sh
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/defense-20260912/recovery-r3 </dev/null
+```
+
+本生成/学習/評価の長時間監視はAstraで行わず、Luna子エージェントを起動しない。
+全工程終了は`awaiting_astra_review`。OSUI変更・main merge・公開・モデル昇格・
+重み配布・有料計算・force-push・ブランチ整理は対象外。
+
+以下は過去の修正・有限契約・実行証拠。旧期限維持の記述は当時の履歴であり、
+対象runの現在の暦日運用は上記の明示承認`finite-work-v1`が置き換える。
 
 ## 起動EBADFの原因と今回の検証
 
@@ -246,7 +285,7 @@ SQLite整合・未完了cursorのnative再生を検証し、元state/log prefix�
 Astraの`approve-operations`は運転code review後の一回の準備で、stateをreadyに書き換えない。
 Lunaは承認済みhashを使い、別commitの運転codeを自動承認しない。
 教師・データ意味・学習・評価条件の変更は、この運転復旧の対象外。
-資源監視の運用方針のみmacos-attempt-v1への今回の明示承認範囲で更新する。
+現在は冒頭の明示承認によりmacos-attempt-v1とfinite-work-v1を適用する。
 データ書込みのEBADF、未知のstage失敗、診断/cleanup保存失敗を安全な再試行に分類しない。
 pauseは専用終了codeと全process/lease解放、保存済み進捗を確認してreadyへ戻す。
 
