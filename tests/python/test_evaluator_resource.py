@@ -316,6 +316,7 @@ def test_resource_wait_resume_preserves_deadline_and_attempt_baseline(
         ([{"pressure": 4}], "interrupted_snapshot_failed", "bad_cursor"),
     ],
 )
+@pytest.mark.parametrize("prior_history", ["same_attempt", "previous_boot"])
 def test_runtime_resource_policy_noise_sustained_danger_and_measurement_failure(
     prepared,  # noqa: F811
     monkeypatch,
@@ -323,6 +324,7 @@ def test_runtime_resource_policy_noise_sustained_danger_and_measurement_failure(
     observations,
     expected,
     interruption,
+    prior_history,
 ):
     _, run, config, _, _ = prepared
     config.update(resource_config)
@@ -338,6 +340,9 @@ def test_runtime_resource_policy_noise_sustained_danger_and_measurement_failure(
         # A later stage uses the recent history; baseline remains 115 seconds old.
         "resource_history": {"last": sample(1000)},
     }
+    if prior_history == "previous_boot":
+        baseline.update(sample(1000))
+        state["resource_history"]["last"] = sample(5000, boot="previous-boot")
     atomic(run / "attempts/000001.json", encoded({"resource_baseline": baseline}))
     process = SimpleNamespace(pid=900001, returncode=None)
     monkeypatch.setattr(runner.time, "time", lambda: now[0])

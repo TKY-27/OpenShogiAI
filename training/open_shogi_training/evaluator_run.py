@@ -1826,7 +1826,15 @@ def _run_stage(
 ) -> tuple[int, str | None]:
     process, owned, failure = None, {}, None
     limits = config["resources"]
-    previous = state.get("resource_history", {}).get("last", state.get("resource_baseline"))
+    previous = state.get("resource_baseline")
+    recent = state.get("resource_history", {}).get("last")
+    if (
+        previous is not None
+        and recent is not None
+        and recent["boot"] == previous["boot"]
+        and recent["monotonic"] >= previous["monotonic"]
+    ):
+        previous = recent
     try:
         if "_resource_policy" in config:
             baseline = state.get("resource_baseline")
