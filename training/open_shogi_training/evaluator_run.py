@@ -49,6 +49,22 @@ RUNTIME_SOURCES = {
     "module": "target/pure/bindings/open_shogi_wasm.js",
     "wasm": "target/pure/bindings/open_shogi_wasm_bg.wasm",
 }
+# Reviewed operating policy; never changes teacher, sampling or learning parameters.
+RESOURCE_POLICY = {
+    "revision": "macos-attempt-v1",
+    "interval_seconds": 15,
+    "maximum_sample_age_seconds": 25,
+    "admission_samples": 3,
+    "maximum_wait_samples": 5,
+    "resume_memory_free_percent": 55,
+    "critical_memory_free_percent": 20,
+    "resume_disk_margin_gib": 2,
+    "resume_rss_fraction": 0.8,
+    "quiet_bytes_per_second": 1024**2,
+    "swapout_bytes_per_second": 8 * 1024**2,
+    "sustained_samples": 2,
+    "cooperative_stop_seconds": 80,
+}
 OPERATIONAL_FILES = {"training/open_shogi_training/evaluator_run.py", "configs/evaluator-main.json"}
 
 
@@ -313,6 +329,10 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         or not re.fullmatch(r"[a-f0-9]{40}", revision["commit"])
     ):
         raise ValueError("invalid operational code revision")
+    if "resource_policy" in revision:
+        if revision["resource_policy"] != RESOURCE_POLICY:
+            raise ValueError("unrecognized resource policy revision")
+        config["_resource_policy"] = revision["resource_policy"]
     expected = {**config["code"]["files"], **revision["files"]}
     for name, sha in revision["files"].items():
         committed = subprocess.check_output(
@@ -677,7 +697,14 @@ def _resume_snapshot(run: Path, config: dict) -> dict:
         checkpoints = dict(db.execute("SELECT game,payload FROM checkpoints"))
         counters = dict(db.execute("SELECT name,value FROM counters"))
         tasks = dict(db.execute("SELECT status,count(*) FROM tasks GROUP BY status"))
-        ledger_sha = hashlib.sha256(encoded(list(db.execute("SELECT * FROM tasks ORDER BY id"))))
+        task_rows = list(db.execute("SELECT * FROM tasks ORDER BY id"))
+        for key, identity, task_status, attempts, result, _updated in task_rows:
+            if hashlib.sha256(identity.encode()).hexdigest() != key:
+                raise ValueError("ledger task identity hash mismatch")
+            json.loads(attempts)
+            if task_status == "accepted" and not isinstance(json.loads(result or "null"), dict):
+                raise ValueError("accepted task payload missing")
+        ledger_sha = hashlib.sha256(encoded(task_rows))
     pending = {}
     replay = None
     try:
@@ -743,7 +770,23 @@ def _resume_snapshot(run: Path, config: dict) -> dict:
     return snapshot
 
 
+def _swap_recoverable(run: Path, state: dict) -> bool:
+    if (
+        state.get("reason") != "swap_limit"
+        or state.get("stage") != "generate"
+        or state.get("errors")
+        or state.get("cleanup", {}).get("remaining_processes") != {}
+        or state.get("cleanup", {}).get("inventory_errors")
+        or not state.get("execution_attempt")
+    ):
+        return False
+    result = _json(run / "attempts" / f"{state['execution_attempt']:06d}-result.json")
+    return result == state
+
+
 def _startup_recoverable(run: Path, state: dict) -> bool:
+    if _swap_recoverable(run, state):
+        return True
     if state.get("startup_failure") == "before_spawn":
         return True
     # Compatibility for the original pre-interpreter failure, which could not
@@ -773,10 +816,17 @@ def _resume_idle_state(run: Path) -> dict:
         attempt = _json(run / "attempts" / f"{current['execution_attempt']:06d}.json")
         if attempt["operation_revision"] != current.get("operation_revision") or current.get("pid"):
             raise ValueError("invalid interrupted startup attempt")
-    if not pending and current["status"] not in {"ready_for_luna", "stopped", "needs_astra"}:
+    if not pending and current["status"] not in {
+        "ready_for_luna",
+        "stopped",
+        "needs_astra",
+        "running",
+    }:
         raise ValueError("resume requires a paused run or confirmed startup failure")
     if current["status"] == "needs_astra" and not _startup_recoverable(run, current):
         raise ValueError("failure is outside startup recovery; Astra review required")
+    if current["status"] == "running" and current.get("errors"):
+        raise ValueError("interrupted supervisor has unresolved errors")
     for pid_key, identity_key in (("pid", "process_identity"), ("stage_pid", "stage_identity")):
         if (
             current.get(identity_key)
@@ -805,6 +855,8 @@ def _approve_operations(run: Path) -> dict:
             "commit": code["commit"],
             "files": changed,
         }
+        if config.get("resource_epoch"):
+            revision["resource_policy"] = RESOURCE_POLICY
         config = verify(run, operation_revision=revision)
         _require_migration(run, config)
         _resume_snapshot(run, config)
@@ -833,6 +885,24 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
     for stage in STAGES:
         if (run / f"{stage}-complete.json").exists():
             _verify_completion(run, stage, config)
+    if current.get("reason") == "swap_limit" and "_resource_policy" not in config:
+        raise ValueError("swap recovery requires reviewed resource policy")
+    if "_resource_policy" in config:
+        admission = _resource_admission(run, config, current)
+        if not admission["safe"]:
+            # Preserve a fatal record verbatim; rejected admission never clears it.
+            if current["status"] != "needs_astra":
+                current.update(
+                    status="stopped",
+                    reason="requested_stop"
+                    if admission["reason"] == "requested_stop"
+                    else "resource_wait",
+                    resource_wait=admission,
+                )
+                _save_state(run, current)
+            return config, {**current, "resume_blocked": admission}
+    else:
+        admission = None
     attempts = run / "attempts"
     number = 1 + max(
         (int(p.stem) for p in attempts.glob("[0-9]*.json") if p.stem.isdigit()), default=0
@@ -849,6 +919,9 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
         "stdin": "DEVNULL",
         "logs": {},
     }
+    if admission is not None:
+        record["resource_baseline"] = {**admission["samples"][-1], "attempt": number}
+        record["resource_admission"] = admission
     for name in ("supervisor.log", f"generate-{current.get('retries', {}).get('generate', 0)}.log"):
         path = run / name
         if path.exists():
@@ -865,6 +938,9 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
         execution_attempt=number,
         operation_revision=record["operation_revision"],
     )
+    if admission is not None:
+        pending["resource_baseline"] = record["resource_baseline"]
+        pending["resource_history"] = current.get("resource_history", {})
     _save_state(run, pending)
     return config, pending
 
@@ -1172,6 +1248,8 @@ def start(
         with _lease(run) as lease:
             if recover_startup:
                 config, current = _prepare_resume(run)
+                if current.get("resume_blocked"):
+                    return current
             else:
                 config = verify(run)
                 _require_migration(run, config)
@@ -1244,6 +1322,9 @@ def start(
                 "run_id": config["run_id"],
                 "log": str((run / "supervisor.log").relative_to(ROOT)),
             }
+    except KeyboardInterrupt:
+        stop(run)
+        raise
     except BlockingIOError:
         current = status(run)
         if not current["process_alive"] and (current["stage_alive"] or current.get("stage_group")):
@@ -1254,7 +1335,7 @@ def start(
 
 def pause(run: Path) -> dict:
     stop(run)
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         try:
             with _lease(run):
@@ -1342,6 +1423,142 @@ def _swap_bytes() -> int:
     if found is None:
         raise ValueError("swap measurement unavailable")
     return int(float(found[1]) * (1024**2 if found[2] == "M" else 1024**3))
+
+
+def _resource_sample(run: Path, rss: int) -> dict:
+    """Read-only macOS gauges and boot-local counters; RSS is an upper approximation."""
+    started = time.monotonic()
+    vm = subprocess.check_output(["vm_stat"], text=True, timeout=3)
+    page = re.search(r"page size of (\d+) bytes", vm)
+    outs = re.search(r"^Swapouts:\s*(\d+)\.", vm, re.MULTILINE)
+    boot = subprocess.check_output(["sysctl", "-n", "kern.boottime"], text=True, timeout=3).strip()
+    pressure = int(
+        subprocess.check_output(
+            ["sysctl", "-n", "kern.memorystatus_vm_pressure_level"], text=True, timeout=3
+        )
+    )
+    if not page or not outs or not boot or pressure not in (1, 2, 4):
+        raise ValueError("resource measurement unavailable")
+    sample = {
+        "at": time.time(),
+        "monotonic": started,
+        "boot": boot,
+        "page_size": int(page[1]),
+        "swapouts": int(outs[1]),
+        "pressure": pressure,
+        "swap_bytes": _swap_bytes(),
+        "memory_free_percent": _memory_free_percent(),
+        "free_bytes": shutil.disk_usage(run).free,
+        "rss_bytes": rss,
+        "source": "sysctl vm.swapusage used (rounded MiB); vm_stat Swapouts pages; "
+        "sysctl kern.boottime and pressure dispatch flags; memory_pressure -Q; ps RSS KiB",
+        "units": "bytes; swapouts=pages; pressure=flags; memory_free_percent=percent; time=seconds",
+    }
+    sample["at"] = time.time()
+    if time.monotonic() - started > RESOURCE_POLICY["maximum_sample_age_seconds"]:
+        raise ValueError("stale resource sample")
+    return sample
+
+
+def _resource_condition(
+    sample: dict, previous: dict | None, config: dict, *, admission=False
+) -> str:
+    policy, limits = RESOURCE_POLICY, config["resources"]
+    if not 0 <= time.time() - sample["at"] <= policy["maximum_sample_age_seconds"]:
+        return "critical:stale_sample"
+    if sample["pressure"] not in (1, 2, 4):
+        return "critical:unknown_pressure"
+    if (
+        sample["pressure"] == 4
+        or sample["memory_free_percent"] < policy["critical_memory_free_percent"]
+    ):
+        return "critical:memory_pressure"
+    if sample["free_bytes"] < limits["free_space_floor_gib"] * 1024**3:
+        return "critical:disk"
+    if sample["rss_bytes"] > limits["maximum_process_rss_gib"] * 1024**3:
+        return "critical:process_rss"
+    if sample["pressure"] != 1 or sample["memory_free_percent"] < limits.get(
+        "minimum_memory_free_percent", 50
+    ):
+        return "memory_pressure"
+    if previous is None:
+        return "warming"
+    elapsed = sample["monotonic"] - previous["monotonic"]
+    if (
+        sample["boot"] != previous["boot"]
+        or sample["page_size"] != previous["page_size"]
+        or sample["swapouts"] < previous["swapouts"]
+        or not 0 < elapsed <= 2 * policy["maximum_sample_age_seconds"]
+    ):
+        return "critical:counter_discontinuity"
+    # These are host-wide rates, never attributed to the owned process tree.
+    rate = (sample["swapouts"] - previous["swapouts"]) * sample["page_size"] / elapsed
+    growth = (sample["swap_bytes"] - previous["swap_bytes"]) / elapsed
+    threshold = (
+        policy["quiet_bytes_per_second"] if admission else policy["swapout_bytes_per_second"]
+    )
+    if rate > threshold or growth > threshold:
+        return "swap_activity"
+    if admission and (
+        sample["memory_free_percent"] < policy["resume_memory_free_percent"]
+        or sample["free_bytes"]
+        < (limits["free_space_floor_gib"] + policy["resume_disk_margin_gib"]) * 1024**3
+        or sample["rss_bytes"]
+        > limits["maximum_process_rss_gib"] * 1024**3 * policy["resume_rss_fraction"]
+    ):
+        return "recovery_margin"
+    return "safe"
+
+
+def _resource_admission(run: Path, config: dict, state: dict) -> dict:
+    """Finite pre-launch wait; no teacher/task wall budget runs during admission."""
+    started, samples, consecutive, reason = time.monotonic(), [], 0, "warming"
+    stop_path = run / "STOP"
+    stop_stamp = stop_path.stat().st_mtime_ns if stop_path.exists() else None
+    for index in range(RESOURCE_POLICY["maximum_wait_samples"]):
+        if (stop_path.stat().st_mtime_ns if stop_path.exists() else None) != stop_stamp:
+            reason = "requested_stop"
+            break
+        if (
+            time.time()
+            >= state.get("began_at", time.time()) + config["resources"]["maximum_wall_seconds"]
+        ):
+            reason = "wall_limit"
+            break
+        try:
+            # Admission holds the exclusive lease and has checked absence of all old children.
+            table = _process_table()
+            sample = _resource_sample(run, table[os.getpid()][1])
+            reason = _resource_condition(
+                sample, samples[-1] if samples else None, config, admission=True
+            )
+            samples.append(sample)
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            reason = f"measurement_unavailable:{error}"
+            consecutive = 0
+            break
+        consecutive = consecutive + 1 if reason == "safe" else 0
+        if (stop_path.stat().st_mtime_ns if stop_path.exists() else None) != stop_stamp:
+            reason, consecutive = "requested_stop", 0
+            break
+        if consecutive >= RESOURCE_POLICY["admission_samples"]:
+            break
+        if reason.startswith("critical:"):
+            break
+        if index + 1 < RESOURCE_POLICY["maximum_wait_samples"]:
+            time.sleep(RESOURCE_POLICY["interval_seconds"])
+    result = {
+        "safe": consecutive >= RESOURCE_POLICY["admission_samples"],
+        "reason": reason,
+        "samples": samples,
+        "wait_seconds": time.monotonic() - started,
+        "at": time.time(),
+        "policy": RESOURCE_POLICY,
+        "previous_attempt": state.get("execution_attempt"),
+    }
+    with inside(run / "resource-admission.jsonl", exists=False).open("ab") as stream:
+        stream.write(encoded(result) + b"\n")
+    return result
 
 
 def _progress_signature(run: Path, stage: str) -> tuple:
@@ -1609,7 +1826,34 @@ def _run_stage(
 ) -> tuple[int, str | None]:
     process, owned, failure = None, {}, None
     limits = config["resources"]
+    previous = state.get("resource_history", {}).get("last", state.get("resource_baseline"))
     try:
+        if "_resource_policy" in config:
+            baseline = state.get("resource_baseline")
+            if baseline is None or baseline.get("attempt") != state.get("execution_attempt"):
+                return -1, "resource_wait:missing_attempt_baseline"
+            try:
+                fresh = _resource_sample(run, _process_table()[os.getpid()][1])
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                return -1, f"resource_wait:measurement_unavailable:{error}"
+            if time.time() >= state["began_at"] + limits["maximum_wall_seconds"]:
+                return -1, "wall_limit"
+            if (
+                fresh["monotonic"] - previous["monotonic"]
+                > RESOURCE_POLICY["maximum_sample_age_seconds"]
+            ):
+                admission = _resource_admission(run, config, state)
+                if not admission["safe"]:
+                    return -1, "requested_stop" if admission[
+                        "reason"
+                    ] == "requested_stop" else "resource_wait:" + admission["reason"]
+                fresh = admission["samples"][-1]
+            else:
+                condition = _resource_condition(fresh, previous, config, admission=True)
+                if condition != "safe":
+                    state.setdefault("resource_history", {})["last"] = fresh
+                    return -1, "resource_wait:" + condition
+            previous = fresh
         process = _launch(
             run,
             [
@@ -1633,6 +1877,7 @@ def _run_stage(
         state.update(stage_pid=process.pid, stage_identity=read_process_identity(process.pid))
         atomic(run / "state.json", encoded(state))
         signature, last_progress = None, time.monotonic()
+        strikes = 0
         while True:
             rows = _stage_group_snapshot(process, state["stage_identity"])
             if rows[process.pid][2].startswith("Z"):
@@ -1644,9 +1889,47 @@ def _run_stage(
             if current != signature:
                 signature, last_progress = current, time.monotonic()
             rss, owned = _sample_owned(process, owned)
-            free, swap = shutil.disk_usage(run).free, _swap_bytes()
+            if "_resource_policy" in config:
+                try:
+                    sample = _resource_sample(run, rss + _process_table()[os.getpid()][1])
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    failure = f"resource_wait:measurement_unavailable:{error}"
+                    break
+                condition = _resource_condition(sample, previous, config)
+                if (
+                    condition == "safe"
+                    and previous is not None
+                    and sample["swap_bytes"] - state["resource_baseline"]["swap_bytes"]
+                    > limits["maximum_swap_growth_gib"] * 1024**3
+                    and (sample["swap_bytes"] - previous["swap_bytes"])
+                    / (sample["monotonic"] - previous["monotonic"])
+                    > RESOURCE_POLICY["quiet_bytes_per_second"]
+                ):
+                    condition = "sustained_attempt_growth"
+                strikes = strikes + 1 if condition != "safe" else 0
+                previous = sample
+                history = state.setdefault("resource_history", {})
+                for key in ("swap_bytes", "rss_bytes", "swapouts"):
+                    history["peak_" + key] = max(history.get("peak_" + key, 0), sample[key])
+                history["last"] = sample
+                history["attempt_growth_bytes"] = (
+                    sample["swap_bytes"] - state["resource_baseline"]["swap_bytes"]
+                )
+                if (
+                    condition.startswith("critical:")
+                    or strikes >= RESOURCE_POLICY["sustained_samples"]
+                ):
+                    failure = "resource_wait:" + condition
+                free, swap = sample["free_bytes"], sample["swap_bytes"]
+            else:
+                sample = None
+                free, swap = shutil.disk_usage(run).free, _swap_bytes()
             memory_free = (
-                _memory_free_percent() if "minimum_memory_free_percent" in limits else None
+                sample["memory_free_percent"]
+                if sample
+                else _memory_free_percent()
+                if "minimum_memory_free_percent" in limits
+                else None
             )
             metric = {
                 "memory_free_percent": memory_free,
@@ -1657,6 +1940,11 @@ def _run_stage(
                 "free_bytes": free,
                 "swap_bytes": swap,
                 "progress": signature,
+                **(
+                    {"resource_sample": sample, "condition": condition, "strikes": strikes}
+                    if sample
+                    else {}
+                ),
             }
             with inside(run / "monitor.jsonl", exists=False).open("ab") as monitor:
                 monitor.write(encoded(metric) + b"\n")
@@ -1664,6 +1952,8 @@ def _run_stage(
             atomic(run / "state.json", encoded(state))
             if time.time() - state["began_at"] > limits["maximum_wall_seconds"]:
                 failure = "wall_limit"
+            elif sample is not None:
+                pass  # The reviewed multi-signal policy above owns resource decisions.
             elif memory_free is not None and memory_free < limits["minimum_memory_free_percent"]:
                 failure = "memory_pressure_limit"
             elif rss > limits["maximum_process_rss_gib"] * 1024**3:
@@ -1672,11 +1962,15 @@ def _run_stage(
                 failure = "space_limit"
             elif swap - state["initial_swap_bytes"] > limits["maximum_swap_growth_gib"] * 1024**3:
                 failure = "swap_limit"
-            elif time.monotonic() - last_progress > limits["stalled_seconds"]:
+            if not failure and time.monotonic() - last_progress > limits["stalled_seconds"]:
                 failure = "no_actual_progress"
             if failure:
                 break
-            time.sleep(limits["monitor_interval_seconds"])
+            time.sleep(
+                RESOURCE_POLICY["interval_seconds"]
+                if sample
+                else limits["monitor_interval_seconds"]
+            )
     except (OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.SubprocessError) as error:
         _remember_error(state, "stage_spawn" if process is None else "supervision", error)
         if process is None:
@@ -1688,7 +1982,15 @@ def _run_stage(
                 with contextlib.suppress(OSError, ValueError):
                     stop(run)
             try:
-                cleanup = _cleanup(process, owned, grace_seconds=20 if failure else 0)
+                resource_stop = (failure or "").startswith("resource_wait:")
+                grace = 20 if failure else 0
+                if "_resource_policy" in config and (resource_stop or failure == "requested_stop"):
+                    grace = (
+                        0
+                        if (failure or "").startswith("resource_wait:critical:")
+                        else RESOURCE_POLICY["cooperative_stop_seconds"]
+                    )
+                cleanup = _cleanup(process, owned, grace_seconds=grace)
                 state["cleanup"] = cleanup
                 if cleanup["remaining_processes"]:
                     failure = "owned_process_cleanup_incomplete"
@@ -1704,7 +2006,26 @@ def _run_stage(
                 _remember_error(state, "cleanup", error)
                 failure = f"cleanup_error:{type(error).__name__}:{error}"
     if process is not None:
-        if failure == "requested_stop" and process.returncode not in (0, PAUSED_EXIT):
+        supervised_interrupt = (
+            "_resource_policy" in config
+            and stage == "generate"
+            and process.returncode in (-signal.SIGTERM, -signal.SIGKILL)
+            and process.pid in state.get("cleanup", {}).get("signalled_pids", [])
+            and not state.get("errors")
+        )
+        if supervised_interrupt:
+            try:
+                snapshot = _resume_snapshot(run, config)
+                state["generation"] = {key: snapshot[key] for key in ("games", "rows", "tasks")}
+            except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+                _remember_error(state, "interrupted_snapshot", error)
+                failure = "interrupted_snapshot_failed"
+                supervised_interrupt = False
+        if (
+            (failure == "requested_stop" or (failure or "").startswith("resource_wait:"))
+            and process.returncode not in (0, PAUSED_EXIT)
+            and not supervised_interrupt
+        ):
             failure = f"stage_exit_{process.returncode}_during_stop"
         elif failure is None and process.returncode == PAUSED_EXIT and (run / "STOP").exists():
             failure = "requested_stop"
@@ -1756,7 +2077,12 @@ def work(
             "retries": retries,
             "status": "running",
         }
-        for key in ("operation_revision", "execution_attempt"):
+        for key in (
+            "operation_revision",
+            "execution_attempt",
+            "resource_baseline",
+            "resource_history",
+        ):
             if key in prior:
                 state[key] = prior[key]
         if pause_after_new_games is not None:
@@ -1768,6 +2094,10 @@ def work(
         for sig in previous_handlers:
             signal.signal(sig, lambda _signum, _frame: stop(run))
         try:
+            if "_resource_policy" in config:
+                attempt = _json(run / "attempts" / f"{state['execution_attempt']:06d}.json")
+                if state.get("resource_baseline") != attempt.get("resource_baseline"):
+                    raise ValueError("attempt resource baseline changed")
             atomic(run / "state.json", encoded(state))
             for stage in STAGES:
                 if pause_after_new_games is not None and stage != "generate":
@@ -1796,7 +2126,10 @@ def work(
                             atomic(run / "state.json", encoded(state))
                             continue
                         state.update(
-                            status="stopped" if failure == "requested_stop" else "needs_astra",
+                            status="stopped"
+                            if failure == "requested_stop"
+                            or (failure or "").startswith("resource_wait:")
+                            else "needs_astra",
                             reason=failure or f"stage_exit_{returncode}",
                         )
                         break
