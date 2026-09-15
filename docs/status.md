@@ -1,11 +1,79 @@
 # 現在の状態と再開契約
 
-2026-09-12、EBADFの運転修正後、**別OSプロセスから正式resume→pauseを2回実証済み**。
-実状態は **`ready_for_luna`**。214 / 3,072 trajectory、12,062 rows、accepted 301 task、deferred 1。
-本学習は未開始。親は `defense-20260912-main-r1`、対象は **`defense-20260912-recovery-r3`**。
-唯一の現行機械契約は [configs/evaluator-main.json](../configs/evaluator-main.json)。
-同じrun・既存データ・比較重みを維持し、新しい実験やデータ複製は作っていない。
-本書が人間向けの正本で、Lunaは「操作」のresumeコマンドを使う。
+2026-09-15、対象は **`defense-20260912-recovery-r3`**（親 `defense-20260912-main-r1`）。
+現在の実停止はattempt 4の **`needs_astra / swap_limit`**。
+543 trajectory / 30,571 rows、accepted 45,067 task / deferred 21 / hard 10、running 0。
+最新の未完了cursorはgame554 / ply61 / 部分31行。件数から再開位置を算出しない。
+SQLite整合・確定receipt/hash・task identity/payload・未完了cursorのnative再生を再確認した。
+本学習は未開始。r3・比較重み・既存生成データ・封印済みrun/sealは保持する。
+
+本書が人間向けの正本。科学的条件は [configs/evaluator-main.json](../configs/evaluator-main.json)
+とsealed run、運用policyは承認済み`operations/` revisionを参照する。
+**継承した72時間の絶対期限（2026-09-15 14:15:44 JST）は超過している。無承認で延長せず、実再開試験・Luna継続は保留。**
+以下の2026-09-12の実績は過去の証拠であり、今回の実再開PASSではない。
+
+## 資源監視・再開の運用改訂（macos-attempt-v1）
+
+attempt 4の比較は`17,997,758,464 - 4,191,221,186 > 512 MiB`。
+基準はattempt開始値ではなく9月12日承認のr3 resource epoch。元親値1,500,313,026も保持されている。
+標本時刻1789444062.332198、stage PID19124起動から約0.169秒、所有RSS26,148,864 bytes。
+stage起動直後の標本であり、教師の起動を示す証拠はない。中断中のMac全体の増加が比較へ入っていた。
+OSAI消費量とは断定しない。attempt 4の新規出力はない。
+
+計測元の意味はApple公開実装で確認した。
+[sysctl](https://github.com/apple-oss-distributions/system_cmds/blob/main/sysctl/sysctl.c)の
+`vm.swapusage used`は現在使用量で、`total`や累積swapoutではない。表示MはMiB、小数2桁丸め
+（旧bytes値にも約0.005 MiBの表示精度限界がある）。
+[vm_stat](https://github.com/apple-oss-distributions/system_cmds/blob/main/vm_stat/vm_stat.c)の
+Swapoutsはboot中の累積ページ数であり、実機は16,384 bytes/page。圧縮セグメントのswap活動量で、
+RSSやswap使用量と同じ量ではない。boot識別とpage sizeを伴う差分だけを使う。
+[pressure sysctl](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_memorystatus_notify.c)
+は内部enumではなくdispatch flags（1 normal / 2 warning / 4 critical）を返す。
+[memory_pressure](https://github.com/apple-oss-distributions/system_cmds/blob/main/memory_pressure/memory_pressure.c)
+の`-Q`はquietな照会であり、圧力生成オプションを使わない。空き割合は当該指標として扱う。
+
+45秒・4標本の実測はswap16,980 MiBで一定、swapout差分0 pages、pressure normal、
+メモリ空き指標70%、ディスク空き約144 GiB（`shutil.disk_usage`/`df`）。OSAI教師/nativeプロセスなし、lease/残留groupなし。
+これは観測時点の状態であり、次のresumeでは必ず再計測する。
+
+- 履歴のrun初期snapshotは不変。起動直前のattempt baselineはID・boot・時刻・元/単位を付け、
+  attempt記録へ一度だけ保存する。同attemptで取り直して上限を回避しない。
+- 起動前は15秒間隔、初回標本＋3連続の安全な差分（通常約45秒）、最大5標本。
+  待機間隔の合計は最大60秒、各取得25秒以内を要求し、取得時間込みでも最大185秒。
+  normal、空き指標55%以上、空きdisk62 GiB以上、所有RSS9.6 GiB以下、
+  swap使用量増加/swapout活動各1 MiB/s以下を要求する。計測失敗・古い標本・boot/counter不連続は保留。
+- 実行中は15秒間隔。critical pressure、空き指標20%未満、disk60 GiB未満、所有RSS12 GiB超は即停止。
+  warning/空き指標50%未満、swap活動8 MiB/s超は2連続で停止。
+  attempt増分512 MiB超かつ使用量増加1 MiB/s超も2連続で停止する。単に高swapというだけでは停止しない。
+  通常の保存待ちは最大80秒、criticalは即時停止処理。正式pauseの待機は最大120秒。
+  generateで監督自身が送った終了信号だけは、保存cursor/資産検証後に再開可能とする。
+  所有RSSはsupervisorとstage groupの共有メモリを含む近似合計で、ホストswapをOSAIへ帰属させない。
+- 待機は既存schemaの`stopped / resource_wait`（実行中停止理由は`resource_wait:詳細`）。
+  finite admissionが回復しなければ終了し、新task/attemptを増やさない。正式resumeで再試行できる。
+  自動再開は行わない。ユーザー停止は`stopped / requested_stop`、正式pause完了は
+  `ready_for_luna / requested_pause`で区別し、ユーザーのresumeまで停止する。
+- 旧swap_limitだけのneeds_astraは、attempt結果一致・cleanup・lease・process・code/policy・
+  資産/SQLite/cursor・現在資源の検証後に正式resumeで回復する。他原因の重大停止は解除しない。
+  強制中断後のrunningも残留writerなしを検証して同cursorから再開する。
+- 運用改訂を`approve-operations`でcommitとpolicyへhash-bindし、元run/sealは編集しない。
+  資源の累積ピーク・各標本・待機時間・停止理由と旧attemptを保持する。
+  期限、task試行/難queue会計、教師深度/nodes/Threads/Hash、学習条件、評価条件は変更しない。
+
+運転code commit: `946be86`（主修正`b55916a`）。承認済みoperation revision SHA-256:
+`2b112c409d97cad5761f032767ca5c000033c2df47b3da05f4b0ac3c6a1c5085`。
+`approved-operation.json`が次のresumeへ渡す正本。attempt 4のstate中の旧revisionは停止履歴として保持する。
+証拠は`local/runs/defense-20260912/resource-evidence/`。
+今回の実再開2回・新規有効出力増加は**未実施（絶対期限超過）**。
+資源注入/監督/resume回帰51件、既存launcher/resumeと合わせて125件PASS。旧baseline、高swap安全/危険、実page size、短いノイズと
+継続負荷、boot/counter不連続、計測不能、有限待機/回復、期限/attempt基準保持、
+旧swap停止限定解除、他重大停止/二重起動拒否、ユーザー停止、後段stage移行、前bootの履歴を保持した新attempt開始を検証した。
+正式resumeも別プロセス・stdin=/dev/nullで実行し、`wall_limit`の事前拒否を確認。
+旧state・attempt 4・run/seal・生成データは不変、attempt 5は作られていない。
+この拒否確認を実生成の再開PASSとは扱わない。
+最終code `946be86`の`make check`はPython1,099件・Rust・format/lint・locked依存・
+権利/境界/provenance・native build・決定的Wasm照合までPASS。
+ログは`resource-evidence/make-check-946be86.log`。
+本学習・実生成2回のpause/resume・OSUI・main merge・昇格・deployは未実施。
 
 ## 起動EBADFの原因と今回の検証
 
@@ -109,7 +177,8 @@ SQLite取引、ply checkpoint、確定shard/receiptにより再実行時の重�
 
 直近32個の異なるtaskで24失敗以上かつ8trajectory以上にまたがる故障は生成段階停止。
 同一局面の反復だけでは全系故障に昇格しない。合法手不整合、データ/権利/split/identity異常、
-資源危険は安全停止。全体の上限72時間、空き60GiB、所有RSS12GiB、swap追加増分512MiB、メモリ空き指標50%以上、
+資源危険は安全停止。以下の資源数値は封印時の履歴で、現行監視は冒頭の運用profileを適用する。
+全体の上限72時間、空き60GiB、所有RSS12GiB、swap追加増分512MiB、メモリ空き指標50%以上、
 有効出力なし30分。期限は親の開始時刻を継承する。heartbeatだけで進捗とみなさない。
 
 学習開始は検証済みmanifestとcoverageを基準とし、全root無欠測を要求しない。
@@ -151,6 +220,7 @@ r2の最初のprobeは教師起動前に旧swap増分上限で停止した。旧
 ユーザーの明示承認によりr3は実測4,191,221,186 bytesを基準とし、追加増分512MiB・
 メモリ空き指標50%以上に制限する。元の基準・r2停止証拠を保持し、自動再基準化はしない。
 元72時間期限、全task試行履歴、RSS12GiB、ディスク空き60GiBは維持。
+この段落は旧policyの履歴。現在の運用判定は上記macos-attempt-v1を承認revision経由で適用する。
 `resource_epoch`が承認・旧基準・実測・停止証拠をhash-bindする。
 
 ## 操作
@@ -175,7 +245,8 @@ SQLite整合・未完了cursorのnative再生を検証し、元state/log prefix�
 `attempts/`に保存して状態遷移と起動を行う。元`run.json`と`seal.json`は不変。
 Astraの`approve-operations`は運転code review後の一回の準備で、stateをreadyに書き換えない。
 Lunaは承認済みhashを使い、別commitの運転codeを自動承認しない。
-教師・データ意味・学習・資源・評価条件の変更は、この運転復旧の対象外。
+教師・データ意味・学習・評価条件の変更は、この運転復旧の対象外。
+資源監視の運用方針のみmacos-attempt-v1への今回の明示承認範囲で更新する。
 データ書込みのEBADF、未知のstage失敗、診断/cleanup保存失敗を安全な再試行に分類しない。
 pauseは専用終了codeと全process/lease解放、保存済み進捗を確認してreadyへ戻す。
 
