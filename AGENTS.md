@@ -45,3 +45,9 @@
   to prepare/train. Missing focus is reported and excluded itemwise, not fabricated.
   Host memory pressure/swap alone is diagnostic; confirmed allocation failures use the
   finite fallback/resource-wait path. See `docs/status.md` for the sole current handoff.
+- The approved post-training continuation for the same run is `optional-screen-v1`:
+  preserve completed generation/prepare/training and the checkpoint-bound best1536.
+  Optional teacher screens never block independent arena or development OSUI loading;
+  missing/not-run screens remain unverified, not passing. Session 2 executes only the
+  fixed evaluation remainder (plan A) in `docs/status.md` and `configs/evaluator-main.json`.
+  It does not retrain, publish, promote, merge, or open the final holdout.

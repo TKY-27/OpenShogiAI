@@ -406,29 +406,37 @@
       "data/dataset-building incomplete owned staging after containment/link/open-file verification"
     ],
     "recovery": [
-      "Resume valid parent shards and exact cursor under revision 2; retain historical start, swap observations and retries. Approved finite-work-v1 removes only the run calendar wall limit; macos-attempt-v1 governs current resource safety. No training checkpoint exists before train.",
-      "Typed incomplete depth is excluded from labels and deferred to a finite fair hard queue; root incomplete alone never stops the run. Main 2M plus hard 32M share persistent two-attempt/34M-node/120-second task budget, including imported attempts.",
-      "Worker communication failure restarts only that worker within its persisted recovery budget. Independent-task health circuit and integrity/resource failures stop the affected stage.",
-      "Complete accepted manifests may retain bounded local deferrals; unmet coverage automatically uses sealed same-family supplementation then returns only the deficient stage to Astra.",
-      "Probe runs only generation through the supervised resume path and pauses ready_for_luna before preparation/training.",
-      "34M is the cumulative requested node budget; teacher node counters may overshoot their request. Persist observed nodes and enforce each 60-second wall deadline. Teacher circuit uses 24 failures in the latest 32 distinct tasks across at least 8 games.",
-      "Reviewed startup/stdio-only fixes use the same run and immutable run/seal, with committed operational file hashes and original failure/state/log prefixes in execution attempts. Only evaluator_run.py and the operations section of this source config may differ; teacher, data, training and evaluation remain sealed. Versioned approvals carry the reviewed resource policy and the explicit removal of this run calendar limit.",
-      "resume acquires the live lease, excludes residual processes, verifies output receipts and native checkpoint replay, records the operation revision and attempt, and starts a fresh supervisor/stage with DEVNULL runner stdin and append logs. Confirmed before-spawn or unregistered CPython init_sys_streams EBADF failures are recoverable; data-writing and unknown failures remain needs_astra. No automatic EBADF retry or budget reset.",
-      "pause waits for the supervisor/stage lease to be released, verifies durable progress and returns ready_for_luna. Luna may execute the verified resume/pause commands without reapproval; no new run, reseal, data clone or model publication is authorized.",
-      "Astra performs approve-operations once after code review and commit; it pins the allowed operational hashes without changing state or the original seal. The one-time --abolish-calendar-limit approval for defense-20260912-recovery-r3 records finite-work-v1, the original seal and calendar bound, and the previous operation reference; ordinary resume needs no extra flags. Luna only resumes that approved revision; resume never approves new code hashes automatically."
+      "The original run/seal, generated data, split/rights metadata, prepare manifest and completed training remain unchanged. Formal resume verifies and skips them.",
+      "Astra approves committed post-training code through approve-operations --post-training-evaluation; it records the original optional D16 failure and completed training/audit identities. Luna uses ordinary resume, never hand-edits state or creates another run.",
+      "optional-screen-v1 retains existing optional screen evidence without additional teacher calls in this evaluation. Typed depth/timeout/budget misses are missing observations, not zero scores or losses; runtime/hash/legal/save failures remain required.",
+      "Normal host pressure/swap is diagnostic. Confirmed allocation failures retain the coherent checkpoint and use the existing finite microbatch fallback and at most 3 process retries per task. Resource wait preserves cumulative budgets and resumes when recovered; user STOP is never cleared automatically.",
+      "resume holds the exclusive lease and starts a separate supervisor/stage with DEVNULL stdin. Completed arena task IDs are verified and skipped; all failed attempts and spent clocks remain in receipts.",
+      "A 2-game arena probe is only a bounded execution prefix, never full Arena acceptance. The following ordinary resume completes the same plan. Max-plies exhaustion is unscored but does not prevent final review of the finite workload.",
+      "No new calendar deadline, generation, retraining, public-default promotion, weight publication, main merge, deploy, forced history change, or model/branch cleanup is authorized in session 2."
     ],
     "return_to_astra": [
-      "identity, split, corruption, numerical or illegal-move integrity failure",
-      "resource danger or independent-task teacher-health circuit",
-      "coverage remains insufficient after finite hard-queue and same-family supplementation",
-      "awaiting_astra_review after valid fixed evaluation regardless of win rate"
+      "identity, split, corruption, numerical, illegal-move or save-integrity failure",
+      "unrecoverable runtime/clock failure, with original evidence preserved",
+      "awaiting_astra_review after the finite fixed evaluation, including losses or unscored max-plies cases"
     ],
     "acquisition": "All inputs already local; hash-pinned Apery 2.0.0 engine GPL-3.0 and separately licensed evaluation MIT; own generated trajectories. Verify sealed inputs before generation, seal actual dataset manifest during prepare; no additional public archive acquisition.",
     "cwd_identity": "OpenShogiAI Git root; absolute execution_cwd is bound in the ignored sealed run.json",
     "review_result": "local/runs/defense-20260912/recovery-r3/candidate-review.json",
-    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run probe local/runs/defense-20260912/recovery-r3 --pause-after-new-games 1",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 --pause-after-arena-games 2 </dev/null",
     "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r3",
-    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/defense-20260912/recovery-r3 </dev/null"
+    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/defense-20260912/recovery-r3 </dev/null",
+    "session_2": {
+      "plan": "A: evaluate the existing best1536 only; no additional training",
+      "candidate_sha256": "8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a",
+      "dataset_manifest_sha256": "67289ab62f78a1cb8f54af25367e27df729c7d3fc96cd6ad9bb573203a2dda42",
+      "approval": "approved-operation.json; optional-screen-v1; original run/seal and training identity retained",
+      "completed_stages": "generate, prepare, train, mandatory runtime audit and development scalar evaluation; verify and skip completed receipts",
+      "optional_screen": "retained_only; completed/missing/not_run separate; screen_pass null when incomplete; never blocks independent arena or development loading",
+      "arena": "same fixed 32 stress games (24 at 3 minutes, 8 at 10 minutes) plus 4 startpos demonstrations; reuse completed task IDs exactly once",
+      "supplementary": "2 fixed-50ms games against shared-search handcrafted evaluation; saved separate, not shodan-calibrated and not added to main arena",
+      "handoff": "finish finite evaluation and candidate-review then awaiting_astra_review regardless of win rate; max-plies exhaustion stays unscored",
+      "promotion": "none; development candidate only"
+    }
   },
   "contract_revision": 2,
   "recovery_from": {
