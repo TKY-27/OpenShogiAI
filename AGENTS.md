@@ -38,3 +38,10 @@
   Resume preserves cumulative attempts and lineage. Training requires the sealed coverage
   manifest; exhausted cohort budgets, systemic faults, integrity and resource failures remain
   stage stop conditions. A new acceptance policy requires Astra and a successor contract.
+- For `defense-20260912-recovery-r3`, the explicit 2026-09-17 authorization supersedes
+  the old whole-run focus ceilings and generation-exhaustion handoff. The hash-bound
+  `itemwise-focus-v1` dataset admission in the existing run preserves the original seal
+  and failures, closes generation/hard reanalysis, and admits valid independent targets
+  to prepare/train. Missing focus is reported and excluded itemwise, not fabricated.
+  Host memory pressure/swap alone is diagnostic; confirmed allocation failures use the
+  finite fallback/resource-wait path. See `docs/status.md` for the sole current handoff.

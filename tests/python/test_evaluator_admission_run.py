@@ -176,3 +176,26 @@ def test_only_supervised_prepare_interruption_is_recoverable(resumable):  # noqa
     state["stage"] = "prepare"
     state["cleanup"]["signalled_pids"] = []
     assert not runner._startup_recoverable(run, state)
+
+
+def test_allocation_failure_remains_wait_when_initial_measurement_fails(resumable, monkeypatch):  # noqa: F811
+    from open_shogi_training.evaluator_training import TrainingResourceWaitError
+
+    run = resumable[1]
+    monkeypatch.setattr(runner.sys, "argv", ["runner", "stage", str(run), "train"])
+
+    def fail_stage(*args, **kwargs):
+        raise TrainingResourceWaitError("training allocation failed at microbatch 1")
+
+    def fail_measurement(*args, **kwargs):
+        raise OSError("measurement unavailable")
+
+    monkeypatch.setattr(runner, "stage_run", fail_stage)
+    monkeypatch.setattr(runner, "_resource_sample", fail_measurement)
+    monkeypatch.setattr(runner, "_process_table", lambda: {runner.os.getpid(): (0, 0)})
+    with pytest.raises(SystemExit) as error:
+        runner.main()
+    assert error.value.code == runner.RESOURCE_EXIT
+    event = json.loads((run / "allocation-failure.json").read_text())
+    assert event["resource_sample"] is None
+    assert event["reason"] == "allocation_failure"
