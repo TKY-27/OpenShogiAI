@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import io
 import json
@@ -23,6 +24,65 @@ from .phase10v_model import (
     torch_parameters,
 )
 
+
+class TrainingResourceWaitError(RuntimeError):
+    """Confirmed allocation failure; restart from the last published checkpoint."""
+
+
+class CheckpointPublicationError(RuntimeError):
+    """A successful update was not durably saved; automatic replay is forbidden."""
+
+
+def allocation_failure(error: BaseException) -> bool:
+    return isinstance(error, MemoryError | torch.OutOfMemoryError) or (
+        isinstance(error, RuntimeError)
+        and any(
+            marker in str(error).lower()
+            for marker in (
+                "defaultcpuallocator: can't allocate memory",
+                "mps backend out of memory",
+            )
+        )
+    )
+
+
+def _accumulate(parameters: list, data: dict, indexes, microbatch_size: int) -> float:
+    """Select rows before evaluation; normalize each sum by the effective batch size."""
+    total = 0.0
+    if not len(indexes):
+        raise ValueError("empty optimizer batch")
+    for start in range(0, len(indexes), microbatch_size):
+        features, lengths, y = batch(data, indexes[start : start + microbatch_size])
+        predicted = forward(parameters, features, lengths)
+        loss = functional.smooth_l1_loss(predicted / 600, y / 600, reduction="sum")
+        if not torch.isfinite(loss):
+            raise FloatingPointError("nonfinite training loss")
+        (loss / len(indexes)).backward()
+        total += float(loss.detach())
+    return total
+
+
+def accumulate(parameters: list, data: dict, indexes, microbatch_size: int) -> tuple[float, int]:
+    """Each failed microbatch pass is discarded before a finite, smaller retry."""
+    while True:
+        for parameter in parameters:
+            parameter.grad = None
+        try:
+            return _accumulate(parameters, data, indexes, microbatch_size), microbatch_size
+        except (MemoryError, RuntimeError) as error:
+            if not allocation_failure(error):
+                raise
+            # Clear traceback-held tensors before retrying, not merely Python locals.
+            error.__traceback__ = None
+            exhausted = microbatch_size == 1
+        for parameter in parameters:
+            parameter.grad = None
+        gc.collect()
+        if exhausted:
+            raise TrainingResourceWaitError("training allocation failed at microbatch 1")
+        microbatch_size = max(1, microbatch_size // 2)
+
+
 GROUPS = ("general", "opening", "defense", "attack_end")
 
 
@@ -40,8 +100,7 @@ def evaluate_groups(parameters: list, data: dict, batch_size: int) -> dict:
         indexes = np.flatnonzero(data["groups"] == i)
         if not len(indexes):
             raise ValueError(f"missing independent validation group: {name}")
-        subset = {k: v[indexes] for k, v in data.items() if k != "groups"}
-        result[name] = evaluate(parameters, subset, batch_size)
+        result[name] = evaluate(parameters, data, batch_size, indexes=indexes)
     return result
 
 
@@ -66,6 +125,8 @@ def stratified_order(
 def forward(parameters: list, features: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     """Pre-encoded own/opponent features; exact Q20/f64 accumulation on the measured CPU route."""
     table, bias, hw, hb, ow, ob = parameters
+    if bool((features >= len(table)).any()):
+        raise ValueError("encoded feature index outside model table")
     selected = table[features]
     selected = (
         selected + ((selected * ACCUMULATOR_GRID).round() / ACCUMULATOR_GRID - selected).detach()
@@ -86,21 +147,51 @@ def arrays(folder: Path, split: str) -> dict:
 
 
 def batch(data: dict, indexes) -> tuple:
-    return (
-        torch.from_numpy(np.array(data["features"][indexes], dtype=np.int64)),
-        torch.from_numpy(np.array(data["lengths"][indexes], dtype=np.int64)),
-        torch.from_numpy(np.array(data["targets"][indexes], dtype=np.float32)),
-    )
+    if data["features"].dtype.kind not in "ui" or data["lengths"].dtype.kind not in "ui":
+        raise ValueError("feature indexes/lengths must be integers")
+    features = np.array(data["features"][indexes], dtype=np.int64)
+    lengths = np.array(data["lengths"][indexes], dtype=np.int64)
+    targets = np.array(data["targets"][indexes], dtype=np.float32)
+    if targets.ndim != 1 or not len(targets) or not np.isfinite(targets).all():
+        raise ValueError("empty/nonfinite training targets")
+    if (
+        features.ndim != 3
+        or features.shape[:2] != (len(targets), 2)
+        or lengths.shape != features.shape[:2]
+        or (lengths < 1).any()
+        or (lengths > features.shape[2]).any()
+        or (features < 0).any()
+    ):
+        raise ValueError("invalid encoded feature shape/length/index")
+    return tuple(torch.from_numpy(value) for value in (features, lengths, targets))
 
 
-def evaluate(parameters: list, data: dict, batch_size: int) -> dict:
-    total, absolute, square, count = 0.0, 0.0, 0.0, len(data["targets"])
+def evaluate(parameters: list, data: dict, batch_size: int, *, indexes=None) -> dict:
+    size = min(batch_size, 32)
+    while True:
+        try:
+            return _evaluate(parameters, data, size, indexes=indexes)
+        except (MemoryError, RuntimeError) as error:
+            if not allocation_failure(error):
+                raise
+            error.__traceback__ = None
+            exhausted = size == 1
+        gc.collect()
+        if exhausted:
+            raise TrainingResourceWaitError("validation allocation failed at microbatch 1")
+        size = max(1, size // 2)
+
+
+def _evaluate(parameters: list, data: dict, batch_size: int, *, indexes=None) -> dict:
+    count = len(data["targets"]) if indexes is None else len(indexes)
+    total, absolute, square = 0.0, 0.0, 0.0
     severe_over = 0
     if count == 0:
         raise ValueError("empty development validation")
     with torch.no_grad():
         for start in range(0, count, batch_size):
-            features, lengths, y = batch(data, slice(start, start + batch_size))
+            selection = slice(start, start + batch_size)
+            features, lengths, y = batch(data, selection if indexes is None else indexes[selection])
             predicted = forward(parameters, features, lengths)
             total += float(functional.smooth_l1_loss(predicted / 600, y / 600, reduction="sum"))
             absolute += float((predicted - y).abs().sum())
@@ -118,15 +209,21 @@ def evaluate(parameters: list, data: dict, batch_size: int) -> dict:
 def _save_checkpoint(folder: Path, state: dict) -> None:
     stream = io.BytesIO()
     torch.save(state, stream)
-    path = folder / f"checkpoint-{state['step']:06d}.pt"
-    atomic(path, stream.getvalue())
+    payload = stream.getvalue()
+    checksum = hashlib.sha256(payload).hexdigest()
+    path = folder / f"checkpoint-{state['step']:06d}-{checksum}.pt"
+    atomic(path, payload)
     atomic(
         folder / "resume.json",
         encoded({"path": path.name, "sha256": digest(path), "step": state["step"]}),
     )
     # Two complete states cover interrupted publication; best inference model is separate.
-    obsolete = sorted(folder.glob("checkpoint-*.pt"))[:-2]
-    for old in obsolete:
+    previous = sorted(
+        (candidate for candidate in folder.glob("checkpoint-*.pt") if candidate != path),
+        key=lambda candidate: candidate.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for old in previous[1:]:
         handles = subprocess.run(
             ["lsof", "--", str(old)], capture_output=True, text=True, check=False
         )
@@ -163,6 +260,9 @@ def train(
         < 1
     ):
         raise ValueError("invalid bounded CPU training configuration")
+    microbatch_size = config.get("microbatch_size", min(config["batch_size"], 32))
+    if not isinstance(microbatch_size, int) or not 1 <= microbatch_size <= config["batch_size"]:
+        raise ValueError("invalid microbatch size")
     torch.set_num_threads(config["threads"])
     torch.use_deterministic_algorithms(True)
     torch.manual_seed(config["seed"])
@@ -189,9 +289,7 @@ def train(
         )
 
     order = next_order()
-    baseline_groups = (
-        evaluate_groups(parameters, validation, config["batch_size"]) if fractions else None
-    )
+    baseline_groups = None
     best_loss = math.inf
     best_bytes = b""
     history = []
@@ -220,6 +318,10 @@ def train(
         best_loss, history, counts, order = (
             state[k] for k in ("best_loss", "history", "counts", "order")
         )
+        microbatch_size = state.get("microbatch_size", microbatch_size)
+        if not isinstance(microbatch_size, int) or not 1 <= microbatch_size <= config["batch_size"]:
+            raise ValueError("invalid checkpoint microbatch size")
+        baseline_groups = state.get("baseline_groups")
         best_bytes = state["best_model_bytes"]
         if hashlib.sha256(best_bytes).hexdigest() != state["best_sha256"]:
             raise ValueError("checkpoint best model checksum mismatch")
@@ -257,6 +359,8 @@ def train(
                 if result["identity"] != identity or result["best_sha256"] != state["best_sha256"]:
                     raise ValueError("completed run identity mismatch")
                 return result
+    if fractions and baseline_groups is None:
+        baseline_groups = evaluate_groups(torch_parameters(model), validation, config["batch_size"])
     initial_step = step
     started = time.monotonic()
 
@@ -282,15 +386,38 @@ def train(
             "order": order,
             "train_loss_sum": train_loss_sum,
             "train_rows": train_rows,
+            "microbatch_size": microbatch_size,
+            "baseline_groups": baseline_groups,
         }
-        _save_checkpoint(folder, state)
+        try:
+            _save_checkpoint(folder, state)
+        except (MemoryError, RuntimeError) as error:
+            if not allocation_failure(error):
+                raise
+            raise CheckpointPublicationError(
+                f"checkpoint publication failed after step {step}; explicit repair required"
+            ) from error
 
     def save(reason: str) -> dict:
         nonlocal best_loss, best_bytes, stale, best_step, train_loss_sum, train_rows
-        metrics = evaluate(parameters, validation, config["batch_size"])
-        groups = (
-            evaluate_groups(parameters, validation, config["batch_size"]) if fractions else None
-        )
+        groups = None
+        if fractions:
+            groups = (
+                baseline_groups
+                if not history
+                else evaluate_groups(parameters, validation, config["batch_size"])
+            )
+            count = sum(group["positions"] for group in groups.values())
+            metrics = {
+                key: sum(group[key] * group["positions"] for group in groups.values()) / count
+                for key in ("loss", "cp_mae", "overestimate_above_600cp_rate")
+            }
+            metrics["positions"] = count
+            metrics["cp_rmse"] = math.sqrt(
+                sum(group["cp_rmse"] ** 2 * group["positions"] for group in groups.values()) / count
+            )
+        else:
+            metrics = evaluate(parameters, validation, config["batch_size"])
         eligible = True
         if groups:
             metrics["loss"] = sum(groups[g]["loss"] * fractions[i] for i, g in enumerate(GROUPS))
@@ -337,6 +464,9 @@ def train(
 
     if not history:
         save("initial_validation")
+    elif step % config["validation_every"] == 0 and history[-1]["step"] != step:
+        # The update is durable even when validation was interrupted after it.
+        save("validation")
     reason = "validation_patience" if stale >= config["patience"] else "max_steps"
     while (
         step < config["max_steps"] and epoch < config["max_epochs"] and stale < config["patience"]
@@ -352,7 +482,6 @@ def train(
             order = next_order()
             offset = 0
         indexes = order[offset : offset + config["batch_size"]]
-        features, lengths, y = batch(data, indexes.numpy())
         warmup = min(1.0, (step + 1) / config["warmup_steps"])
         progress = min(1.0, step / config["max_steps"])
         lr = config["minimum_learning_rate"] + 0.5 * (
@@ -360,24 +489,59 @@ def train(
         ) * (1 + math.cos(math.pi * progress))
         for group in optimizer.param_groups:
             group["lr"] = lr * warmup
-        optimizer.zero_grad(set_to_none=True)
-        predicted = forward(parameters, features, lengths)
-        loss = functional.smooth_l1_loss(predicted / 600, y / 600)
-        if not torch.isfinite(loss):
-            raise FloatingPointError("nonfinite training loss")
-        loss.backward()
+        try:
+            loss_sum, microbatch_size = accumulate(
+                parameters, data, indexes.numpy(), microbatch_size
+            )
+        except TrainingResourceWaitError:
+            # No optimizer mutation yet; retain all preceding successful updates.
+            microbatch_size = 1
+            persist()
+            raise
         if any(p.grad is None or not torch.isfinite(p.grad).all() for p in parameters):
             raise FloatingPointError("missing/nonfinite gradient")
         torch.nn.utils.clip_grad_norm_(
             parameters, config["gradient_norm_limit"], error_if_nonfinite=True
         )
-        optimizer.step()
-        counts[indexes] += 1
-        offset += len(indexes)
-        exposures += len(indexes)
-        step += 1
-        train_loss_sum += float(loss.detach()) * len(indexes)
-        train_rows += len(indexes)
+        try:
+            optimizer.step()
+        except (MemoryError, RuntimeError) as error:
+            if not allocation_failure(error):
+                raise
+            # AdamW may have partially mutated parameters: never publish this state.
+            raise TrainingResourceWaitError(
+                "optimizer allocation failed; reload checkpoint"
+            ) from error
+        try:
+            counts[indexes] += 1
+            offset += len(indexes)
+            exposures += len(indexes)
+            step += 1
+            train_loss_sum += loss_sum
+            train_rows += len(indexes)
+            # Every committed optimizer update is durable before another can start.
+            persist()
+        except (MemoryError, RuntimeError) as error:
+            if not allocation_failure(error):
+                raise
+            raise CheckpointPublicationError(
+                "successful optimizer update lacks durable progress; explicit repair required"
+            ) from error
+        atomic(
+            folder / "progress.json",
+            encoded(
+                {
+                    "step": step,
+                    "epoch": epoch,
+                    "offset": offset,
+                    "exposures": exposures,
+                    "train_loss": loss_sum / len(indexes),
+                    "microbatch_size": microbatch_size,
+                    "effective_batch_size": len(indexes),
+                    "reason": "optimizer_update",
+                }
+            ),
+        )
         validation_due = step % config["validation_every"] == 0
         limited = stop_after is not None and step - initial_step >= stop_after
         if validation_due:
@@ -386,7 +550,6 @@ def train(
                 reason = "validation_patience"
                 break
         if limited:
-            persist()
             return {"status": "paused_for_resume_check", "step": step, "exposures": exposures}
     if reason == "requested_stop":
         persist()

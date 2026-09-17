@@ -32,6 +32,7 @@ from .labeling.process_identity import read_process_identity
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = "open_shogi_training.evaluator_run"
 PAUSED_EXIT = 75
+RESOURCE_EXIT = 76
 SCHEMA = "open_shogiai_evaluator_run/v1"
 STAGES = ("generate", "prepare", "train", "audit", "arena")
 STATES = {
@@ -72,6 +73,24 @@ CALENDAR_POLICY = {
     "calendar_wall_limit_seconds": None,
     "historical_active_seconds": None,
     "accounting": "retain task and evaluation consumption; historical total active time unknown",
+}
+ADMISSION_POLICY = {
+    "revision": "itemwise-focus-v1",
+    "run_id": "defense-20260912-recovery-r3",
+    "authorization": "explicit_user_existing_data_learning_20260917",
+    "generation_budget": "closed_consumed_by_authorization; no further generation or hard queue",
+    "missing_focus": "exclude dependent observations before loss; retain independent valid targets",
+    "memory": "host pressure and swap are diagnostic; allocation failure uses bounded fallback",
+    "microbatch": 32,
+    "effective_batch": "unchanged; sum losses divided by effective valid examples",
+}
+ADMISSION_FILES = {
+    "training/open_shogi_training/evaluator_run.py",
+    "training/open_shogi_training/evaluator_data.py",
+    "training/open_shogi_training/evaluator_coverage.py",
+    "training/open_shogi_training/defense_scenarios.py",
+    "training/open_shogi_training/evaluator_training.py",
+    "configs/evaluator-main.json",
 }
 OPERATIONAL_FILES = {"training/open_shogi_training/evaluator_run.py", "configs/evaluator-main.json"}
 
@@ -333,10 +352,29 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         revision.get("schema") != "open_shogiai_operation_revision/v1"
         or revision.get("run_sha256") != digest(run / "run.json")
         or revision.get("original_code_commit") != config["code"]["commit"]
-        or not set(revision["files"]) <= OPERATIONAL_FILES
+        or not set(revision["files"])
+        <= (ADMISSION_FILES if "dataset_admission" in revision else OPERATIONAL_FILES)
         or not re.fullmatch(r"[a-f0-9]{40}", revision["commit"])
     ):
         raise ValueError("invalid operational code revision")
+    if "dataset_admission" in revision:
+        if (
+            revision.get("admission_policy") != ADMISSION_POLICY
+            or config["run_id"] != ADMISSION_POLICY["run_id"]
+        ):
+            raise ValueError("unrecognized dataset admission revision")
+        ref = revision["dataset_admission"]
+        if inside(ref["path"]) != run / "data/admission.json":
+            raise ValueError("dataset admission outside run")
+        _reference(run / "data/admission.json", ref["sha256"])
+        admission = _json(run / "data/admission.json")
+        if admission["run_sha256"] != digest(run / "run.json") or admission[
+            "seal_sha256"
+        ] != digest(run / "seal.json"):
+            raise ValueError("dataset admission seal changed")
+        for ref in admission["evidence"].values():
+            _reference(inside(ref["path"]), ref["sha256"])
+        config["_dataset_admission"] = revision["dataset_admission"]
     if "resource_policy" in revision:
         if revision["resource_policy"] != RESOURCE_POLICY:
             raise ValueError("unrecognized resource policy revision")
@@ -833,6 +871,130 @@ def _startup_recoverable(run: Path, state: dict) -> bool:
     )
 
 
+def _reviewed_generation_failure(run: Path, current: dict) -> bool:
+    path = run / "data/admission.json"
+    if not path.exists():
+        return False
+    admission = _json(path)
+    return (
+        admission.get("policy") == ADMISSION_POLICY["revision"]
+        and admission.get("original_state_sha256") == hashlib.sha256(encoded(current)).hexdigest()
+        and admission.get("run_sha256") == digest(run / "run.json")
+        and current.get("status") == "needs_astra"
+        and current.get("stage") == "generate"
+        and current.get("reason") == "stage_exit_1"
+        and not current.get("errors")
+    )
+
+
+def _admit_existing_data(run: Path) -> dict:
+    """Explicit scientific admission, not a startup-only or resource revision."""
+    path = run / "data/admission.json"
+    if path.exists():
+        return _reference(path)
+    current = _state(run)
+    coverage = _json(run / "data/recovery-coverage.json")
+    log = run / f"generate-{current.get('retries', {}).get('generate', 0)}.log"
+    with log.open("rb") as stream:
+        stream.seek(max(0, log.stat().st_size - 4096))
+        tail = stream.read()
+    if (
+        _json(run / "run.json")["run_id"] != ADMISSION_POLICY["run_id"]
+        or current.get("status") != "needs_astra"
+        or current.get("stage") != "generate"
+        or current.get("reason") != "stage_exit_1"
+        or current.get("errors")
+        or current.get("cleanup", {}).get("remaining_processes") != {}
+        or current.get("cleanup", {}).get("inventory_errors")
+        or coverage["reasons"] != ["focus_total"]
+        or not tail.rstrip().endswith(
+            b"ValueError: finite generation coverage exhausted: coverage_exhausted"
+        )
+        or _json(run / "attempts" / f"{current['execution_attempt']:06d}-result.json") != current
+    ):
+        raise ValueError(
+            "existing-data admission requires the reviewed focus-only generation failure"
+        )
+    for pid, key in (("pid", "process_identity"), ("stage_pid", "stage_identity")):
+        if current.get(key) and read_process_identity(current.get(pid)) == current[key]:
+            raise ValueError("live process prevents admission")
+    if _residual_stage_group(run) is not None:
+        raise ValueError("residual group prevents admission")
+    config = _json(run / "run.json")
+    snapshot = _resume_snapshot(run, config)
+    evidence = run / "admission-evidence"
+    evidence.mkdir(exist_ok=True)
+    refs = {}
+    for name, value in {
+        "state": current,
+        "coverage": coverage,
+        "snapshot": snapshot,
+        "generation-progress": _json(run / "data/generation-progress.json"),
+    }.items():
+        target = evidence / f"{name}.json"
+        if target.exists() and target.read_bytes() != encoded(value):
+            raise ValueError("admission evidence changed")
+        atomic(target, encoded(value))
+        refs[name] = _reference(target)
+    target = evidence / "generation-failure.log"
+    atomic(target, log.read_bytes())
+    refs["failure_log"] = _reference(target)
+    value = {
+        "schema": "open_shogiai_dataset_admission/v1",
+        "policy": ADMISSION_POLICY["revision"],
+        "authorization": ADMISSION_POLICY,
+        "run_sha256": digest(run / "run.json"),
+        "seal_sha256": digest(run / "seal.json"),
+        "generation_sha256": digest(run / "data/generation.json"),
+        "original_state_sha256": hashlib.sha256(encoded(current)).hexdigest(),
+        "evidence": refs,
+        "generation_budget_closed": True,
+        "consumption": snapshot["counters"],
+        "pending_cursors": len(snapshot["pending"]),
+        "tasks": snapshot["tasks"],
+    }
+    atomic(path, encoded(value))
+    return _reference(path)
+
+
+def _finalize_existing_generation(run: Path, config: dict, snapshot: dict) -> None:
+    if "_dataset_admission" not in config or (run / "generate-complete.json").exists():
+        return
+    from .evaluator_coverage import coverage_report
+
+    admission = _json(run / "data/admission.json")
+    original = _json(inside(admission["evidence"]["snapshot"]["path"]))
+    if snapshot != original:
+        raise ValueError("admitted generation data or cursor changed")
+    coverage = coverage_report(run / "data", config["generation"])
+    if not coverage["passed"]:
+        raise ValueError(
+            "non-focus generation coverage remains invalid: " + str(coverage["reasons"])
+        )
+    result = {
+        **_json(inside(admission["evidence"]["generation-progress"]["path"])),
+        "status": "complete",
+        "coverage": coverage,
+        "focus_quality": coverage["focus_quality"],
+        "dataset_admission": config["_dataset_admission"],
+        "generation_budget_closed": True,
+    }
+    atomic(run / "data/generation-complete.json", encoded(result))
+    atomic(
+        run / "generate-complete.json",
+        encoded(
+            {
+                "schema": "open_shogiai_evaluator_stage/v1",
+                "stage": "generate",
+                "run_sha256": digest(run / "run.json"),
+                "result": result,
+                "artifacts": _completion_artifacts(run, "generate"),
+                "dataset_admission": config["_dataset_admission"],
+            }
+        ),
+    )
+
+
 def _resume_idle_state(run: Path) -> dict:
     current = _state(run)
     pending = current["status"] == "running" and current.get("reason") == "startup_pending"
@@ -847,7 +1009,9 @@ def _resume_idle_state(run: Path) -> dict:
         "running",
     }:
         raise ValueError("resume requires a paused run or confirmed startup failure")
-    if current["status"] == "needs_astra" and not _startup_recoverable(run, current):
+    if current["status"] == "needs_astra" and not (
+        _startup_recoverable(run, current) or _reviewed_generation_failure(run, current)
+    ):
         raise ValueError("failure is outside startup recovery; Astra review required")
     if current["status"] == "running" and current.get("errors"):
         raise ValueError("interrupted supervisor has unresolved errors")
@@ -862,9 +1026,12 @@ def _resume_idle_state(run: Path) -> dict:
     return current
 
 
-def _approve_operations(run: Path, *, abolish_calendar_limit: bool = False) -> dict:
+def _approve_operations(
+    run: Path, *, abolish_calendar_limit: bool = False, admit_existing_data: bool = False
+) -> dict:
     """Astra's explicit one-time code review; resume never approves a new hash."""
     with _lease(run):
+        admission_ref = _admit_existing_data(run) if admit_existing_data else None
         _resume_idle_state(run)
         config, code = _json(run / "run.json"), _code_identity()
         if set(code["files"]) != set(config["code"]["files"]):
@@ -897,6 +1064,15 @@ def _approve_operations(run: Path, *, abolish_calendar_limit: bool = False) -> d
                 supersedes=previous_ref,
             )
             # Retrying after pointer publication must reuse the same approval.
+            if {k: v for k, v in previous.items() if k != "supersedes"} == {
+                k: v for k, v in revision.items() if k != "supersedes"
+            }:
+                revision = previous
+        if admission_ref or "dataset_admission" in previous:
+            revision.update(
+                dataset_admission=admission_ref or previous["dataset_admission"],
+                admission_policy=ADMISSION_POLICY,
+            )
             if {k: v for k, v in previous.items() if k != "supersedes"} == {
                 k: v for k, v in revision.items() if k != "supersedes"
             }:
@@ -934,6 +1110,7 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
         raise ValueError("resume code differs from Astra-approved operation revision")
     _require_migration(run, config)
     snapshot = _resume_snapshot(run, config)
+    _finalize_existing_generation(run, config, snapshot)
     for stage in STAGES:
         if (run / f"{stage}-complete.json").exists():
             _verify_completion(run, stage, config)
@@ -1585,7 +1762,8 @@ def pause(run: Path) -> dict:
 
                     config = verify(run)
                     snapshot = _resume_snapshot(run, config)
-                    export_queue(run / "data")
+                    if not (run / "generate-complete.json").exists():
+                        export_queue(run / "data")
                     progress = {k: snapshot[k] for k in ("games", "rows", "tasks")}
                     atomic(
                         run / "data/generation-progress.json",
@@ -1694,6 +1872,13 @@ def _resource_condition(
     sample: dict, previous: dict | None, config: dict, *, admission=False
 ) -> str:
     policy, limits = RESOURCE_POLICY, config["resources"]
+    if "_dataset_admission" in config:
+        # Host pressure flags (1=normal,2=warning,4=critical) and swap are diagnostics.
+        return (
+            "critical:disk"
+            if sample["free_bytes"] < limits["free_space_floor_gib"] * 1024**3
+            else "safe"
+        )
     if not 0 <= time.time() - sample["at"] <= policy["maximum_sample_age_seconds"]:
         return "critical:stale_sample"
     if sample["pressure"] not in (1, 2, 4):
@@ -1940,13 +2125,25 @@ def _prepare_recovery(run: Path, config: dict) -> dict:
     return result
 
 
+def _training_identity(run: Path, config: dict) -> dict:
+    return {
+        "code_commit": config["code"]["commit"],
+        **(
+            {
+                "dataset_admission": config["_dataset_admission"],
+                "operation_revision": _state(run)["operation_revision"],
+            }
+            if "_dataset_admission" in config
+            else {}
+        ),
+        "run_sha256": digest(run / "run.json"),
+        "dataset_sha256": digest(run / "data/dataset/manifest.json"),
+    }
+
+
 def _training_summary(run: Path, config: dict) -> dict:
     result = _json(run / "fit" / "training.json")
-    expected = {
-        "code_commit": config["code"]["commit"],
-        "run_sha256": digest(run / "run.json"),
-        "dataset_sha256": digest(run / "data" / "dataset" / "manifest.json"),
-    }
+    expected = _training_identity(run, config)
     if result["status"] != "complete" or result["identity"] != expected:
         raise ValueError("training completion identity mismatch")
     _reference(run / "fit" / "best.osaval03", result["best_sha256"])
@@ -2140,7 +2337,8 @@ def _run_stage(
                     break
                 condition = _resource_condition(sample, previous, config)
                 if (
-                    condition == "safe"
+                    "_dataset_admission" not in config
+                    and condition == "safe"
                     and previous is not None
                     and sample["swap_bytes"] - state["resource_baseline"]["swap_bytes"]
                     > limits["maximum_swap_growth_gib"] * 1024**3
@@ -2205,7 +2403,11 @@ def _run_stage(
                 failure = "space_limit"
             elif swap - state["initial_swap_bytes"] > limits["maximum_swap_growth_gib"] * 1024**3:
                 failure = "swap_limit"
-            if not failure and time.monotonic() - last_progress > limits["stalled_seconds"]:
+            if (
+                not failure
+                and "_dataset_admission" not in config
+                and time.monotonic() - last_progress > limits["stalled_seconds"]
+            ):
                 failure = "no_actual_progress"
             if failure:
                 break
@@ -2276,6 +2478,51 @@ def _run_stage(
         process.returncode if process is not None and process.returncode is not None else -1,
         failure,
     )
+
+
+def _allocation_task(run: Path, stage: str) -> str:
+    resume = _json(run / "fit/resume.json") if (run / "fit/resume.json").exists() else {"step": 0}
+    return f"{stage}:{resume['step']}"
+
+
+def _wait_allocation(run: Path, config: dict, state: dict, stage: str) -> bool:
+    """Wait without touching a sampler; retry budgets survive attempts and explicit resumes."""
+    path = run / "allocation-retries.json"
+    counters = _json(path) if path.exists() else {}
+    failures = counters.get(_allocation_task(run, stage), 0)
+    if not failures:
+        return True
+    event = _json(run / "allocation-failure.json")
+    state.update(
+        status="running",
+        reason="resource_wait",
+        resource_wait={
+            **event,
+            "failures": failures,
+            "automatic_retries_remaining": max(0, 4 - failures),
+        },
+    )
+    atomic(run / "state.json", encoded(state))
+    while not (run / "STOP").exists():
+        time.sleep(15)
+        try:
+            sample = _resource_sample(run, _process_table()[os.getpid()][1])
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        # Confirm recovery before consuming another finite task attempt. Host pressure
+        # can delay a retry after actual OOM, but never kills a running computation.
+        baseline = event.get("resource_sample", {})
+        recovered = sample["memory_free_percent"] >= baseline.get(
+            "memory_free_percent", 100
+        ) + 5 or (baseline.get("pressure") in (2, 4) and sample["pressure"] == 1)
+        if (
+            failures <= 3
+            and time.time() - event["at"] >= 60
+            and recovered
+            and _resource_condition(sample, None, config, admission=True) == "safe"
+        ):
+            return True
+    return False
 
 
 def work(
@@ -2364,7 +2611,23 @@ def work(
                     state.pop("reason", None)
                     state.pop("startup_failure", None)
                     atomic(run / "state.json", encoded(state))
+                    if "_dataset_admission" in config and not _wait_allocation(
+                        run, config, state, stage
+                    ):
+                        state.update(status="stopped", reason="requested_stop")
+                        break
                     returncode, failure = _run_stage(run, stage, config, state, lease)
+                    if (
+                        returncode == RESOURCE_EXIT
+                        and failure is None
+                        and "_dataset_admission" in config
+                    ):
+                        counters_path = run / "allocation-retries.json"
+                        counters = _json(counters_path) if counters_path.exists() else {}
+                        task = _allocation_task(run, stage)
+                        counters[task] = counters.get(task, 0) + 1
+                        atomic(counters_path, encoded(counters))
+                        continue
                     if failure or returncode:
                         if (
                             failure is None
@@ -2542,11 +2805,7 @@ def stage_run(
                     run / "data" / "dataset",
                     run / "fit",
                     config["training"],
-                    {
-                        "code_commit": config["code"]["commit"],
-                        "run_sha256": digest(run / "run.json"),
-                        "dataset_sha256": digest(run / "data" / "dataset" / "manifest.json"),
-                    },
+                    _training_identity(run, config),
                 )
                 if result["status"] != "complete":
                     raise InterruptedError("training stopped with coherent resume checkpoint")
@@ -2654,14 +2913,21 @@ def main():
     parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--pause-after-new-games", type=int, default=None)
     parser.add_argument("--abolish-calendar-limit", action="store_true")
+    parser.add_argument("--admit-existing-data", action="store_true")
     args = parser.parse_args()
     path = inside(args.path)
     if args.abolish_calendar_limit and args.command != "approve-operations":
         parser.error("--abolish-calendar-limit is only valid with approve-operations")
+    if args.admit_existing_data and args.command != "approve-operations":
+        parser.error("--admit-existing-data is only valid with approve-operations")
     if args.command == "seal":
         result = seal(path)
     elif args.command == "approve-operations":
-        result = _approve_operations(path, abolish_calendar_limit=args.abolish_calendar_limit)
+        result = _approve_operations(
+            path,
+            abolish_calendar_limit=args.abolish_calendar_limit,
+            admit_existing_data=args.admit_existing_data,
+        )
     elif args.command == "diagnose":
         result = diagnose(path)
     elif args.command == "migrate":
@@ -2671,6 +2937,28 @@ def main():
             result = stage_run(
                 path, args.stage, args.lease_fd, pause_after_new_games=args.pause_after_new_games
             )
+        except (MemoryError, RuntimeError) as error:
+            from .evaluator_training import TrainingResourceWaitError, allocation_failure
+
+            if not isinstance(error, TrainingResourceWaitError) and not allocation_failure(error):
+                raise
+            atomic(
+                path / "allocation-failure.json",
+                encoded(
+                    {
+                        "at": time.time(),
+                        "stage": args.stage,
+                        "reason": "allocation_failure",
+                        "error_type": type(error).__name__,
+                        "error": str(error),
+                        "resource_sample": _resource_sample(path, _process_table()[os.getpid()][1]),
+                        "checkpoint": _json(path / "fit/resume.json")
+                        if (path / "fit/resume.json").exists()
+                        else None,
+                    }
+                ),
+            )
+            raise SystemExit(RESOURCE_EXIT) from None
         except InterruptedError as error:
             if (
                 error.errno is not None

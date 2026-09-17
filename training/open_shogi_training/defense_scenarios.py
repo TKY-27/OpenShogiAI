@@ -358,11 +358,36 @@ def replay_source(
     return dataset, manifest, provenance, all_keys, selected
 
 
+def admission_identity(output: Path) -> dict | None:
+    """Bind the explicit itemwise revision without changing the original generation seal."""
+    from .evaluator_data import digest
+
+    path = output / "admission.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("dataset admission is missing or linked")
+    revision = json.loads(path.read_text())
+    if (
+        revision.get("schema") != "open_shogiai_dataset_admission/v1"
+        or revision.get("policy") != "itemwise-focus-v1"
+        or revision.get("generation_sha256") != digest(output / "generation.json")
+    ):
+        raise ValueError("dataset admission identity changed")
+    return {"policy": revision["policy"], "sha256": digest(path)}
+
+
+def validate_manifest_admission(output: Path, manifest: dict) -> None:
+    if manifest.get("dataset_admission") != admission_identity(output):
+        raise ValueError("prepared dataset admission changed")
+
+
 def prepare_campaign(root: Path, output: Path, config: dict, excluded_sfens: list[str]) -> dict:
     from .evaluator_data import _prepare, atomic, digest, encoded
 
     validate_campaign(config)
     quality = focus_gate(output, config)
+    admission = admission_identity(output)
     from .evaluator_data import symmetry_keys
 
     guard_path = root / config["split_guard_path"]
@@ -386,6 +411,7 @@ def prepare_campaign(root: Path, output: Path, config: dict, excluded_sfens: lis
     dataset = output / "dataset"
     if (dataset / "manifest.json").exists():
         report = json.loads((dataset / "manifest.json").read_text())
+        validate_manifest_admission(output, report)
         if report.get("replay_source") != provenance:
             raise ValueError("prepared replay source changed")
         if report.get("generation_sha256") != digest(output / "generation.json"):
@@ -486,6 +512,7 @@ def prepare_campaign(root: Path, output: Path, config: dict, excluded_sfens: lis
         "old_eval_rows_in_train": 0,
         "trajectory_lineage": "family split is shared by all stochastic and color variants",
         "focus_quality": quality,
+        "dataset_admission": admission,
     }
     atomic(building / "manifest.json", encoded(report))
     if dataset.exists():
@@ -497,11 +524,14 @@ def prepare_campaign(root: Path, output: Path, config: dict, excluded_sfens: lis
 def focus_quality(games) -> dict:
     """Count requested optional observations once, including typed missing labels."""
     totals = {"requested": 0, "completed": 0, "unlabeled": 0}
-    strata = {"group": {}, "side": {}, "ply_stage": {}, "branch": {}}
+    strata = {"group": {}, "family": {}, "split": {}, "side": {}, "ply_stage": {}, "branch": {}}
+    excluded_candidates = {}
+    positions = {"requested": set(), "completed": set(), "unlabeled": set()}
     for game in games:
         for row in game["records"]:
             deviation = row.get("deviation")
             recovery = deviation.get("recovery") if deviation else None
+            missing_positions = set()
             for branch, observation, ply in (
                 ("deviation", deviation, row["ply"] + 1),
                 ("recovery", recovery, row["ply"] + 2),
@@ -528,8 +558,17 @@ def focus_quality(games) -> dict:
                 state = "unlabeled" if missing else "completed"
                 totals["requested"] += 1
                 totals[state] += 1
+                # SFEN move counters are not distinct positions. These are quality units,
+                # independent of dataset symmetry deduplication and split admission.
+                position = " ".join(observation["sfen"].split()[:3])
+                positions["requested"].add(position)
+                positions[state].add(position)
+                if missing:
+                    missing_positions.add(position)
                 labels = {
                     "group": row_group(game, ply),
+                    "family": game.get("family", "unspecified"),
+                    "split": game.get("split", "unspecified"),
                     "side": observation["sfen"].split()[1],
                     "ply_stage": "opening" if ply < 40 else "middle" if ply < 110 else "late",
                     "branch": branch,
@@ -540,12 +579,22 @@ def focus_quality(games) -> dict:
                     )
                     counts["requested"] += 1
                     counts[state] += 1
+            split = game.get("split", "unspecified")
+            excluded_candidates[split] = excluded_candidates.get(split, 0) + sum(
+                candidate.get("child_terminal") == "None"
+                and " ".join(candidate["child_sfen"].split()[:3]) in missing_positions
+                for candidate in row.get("candidates", [])
+            )
     return {
         **totals,
         "completion_rate": totals["completed"] / totals["requested"]
         if totals["requested"]
         else None,
         "by": strata,
+        "unique_positions": {key: len(value) for key, value in positions.items()},
+        "duplicate_unlabeled_observations": totals["unlabeled"] - len(positions["unlabeled"]),
+        "missing_positions_also_labeled": len(positions["unlabeled"] & positions["completed"]),
+        "excluded_candidate_observations_by_split": excluded_candidates,
         "denominator": "requested optional observations, not retry attempts; root D12 excluded",
     }
 
@@ -553,48 +602,52 @@ def focus_quality(games) -> dict:
 def focus_gate(output: Path, config: dict) -> dict:
     from .evaluator_data import atomic, digest, encoded
 
-    games = []
-    for path in sorted((output / "games").glob("*.json.gz")):
-        receipt_path = path.with_suffix(".receipt.json")
-        if config.get("recovery_policy") and not receipt_path.exists():
-            continue  # Output-before-receipt is not committed label evidence.
-        receipt = json.loads(receipt_path.read_text())
-        if digest(path) != receipt["sha256"]:
-            raise ValueError("focus quality source identity changed")
-        game = json.loads(gzip.decompress(path.read_bytes()))
-        for row in game["records"]:
-            deviation = row.get("deviation")
-            for observation in (deviation, deviation.get("recovery") if deviation else None):
-                if isinstance(observation, dict) and observation.get("status") in (
-                    "unlabeled_incomplete_depth",
-                    "unlabeled_deferred",
-                ):
-                    if observation.get("ledger_task"):
-                        _validate_deferred_observation(output, observation, config)
-                        continue
-                    ref = output / observation["failure_receipt"]
-                    if (
-                        not ref.resolve().is_relative_to((output / "failures").resolve())
-                        or not ref.is_file()
+    def games():
+        for path in sorted((output / "games").glob("*.json.gz")):
+            receipt_path = path.with_suffix(".receipt.json")
+            if config.get("recovery_policy") and not receipt_path.exists():
+                continue  # Output-before-receipt is not committed label evidence.
+            receipt = json.loads(receipt_path.read_text())
+            if digest(path) != receipt["sha256"]:
+                raise ValueError("focus quality source identity changed")
+            game = json.loads(gzip.decompress(path.read_bytes()))
+            for row in game["records"]:
+                deviation = row.get("deviation")
+                for observation in (deviation, deviation.get("recovery") if deviation else None):
+                    if isinstance(observation, dict) and observation.get("status") in (
+                        "unlabeled_incomplete_depth",
+                        "unlabeled_deferred",
                     ):
-                        raise ValueError("missing retained optional-label failure receipt")
-                    if digest(ref) != observation["failure_sha256"]:
-                        raise ValueError("optional-label failure receipt changed")
-                    evidence = json.loads(ref.read_text())
-                    if (
-                        evidence["error_type"] != "USIIncompleteDepthError"
-                        or evidence["sfen"] != observation["sfen"]
-                    ):
-                        raise ValueError("optional-label failure evidence mismatch")
-        games.append(game)
-    report = focus_quality(games)
+                        if observation.get("ledger_task"):
+                            _validate_deferred_observation(output, observation, config)
+                            continue
+                        ref = output / observation["failure_receipt"]
+                        if (
+                            not ref.resolve().is_relative_to((output / "failures").resolve())
+                            or not ref.is_file()
+                        ):
+                            raise ValueError("missing retained optional-label failure receipt")
+                        if digest(ref) != observation["failure_sha256"]:
+                            raise ValueError("optional-label failure receipt changed")
+                        evidence = json.loads(ref.read_text())
+                        if (
+                            evidence["error_type"] != "USIIncompleteDepthError"
+                            or evidence["sfen"] != observation["sfen"]
+                        ):
+                            raise ValueError("optional-label failure evidence mismatch")
+            yield game
+
+    report = focus_quality(games())
     campaign = config["defense_campaign"]
     report["maximum_unlabeled"] = campaign["maximum_unlabeled_focus"]
     report["minimum_completion_rate"] = campaign["minimum_focus_completion_rate"]
-    report["passed"] = report["unlabeled"] <= campaign["maximum_unlabeled_focus"] and (
+    report["legacy_passed"] = report["unlabeled"] <= campaign["maximum_unlabeled_focus"] and (
         report["completion_rate"] is None
         or report["completion_rate"] >= campaign["minimum_focus_completion_rate"]
     )
+    admission = admission_identity(output)
+    report["dataset_admission"] = admission
+    report["passed"] = admission is not None or report["legacy_passed"]
     atomic(output / "focus-quality.json", encoded(report))
     if not report["passed"] and not config.get("recovery_policy"):
         raise ValueError("optional focus completeness gate failed; Astra review required")

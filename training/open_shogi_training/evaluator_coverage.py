@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def coverage_report(output: Path, config: dict, manifest: dict | None = None) -> dict:
-    from .defense_scenarios import assignment, focus_gate
+    from .defense_scenarios import admission_identity, assignment, focus_gate
     from .evaluator_data import atomic, digest, encoded
 
     policy = config["recovery_policy"]
@@ -82,15 +82,19 @@ def coverage_report(output: Path, config: dict, manifest: dict | None = None) ->
     if len(root_tasks) > policy["maximum_deferred_roots"]:
         reasons.append("total_deferred_roots")
     focus = focus_gate(output, config)
-    if not focus["passed"]:
-        reasons.append("focus_total")
+    focus_reasons = []
+    if not focus.get("legacy_passed", focus["passed"]):
+        focus_reasons.append("focus_total")
     for category in ("group", "ply_stage", "branch"):
         for name, counts in focus["by"][category].items():
             if counts["requested"] >= policy["minimum_focus_stratum_requests"] and (
                 counts["completed"] / counts["requested"]
                 < policy["minimum_focus_stratum_completion_rate"]
             ):
-                reasons.append(f"focus_{category}:{name}")
+                focus_reasons.append(f"focus_{category}:{name}")
+    admission = admission_identity(output)
+    if admission is None:
+        reasons.extend(focus_reasons)
     if manifest is not None:
         goal = policy["unique_data_goal"]
         if manifest["unique_positions"]["train"] < goal["minimum_train_positions"]:
@@ -114,6 +118,9 @@ def coverage_report(output: Path, config: dict, manifest: dict | None = None) ->
         "deferred_roots": len(root_tasks),
         "deferred_by": strata,
         "focus_quality": focus,
+        "legacy_focus_reasons": focus_reasons,
+        "dataset_admission": admission,
+        "deferred_tasks": len(deferred),
         "manifest_checked": manifest is not None,
     }
     atomic(output / "recovery-coverage.json", encoded(result))
