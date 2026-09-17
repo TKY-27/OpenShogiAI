@@ -156,3 +156,23 @@ def test_allocation_wait_keeps_budget_and_pause_across_resumes(resumable, monkey
     assert json.loads((run / "allocation-retries.json").read_text()) == {"train:0": failures}
     if failures == 4:
         assert not runner._wait_allocation(run, config, runner._state(run), "train")
+
+
+def test_only_supervised_prepare_interruption_is_recoverable(resumable):  # noqa: F811
+    run = resumable[1]
+    state = runner._state(run)
+    state.update(
+        stage="prepare",
+        reason="stage_exit_-15_during_stop",
+        execution_attempt=1,
+        stage_pid=123,
+        cleanup={"signalled_pids": [123], "remaining_processes": {}},
+    )
+    (run / "STOP").touch()
+    atomic(run / "attempts/000001-result.json", encoded(state))
+    assert runner._startup_recoverable(run, state)
+    state["stage"] = "train"
+    assert not runner._startup_recoverable(run, state)
+    state["stage"] = "prepare"
+    state["cleanup"]["signalled_pids"] = []
+    assert not runner._startup_recoverable(run, state)

@@ -847,6 +847,20 @@ def _swap_recoverable(run: Path, state: dict) -> bool:
 
 
 def _startup_recoverable(run: Path, state: dict) -> bool:
+    # Prepare only derives arrays from sealed receipts; a supervisor-confirmed pause
+    # may restart its incomplete staging, never generation or an optimizer update.
+    if (
+        state.get("stage") == "prepare"
+        and state.get("reason") in {"stage_exit_-15_during_stop", "stage_exit_-9_during_stop"}
+        and (run / "STOP").exists()
+        and state.get("stage_pid") in state.get("cleanup", {}).get("signalled_pids", [])
+        and state.get("cleanup", {}).get("remaining_processes") == {}
+        and not state.get("cleanup", {}).get("inventory_errors")
+        and not state.get("errors")
+        and state.get("execution_attempt")
+        and _json(run / "attempts" / f"{state['execution_attempt']:06d}-result.json") == state
+    ):
+        return True
     if _swap_recoverable(run, state):
         return True
     if state.get("startup_failure") == "before_spawn":
@@ -2511,7 +2525,7 @@ def _wait_allocation(run: Path, config: dict, state: dict, stage: str) -> bool:
             continue
         # Confirm recovery before consuming another finite task attempt. Host pressure
         # can delay a retry after actual OOM, but never kills a running computation.
-        baseline = event.get("resource_sample", {})
+        baseline = event.get("resource_sample") or {}
         recovered = sample["memory_free_percent"] >= baseline.get(
             "memory_free_percent", 100
         ) + 5 or (baseline.get("pressure") in (2, 4) and sample["pressure"] == 1)
@@ -2942,6 +2956,10 @@ def main():
 
             if not isinstance(error, TrainingResourceWaitError) and not allocation_failure(error):
                 raise
+            try:
+                sample = _resource_sample(path, _process_table()[os.getpid()][1])
+            except (OSError, ValueError, subprocess.SubprocessError):
+                sample = None
             atomic(
                 path / "allocation-failure.json",
                 encoded(
@@ -2951,7 +2969,7 @@ def main():
                         "reason": "allocation_failure",
                         "error_type": type(error).__name__,
                         "error": str(error),
-                        "resource_sample": _resource_sample(path, _process_table()[os.getpid()][1]),
+                        "resource_sample": sample,
                         "checkpoint": _json(path / "fit/resume.json")
                         if (path / "fit/resume.json").exists()
                         else None,
