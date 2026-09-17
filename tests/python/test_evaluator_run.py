@@ -23,7 +23,13 @@ PROJECT = Path(__file__).resolve().parents[2]
 
 @pytest.mark.parametrize(
     "scalar,screen,arena",
-    [(False, True, True), (True, False, True), (True, True, False), (True, True, True)],
+    [
+        (False, True, True),
+        (True, False, True),
+        (True, None, True),
+        (True, True, False),
+        (True, True, True),
+    ],
 )
 def test_candidate_review_requires_all_independent_gates(
     tmp_path, monkeypatch, scalar, screen, arena
@@ -47,7 +53,8 @@ def test_candidate_review_requires_all_independent_gates(
         ),
     )
     review = runner._candidate_review(tmp_path)
-    assert review["meets_frozen_criteria"] is (scalar and screen and arena)
+    assert review["meets_frozen_criteria"] is bool(scalar and screen and arena)
+    assert review["move_quality_screen_pass"] is screen
     assert review["promotion_performed"] is False
     assert review["human_shodan_validated"] is False
 
@@ -292,6 +299,23 @@ def test_valid_losing_arena_does_not_require_a_new_strength_gate():
             "summary": {"all_planned_complete": True},
         }
     )
+
+
+def test_exhausted_finite_schedule_reaches_review_without_becoming_scored_or_passing():
+    result = {
+        "status": "complete",
+        "planned_games": 2,
+        "adoption_criteria_met": False,
+        "summary": {"all_planned_complete": False},
+        "games": [
+            {"id": "black", "status": "completed"},
+            {"id": "white", "status": "incomplete", "reason": "max_plies_unscored"},
+        ],
+    }
+    runner._arena_complete(result, 2)
+    result["games"][1]["status"] = "invalid"
+    with pytest.raises(ValueError, match="failed or incomplete"):
+        runner._arena_complete(result, 2)
 
 
 def test_real_inherited_lease_survives_supervisor_descriptor_closure(prepared):

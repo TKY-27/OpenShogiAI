@@ -122,6 +122,41 @@ def test_training_completion_uses_same_admission_identity(resumable):  # noqa: F
         runner._training_summary(run, config)
 
 
+def test_post_training_review_only_unlocks_the_exact_optional_failure(resumable, monkeypatch):  # noqa: F811
+    run = resumable[1]
+    monkeypatch.setitem(runner.POST_TRAINING_POLICY, "run_id", "contract-test")
+    current = runner._state(run)
+    current.update(
+        status="needs_astra",
+        stage="audit",
+        reason="stage_exit_1",
+        execution_attempt=15,
+        cleanup={"remaining_processes": {}},
+    )
+    atomic(run / "state.json", encoded(current))
+    atomic(run / "attempts/000015-result.json", encoded(current))
+    atomic(run / "train-complete.json", encoded({"fixture": "completed training"}))
+    atomic(run / "model-audit.json", encoded({"status": "PASS"}))
+    atomic(run / "fit/training.json", encoded({"identity": {"operation_revision": {"fixture": 1}}}))
+    (run / "audit-0.log").write_text(
+        'File "defense_evaluation.py"\nUSIIncompleteDepthError: incomplete D16\n'
+        "open_shogi_training.evaluator_ledger.DeferredTaskError: "
+        "6c0e606d9aeee103b2d250143b11c74a9c8b405b7524f5219f9badcd11fbafc5\n"
+    )
+    before = (run / "state.json").read_bytes()
+    with pytest.raises(ValueError, match="outside startup recovery"):
+        runner._resume_idle_state(run)
+    review = runner._review_post_training(run)
+    assert runner._resume_idle_state(run, post_training=review) == current
+    assert (run / "state.json").read_bytes() == before
+    current["reason"] = "model hash mismatch"
+    atomic(run / "state.json", encoded(current))
+    with pytest.raises(ValueError, match="outside startup recovery"):
+        runner._resume_idle_state(run, post_training=review)
+    with pytest.raises(ValueError, match="recorded optional depth failure"):
+        runner._review_post_training(run)
+
+
 @pytest.mark.parametrize("failures", [1, 4])
 def test_allocation_wait_keeps_budget_and_pause_across_resumes(resumable, monkeypatch, failures):  # noqa: F811
     run = resumable[1]

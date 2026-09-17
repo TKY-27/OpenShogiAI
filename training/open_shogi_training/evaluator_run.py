@@ -93,6 +93,19 @@ ADMISSION_FILES = {
     "configs/evaluator-main.json",
 }
 OPERATIONAL_FILES = {"training/open_shogi_training/evaluator_run.py", "configs/evaluator-main.json"}
+POST_TRAINING_FILES = ADMISSION_FILES | {
+    "training/open_shogi_training/defense_evaluation.py",
+    "training/open_shogi_training/evaluator_arena.py",
+    "scripts/compare_evaluator_opponent.py",
+}
+POST_TRAINING_POLICY = {
+    "revision": "optional-screen-v1",
+    "run_id": "defense-20260912-recovery-r3",
+    "authorization": "explicit_user_post_training_and_development_candidate_20260917",
+    "screen": "retained_only",
+    "training": "complete; no regeneration, preparation or retraining",
+    "evaluation": "unchanged fixed r3 schedule; no automatic promotion",
+}
 
 
 def inside(path: str | Path, *, exists: bool = True) -> Path:
@@ -353,7 +366,13 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         or revision.get("run_sha256") != digest(run / "run.json")
         or revision.get("original_code_commit") != config["code"]["commit"]
         or not set(revision["files"])
-        <= (ADMISSION_FILES if "dataset_admission" in revision else OPERATIONAL_FILES)
+        <= (
+            POST_TRAINING_FILES
+            if "post_training" in revision
+            else ADMISSION_FILES
+            if "dataset_admission" in revision
+            else OPERATIONAL_FILES
+        )
         or not re.fullmatch(r"[a-f0-9]{40}", revision["commit"])
     ):
         raise ValueError("invalid operational code revision")
@@ -375,6 +394,17 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         for ref in admission["evidence"].values():
             _reference(inside(ref["path"]), ref["sha256"])
         config["_dataset_admission"] = revision["dataset_admission"]
+    if "post_training" in revision:
+        review = revision["post_training"]
+        if (
+            review.get("policy") != POST_TRAINING_POLICY
+            or config["run_id"] != POST_TRAINING_POLICY["run_id"]
+        ):
+            raise ValueError("unrecognized post-training review")
+        for ref in review["evidence"].values():
+            _reference(inside(ref["path"]), ref["sha256"])
+        config["_post_training"] = review
+        config["_optional_screen"] = review["policy"]["screen"]
     if "resource_policy" in revision:
         if revision["resource_policy"] != RESOURCE_POLICY:
             raise ValueError("unrecognized resource policy revision")
@@ -1009,7 +1039,67 @@ def _finalize_existing_generation(run: Path, config: dict, snapshot: dict) -> No
     )
 
 
-def _resume_idle_state(run: Path) -> dict:
+def _review_post_training(run: Path) -> dict:
+    """Bind the reviewed optional-screen failure to the already completed model."""
+    current, config = _state(run), _json(run / "run.json")
+    log = run / f"audit-{current.get('retries', {}).get('audit', 0)}.log"
+    tail = log.read_bytes()[-16384:]
+    if (
+        config["run_id"] != POST_TRAINING_POLICY["run_id"]
+        or current.get("status") != "needs_astra"
+        or current.get("stage") != "audit"
+        or current.get("reason") != "stage_exit_1"
+        or current.get("errors")
+        or current.get("cleanup", {}).get("remaining_processes") != {}
+        or current.get("cleanup", {}).get("inventory_errors")
+        or b"defense_evaluation.py" not in tail
+        or b"USIIncompleteDepthError" not in tail
+        or re.search(
+            rb"open_shogi_training.evaluator_ledger.DeferredTaskError: [a-f0-9]{64}\s*$", tail
+        )
+        is None
+        or _json(run / "attempts" / f"{current['execution_attempt']:06d}-result.json") != current
+    ):
+        raise ValueError("post-training review requires the recorded optional depth failure")
+    folder = run / "post-training-evidence"
+    folder.mkdir(exist_ok=True)
+    for name, content in (
+        ("state.json", encoded(current)),
+        ("audit-failure.log", log.read_bytes()),
+    ):
+        path = folder / name
+        if path.exists() and path.read_bytes() != content:
+            raise ValueError("post-training failure evidence changed")
+        atomic(path, content)
+    return {
+        "policy": POST_TRAINING_POLICY,
+        "original_state_sha256": hashlib.sha256(encoded(current)).hexdigest(),
+        "training_operation": _json(run / "fit/training.json")["identity"]["operation_revision"],
+        "evidence": {
+            "state": _reference(folder / "state.json"),
+            "failure_log": _reference(folder / "audit-failure.log"),
+            "training": _reference(run / "train-complete.json"),
+            "runtime_audit": _reference(run / "model-audit.json"),
+        },
+    }
+
+
+def _reviewed_post_training_failure(run: Path, current: dict, review: dict | None = None) -> bool:
+    if review is None and (run / "approved-operation.json").exists():
+        ref = _json(run / "approved-operation.json")
+        path = inside(ref["path"])
+        if path.parent != run / "operations":
+            raise ValueError("approved operation outside run")
+        _reference(path, ref["sha256"])
+        review = _json(path).get("post_training")
+    return bool(
+        review
+        and review.get("policy") == POST_TRAINING_POLICY
+        and review.get("original_state_sha256") == hashlib.sha256(encoded(current)).hexdigest()
+    )
+
+
+def _resume_idle_state(run: Path, *, post_training: dict | None = None) -> dict:
     current = _state(run)
     pending = current["status"] == "running" and current.get("reason") == "startup_pending"
     if pending:
@@ -1024,7 +1114,9 @@ def _resume_idle_state(run: Path) -> dict:
     }:
         raise ValueError("resume requires a paused run or confirmed startup failure")
     if current["status"] == "needs_astra" and not (
-        _startup_recoverable(run, current) or _reviewed_generation_failure(run, current)
+        _startup_recoverable(run, current)
+        or _reviewed_generation_failure(run, current)
+        or _reviewed_post_training_failure(run, current, post_training)
     ):
         raise ValueError("failure is outside startup recovery; Astra review required")
     if current["status"] == "running" and current.get("errors"):
@@ -1041,17 +1133,37 @@ def _resume_idle_state(run: Path) -> dict:
 
 
 def _approve_operations(
-    run: Path, *, abolish_calendar_limit: bool = False, admit_existing_data: bool = False
+    run: Path,
+    *,
+    abolish_calendar_limit: bool = False,
+    admit_existing_data: bool = False,
+    post_training_evaluation: bool = False,
 ) -> dict:
     """Astra's explicit one-time code review; resume never approves a new hash."""
     with _lease(run):
+        previous_ref, previous = None, {}
+        if (run / "approved-operation.json").exists():
+            previous_ref = _json(run / "approved-operation.json")
+            previous_path = inside(previous_ref["path"])
+            if previous_path.parent != run / "operations":
+                raise ValueError("approved operation outside run")
+            _reference(previous_path, previous_ref["sha256"])
+            previous = _json(previous_path)
         admission_ref = _admit_existing_data(run) if admit_existing_data else None
-        _resume_idle_state(run)
+        post_training = previous.get("post_training")
+        if post_training_evaluation and post_training is None:
+            post_training = _review_post_training(run)
+        _resume_idle_state(run, post_training=post_training)
         config, code = _json(run / "run.json"), _code_identity()
-        if set(code["files"]) != set(config["code"]["files"]):
+        added = set(code["files"]) - set(config["code"]["files"])
+        if set(config["code"]["files"]) - set(code["files"]) or (
+            added and (not post_training or added != {"scripts/compare_evaluator_opponent.py"})
+        ):
             raise ValueError("operational resume cannot add/remove sealed code files")
         changed = {
-            name: sha for name, sha in code["files"].items() if sha != config["code"]["files"][name]
+            name: sha
+            for name, sha in code["files"].items()
+            if sha != config["code"]["files"].get(name)
         }
         revision = {
             "schema": "open_shogiai_operation_revision/v1",
@@ -1062,14 +1174,6 @@ def _approve_operations(
         }
         if config.get("resource_epoch"):
             revision["resource_policy"] = RESOURCE_POLICY
-        previous_ref, previous = None, {}
-        if (run / "approved-operation.json").exists():
-            previous_ref = _json(run / "approved-operation.json")
-            previous_path = inside(previous_ref["path"])
-            if previous_path.parent != run / "operations":
-                raise ValueError("approved operation outside run")
-            _reference(previous_path, previous_ref["sha256"])
-            previous = _json(previous_path)
         if abolish_calendar_limit or "calendar_policy" in previous:
             revision.update(
                 calendar_policy=CALENDAR_POLICY,
@@ -1091,9 +1195,19 @@ def _approve_operations(
                 k: v for k, v in revision.items() if k != "supersedes"
             }:
                 revision = previous
+        if post_training or "post_training" in previous:
+            revision["post_training"] = post_training or previous["post_training"]
+        if {k: v for k, v in previous.items() if k != "supersedes"} == {
+            k: v for k, v in revision.items() if k != "supersedes"
+        }:
+            revision = previous
         config = verify(run, operation_revision=revision)
         _require_migration(run, config)
         _resume_snapshot(run, config)
+        if "post_training" in revision:
+            for stage in ("generate", "prepare", "train"):
+                _verify_completion(run, stage, config)
+            _audit_report(run, config)
         path = run / "operations" / f"{hashlib.sha256(encoded(revision)).hexdigest()}.json"
         if not path.exists():
             atomic(path, encoded(revision))
@@ -1614,10 +1728,18 @@ def migrate(run: Path) -> dict:
 
 
 def start(
-    run: Path, *, pause_after_new_games: int | None = None, recover_startup: bool = False
+    run: Path,
+    *,
+    pause_after_new_games: int | None = None,
+    recover_startup: bool = False,
+    pause_after_arena_games: int | None = None,
 ) -> dict:
     if pause_after_new_games is not None:
         _number(pause_after_new_games, 1, 12, "probe trajectory bound")
+    if pause_after_arena_games is not None:
+        _number(pause_after_arena_games, 2, 36, "arena completed-task pause bound")
+        if pause_after_arena_games % 2 or pause_after_new_games is not None:
+            raise ValueError("arena probe requires a complete color pair and no generation probe")
     try:
         with _lease(run) as lease:
             if recover_startup:
@@ -1676,6 +1798,11 @@ def start(
                         *(
                             ["--pause-after-new-games", str(pause_after_new_games)]
                             if pause_after_new_games is not None
+                            else []
+                        ),
+                        *(
+                            ["--pause-after-arena-games", str(pause_after_arena_games)]
+                            if pause_after_arena_games is not None
                             else []
                         ),
                     ],
@@ -2145,7 +2272,9 @@ def _training_identity(run: Path, config: dict) -> dict:
         **(
             {
                 "dataset_admission": config["_dataset_admission"],
-                "operation_revision": _state(run)["operation_revision"],
+                "operation_revision": config.get("_post_training", {}).get(
+                    "training_operation", _state(run)["operation_revision"]
+                ),
             }
             if "_dataset_admission" in config
             else {}
@@ -2202,13 +2331,25 @@ def _audit_report(run: Path, config: dict) -> dict:
 def _arena_complete(result: dict, expected_games: int = 40) -> None:
     if result.get("status") == "stopped":
         raise InterruptedError("arena stopped with retained game receipts")
+    games = result.get("games", [])
+    exhausted = (
+        len(games) == expected_games
+        and len({game["id"] for game in games}) == expected_games
+        and all(
+            game["status"] == "completed"
+            or (game["status"] == "incomplete" and game.get("reason") == "max_plies_unscored")
+            for game in games
+        )
+        and result.get("adoption_criteria_met") is False
+    )
     if (
         result.get("status") != "complete"
         or result.get("planned_games") != expected_games
-        or result.get("summary", {}).get("all_planned_complete") is not True
+        or (result.get("summary", {}).get("all_planned_complete") is not True and not exhausted)
     ):
         raise ValueError("arena is failed or incomplete; preserve its evidence for Astra")
-    # Losing the comparison is still a valid completed experiment, never a reason to rerun it.
+    # Finishing the finite workload is distinct from completing scored games.
+    # Ply-exhausted games remain unscored and prevent strength acceptance, not review.
 
 
 def _completion_artifacts(run: Path, stage: str) -> list[dict]:
@@ -2322,6 +2463,11 @@ def _run_stage(
                 *(
                     ["--pause-after-new-games", str(state["probe_new_games"])]
                     if state.get("probe_new_games") is not None
+                    else []
+                ),
+                *(
+                    ["--pause-after-arena-games", str(state["probe_arena_games"])]
+                    if stage == "arena" and state.get("probe_arena_games") is not None
                     else []
                 ),
             ],
@@ -2540,7 +2686,11 @@ def _wait_allocation(run: Path, config: dict, state: dict, stage: str) -> bool:
 
 
 def work(
-    run: Path, inherited_fd: int | None = None, *, pause_after_new_games: int | None = None
+    run: Path,
+    inherited_fd: int | None = None,
+    *,
+    pause_after_new_games: int | None = None,
+    pause_after_arena_games: int | None = None,
 ) -> dict:
     with _lease(run, inherited_fd) as lease:
         config = verify(run)
@@ -2598,6 +2748,9 @@ def work(
         if pause_after_new_games is not None:
             _number(pause_after_new_games, 1, 12, "probe trajectory bound")
             state["probe_new_games"] = pause_after_new_games
+        if pause_after_arena_games is not None:
+            _number(pause_after_arena_games, 2, 36, "arena completed-task pause bound")
+            state["probe_arena_games"] = pause_after_arena_games
         if state["process_identity"] is None:
             raise RuntimeError("supervisor process identity unavailable")
         previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
@@ -2669,6 +2822,12 @@ def work(
                             generation=pause["result"],
                         )
                         break
+                    if pause_after_arena_games is not None and stage == "arena":
+                        arena = _json(run / "arena/arena.json")
+                        if arena["status"] == "paused":
+                            _candidate_review(run)
+                            state.update(status="ready_for_luna", reason="arena_probe_complete")
+                            break
                     _verify_completion(run, stage, config)
                     break
                 if state["status"] != "running":
@@ -2738,7 +2897,8 @@ def _candidate_review(run: Path) -> dict:
         groups["candidate"][g]["loss"] <= groups["r3"][g]["loss"] * 1.03
         for g in ("general", "attack_end")
     )
-    screen_pass = offline["move_quality_screen"]["screen_pass"] is True
+    screen = offline["move_quality_screen"]
+    screen_pass = screen["screen_pass"]
     arena_pass = arena["adoption_criteria_met"] is True
     result = {
         "schema": "open_shogiai_candidate_review/v1",
@@ -2748,6 +2908,12 @@ def _candidate_review(run: Path) -> dict:
         "arena_sha256": digest(run / "arena/arena.json"),
         "scalar_general_attack_preserved": scalar_preserved,
         "move_quality_screen_pass": screen_pass,
+        "move_quality_screen_status": screen.get("status", "complete"),
+        "arena_complete": arena.get("summary", {}).get("all_planned_complete", False),
+        "runtime_audit_pass": _json(run / "model-audit.json").get("status") == "PASS"
+        if (run / "model-audit.json").exists()
+        else False,
+        "development_candidate_available": (run / "audit-complete.json").exists(),
         "r3_arena_pass": arena_pass,
         "meets_frozen_criteria": bool(scalar_preserved and screen_pass and arena_pass),
         "promotion_performed": False,
@@ -2764,6 +2930,7 @@ def stage_run(
     inherited_fd: int | None = None,
     *,
     pause_after_new_games: int | None = None,
+    pause_after_arena_games: int | None = None,
 ) -> dict:
     if stage not in STAGES:
         raise ValueError("unknown stage")
@@ -2887,7 +3054,15 @@ def stage_run(
 
                 _training_summary(run, config)
                 _audit_report(run, config)
-                result = run_arena(ROOT, run / "arena", _arena_config(run, config))
+                result = run_arena(
+                    ROOT,
+                    run / "arena",
+                    _arena_config(run, config),
+                    pause_after_games=pause_after_arena_games,
+                )
+                if result["status"] == "paused":
+                    verify(run)
+                    return result  # No arena completion receipt for a partial schedule.
                 _arena_complete(result, 32 + config["evaluation"]["startpos_demonstration_games"])
         verify(run)
         if (run / "STOP").exists():
@@ -2926,14 +3101,18 @@ def main():
     parser.add_argument("stage", nargs="?", choices=STAGES)
     parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--pause-after-new-games", type=int, default=None)
+    parser.add_argument("--pause-after-arena-games", type=int, default=None)
     parser.add_argument("--abolish-calendar-limit", action="store_true")
     parser.add_argument("--admit-existing-data", action="store_true")
+    parser.add_argument("--post-training-evaluation", action="store_true")
     args = parser.parse_args()
     path = inside(args.path)
     if args.abolish_calendar_limit and args.command != "approve-operations":
         parser.error("--abolish-calendar-limit is only valid with approve-operations")
     if args.admit_existing_data and args.command != "approve-operations":
         parser.error("--admit-existing-data is only valid with approve-operations")
+    if args.post_training_evaluation and args.command != "approve-operations":
+        parser.error("--post-training-evaluation is only valid with approve-operations")
     if args.command == "seal":
         result = seal(path)
     elif args.command == "approve-operations":
@@ -2941,6 +3120,7 @@ def main():
             path,
             abolish_calendar_limit=args.abolish_calendar_limit,
             admit_existing_data=args.admit_existing_data,
+            post_training_evaluation=args.post_training_evaluation,
         )
     elif args.command == "diagnose":
         result = diagnose(path)
@@ -2949,7 +3129,11 @@ def main():
     elif args.command == "stage":
         try:
             result = stage_run(
-                path, args.stage, args.lease_fd, pause_after_new_games=args.pause_after_new_games
+                path,
+                args.stage,
+                args.lease_fd,
+                pause_after_new_games=args.pause_after_new_games,
+                pause_after_arena_games=args.pause_after_arena_games,
             )
         except (MemoryError, RuntimeError) as error:
             from .evaluator_training import TrainingResourceWaitError, allocation_failure
@@ -2993,11 +3177,21 @@ def main():
             print(json.dumps({"status": "paused", "reason": str(error)}), flush=True)
             raise SystemExit(PAUSED_EXIT) from None
     elif args.command == "work":
-        result = work(path, args.lease_fd, pause_after_new_games=args.pause_after_new_games)
+        result = work(
+            path,
+            args.lease_fd,
+            pause_after_new_games=args.pause_after_new_games,
+            pause_after_arena_games=args.pause_after_arena_games,
+        )
     elif args.command == "probe":
         result = start(path, pause_after_new_games=args.pause_after_new_games or 1)
     elif args.command == "resume":
-        result = start(path, pause_after_new_games=args.pause_after_new_games, recover_startup=True)
+        result = start(
+            path,
+            pause_after_new_games=args.pause_after_new_games,
+            recover_startup=True,
+            pause_after_arena_games=args.pause_after_arena_games,
+        )
     elif args.command == "pause":
         result = pause(path)
     else:

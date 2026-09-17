@@ -291,7 +291,7 @@ def test_completed_games_resume_without_reruns_and_recovery_keeps_failed_attempt
         calls.append(game["id"])
         trace = folder / "events.jsonl.gz"
         trace.write_bytes(gzip.compress(b"evidence"))
-        failed = len(calls) == 1
+        failed = game["id"] == "evaluation-00-black" and folder.name == "attempt-000"
         result = {
             **game,
             "plan_sha256": plan_sha,
@@ -305,7 +305,15 @@ def test_completed_games_resume_without_reruns_and_recovery_keeps_failed_attempt
         return arena._seal(folder / "receipt.json", result)
 
     monkeypatch.setattr(arena, "_play_game", fake_game)
+    probe = arena.run_arena(tmp_path, output, config, pause_after_games=2)
+    assert probe["status"] == "paused"
+    assert len(probe["games"]) == 2
+    assert not probe["summary"]["all_planned_complete"]
+    assert not probe["adoption_criteria_met"]
+    completed_ids = [game["id"] for game in probe["games"]]
+    calls.clear()
     first = arena.run_arena(tmp_path, output, config)
+    assert all(game_id not in calls for game_id in completed_ids)
     assert first["status"] == "complete"
     assert len(first["games"]) == 40
     assert len(first["attempts"]) == 41

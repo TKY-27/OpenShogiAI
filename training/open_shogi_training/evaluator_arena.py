@@ -646,13 +646,21 @@ def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
     }
 
 
-def run_arena(root: Path, output: Path, config: dict) -> dict:
+def run_arena(
+    root: Path, output: Path, config: dict, *, pause_after_games: int | None = None
+) -> dict:
     """Execute/resume 40 scheduled games, retaining completed games and all failed attempts."""
     root = root.resolve(strict=True)
     output = _inside(root, output, file=False)
     if not output.is_relative_to(root / "local"):
         raise ValueError("arena output must remain under repository local/")
     plan = _plan(root, config)
+    if pause_after_games is not None and (
+        type(pause_after_games) is not int
+        or not 2 <= pause_after_games <= len(plan["games"])
+        or pause_after_games % 2
+    ):
+        raise ValueError("pause bound must preserve color pairs within the fixed schedule")
     output.mkdir(parents=True, exist_ok=True)
     plan_path = output / "plan.json"
     if plan_path.exists():
@@ -672,6 +680,9 @@ def run_arena(root: Path, output: Path, config: dict) -> dict:
     attempts, games, status = [], [], "complete"
     campaign_deadline = time.monotonic() + plan["max_wall_seconds"]
     for game in plan["games"]:
+        if pause_after_games is not None and len(games) >= pause_after_games:
+            status = "paused"
+            break
         game_folder = output / "games" / game["id"]
         _inside(root, game_folder, file=False)
         game_folder.mkdir(parents=True, exist_ok=True)
