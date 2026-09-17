@@ -7,12 +7,17 @@
 同runの `approved-operation.json` を正本とする。
 第2セッションは **A: best1536の固定評価のみ**。追加学習・モデル総当たりは行わない。
 第3のAstraが結果と実戦をレビューする。初段到達・公開採用は未検証。
+第2セッションのoperation revisionは
+`8ba943f996fe69151b305bae5139f9b426001ffc8cdbf8e08728bb119add3bbb`、
+run identityは `507e535f946756a3bb43243450df68fd58c11cc95e7883659de5574fe2637152`。
 
-**現在はattempt16 / arena / ready_for_luna / arena_probe_complete。**
-必須audit・development-test完了。固定scheduleの最初の先後1組は候補1勝1敗、
-34手/48手で双方詰み決着、absolute deadline違反0。残りは34局。
+**第2セッションはexecution attempt 17で完了し、現在はawaiting_astra_review / complete。**
+既存probe 2局は再計上せず、固定Arenaのreceiptは全36局（評価32＋実演4）を保存した。
+35局はcheckmate完了、`evaluation-13-white` は256 ply到達の
+`incomplete / max_plies_unscored` で、勝敗・draw・0点へ変換していない。
+unplayed 0、absolute deadline違反0、重複ID 0、全trace検証済み、全process returncode 0。
 保存済みcandidate-reviewはruntime PASS、scalar維持PASS、screen未実施、
-Arena未完了、公開昇格なしを区別する。supervisor/stage/leaseは解放済み。
+Arena採用基準未成立、公開昇格なしを区別する。supervisor/stage/leaseは解放済み。
 この1組はgeneral/central_spaceのgame1502・ply84からの開発局面試験で、
 独立2標本/初期局面勝率/初段試験ではない。先後相関を保持する。
 
@@ -113,6 +118,24 @@ scalar general/attack lossはr3比<=1.03。
 結果にかかわらず有限処理後は `awaiting_astra_review`へ返し、Lunaの追加学習判断は不要。
 A/B分岐はここでAに確定。負けてもLunaがBへ変更しない。
 
+第2セッションの固定Arena実績は、採点可能な局だけを分母にした。
+
+| 区分 | 局数 | 採点 | candidate勝敗 | score |
+| --- | ---: | ---: | ---: | ---: |
+| 評価・3分 | 24 | 24 | 16勝8敗 | 0.666667 |
+| 評価・10分 | 8 | 7 | 4勝3敗 | 0.571429 |
+| 評価・10分の未採点 | 1 | 0 | `evaluation-13-white` / 256 ply | — |
+
+stratum別は `attack_end` 5勝3敗=0.625、`defense` 4勝4敗=0.500、
+`general` 6勝2敗=0.750、`opening` 5勝2敗＋未採点1=採点分0.714286。
+candidate先後別は黒8勝8敗=0.500、白12勝3敗＋未採点1=採点分0.800。
+family-cluster bootstrapは未採点局のため `null`、adverse attemptは1で、
+`evaluation_complete=false`、`all_planned_complete=false`、
+`adoption_criteria_met=false`、`r3_arena_pass=false` のままAstraへ返す。
+startpos実演4局は全てcheckmate（3分2局・10分2局、candidate scoreは各1.0）だが、
+独立strength evidenceではない。結果ファイルはrunner生成の
+`local/runs/defense-20260912/recovery-r3/candidate-review.json`。
+
 ## 診断と独立性の限界
 
 validation lossは1.145243→1.078256（5.85%減）、MAE976.24→930.24cp。
@@ -183,3 +206,8 @@ process leaseテストに一度タイミング失敗があり、対象80 tests�
 今回は封印済みruntimeのhash/auditを再利用して実行し、現HEAD全面build PASSとは報告しない。
 OSUI `npm run check`（234 tests含む）、integration:ai、r3単一モデル本番build PASS。
 main merge、deploy、重み公開、既定昇格、枝/モデル資産削除は行わない。
+
+第2セッション終了時はprocess/stageとも停止、lease解放済み。最終resource sampleは
+memory free 68%、swap 1,525,090,877 bytes、空き容量約321GiB。
+run lifetimeのpeak RSSは3,537,174,528 bytes、peak swapは17,637,048,320 bytesだが、
+今回のArena中にOOM・allocation failure・resource wait・retryは発生しなかった。
