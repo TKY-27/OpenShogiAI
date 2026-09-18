@@ -465,10 +465,10 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
                 cwd=ROOT,
             )
             pin = rb'("open_shogi_wasm_bg.wasm": ")[a-f0-9]{64}(")'
-            expected, count = re.subn(
+            expected_script, count = re.subn(
                 pin, rb"\g<1>" + hashlib.sha256(binding).hexdigest().encode() + rb"\g<2>", original
             )
-            if count != 1 or committed != expected:
+            if count != 1 or committed != expected_script:
                 raise ValueError(
                     "provenance revision may only correct the original committed binding pin"
                 )
