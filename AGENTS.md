@@ -51,3 +51,10 @@
   missing/not-run screens remain unverified, not passing. Session 2 executes only the
   fixed evaluation remainder (plan A) in `docs/status.md` and `configs/evaluator-main.json`.
   It does not retrain, publish, promote, merge, or open the final holdout.
+- The explicit 2026-09-18 R4-C1 authorization starts one new evaluator continuation round
+  after the old Session 2 completed. The sole current handoff is now R4-C1 in docs/status.md;
+  the old Session 2 restrictions above apply to the old defense run, not this new round.
+  Luna resumes the preserved initial updates in local/runs/r4-c1/attempt-01, never step zero.
+  Missing optional screens do not gate independent completion. Stop at awaiting_astra_review.
+  C2/C3, publication, weight distribution, public-default promotion and main integration
+  still require the user's separate explicit instruction.
