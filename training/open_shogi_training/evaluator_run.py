@@ -391,6 +391,7 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
             else ADMISSION_FILES
             if "dataset_admission" in revision
             else OPERATIONAL_FILES
+            | ({"scripts/check_provenance.sh"} if "round" in config else set())
         )
         or not re.fullmatch(r"[a-f0-9]{40}", revision["commit"])
     ):
@@ -451,6 +452,26 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         )
         if hashlib.sha256(committed).hexdigest() != sha:
             raise ValueError("operation revision is not committed code")
+        if name == "scripts/check_provenance.sh":
+            original = subprocess.check_output(
+                ["git", "show", f"{config['code']['commit']}:{name}"], cwd=ROOT
+            )
+            binding = subprocess.check_output(
+                [
+                    "git",
+                    "show",
+                    f"{config['code']['commit']}:bindings/wasm/open_shogi_wasm_bg.wasm",
+                ],
+                cwd=ROOT,
+            )
+            pin = rb'("open_shogi_wasm_bg.wasm": ")[a-f0-9]{64}(")'
+            expected, count = re.subn(
+                pin, rb"\g<1>" + hashlib.sha256(binding).hexdigest().encode() + rb"\g<2>", original
+            )
+            if count != 1 or committed != expected:
+                raise ValueError(
+                    "provenance revision may only correct the original committed binding pin"
+                )
         if name == "configs/evaluator-main.json":
             original = subprocess.check_output(
                 ["git", "show", f"{config['code']['commit']}:{name}"], cwd=ROOT
@@ -1273,7 +1294,7 @@ def _record_resume(run: Path, status: str, reason: str, **details) -> None:
 
 def _prepare_resume(run: Path) -> tuple[dict, dict]:
     current = _resume_idle_state(run)
-    if "round" in _json(run / "run.json"):
+    if "round" in _json(run / "run.json") and not (run / "approved-operation.json").exists():
         # A new round is authorized by its original seal. Operational revisions
         # exist only for legacy recoveries; do not manufacture one for each round.
         ref, revision_path = None, None

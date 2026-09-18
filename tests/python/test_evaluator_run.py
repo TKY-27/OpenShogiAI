@@ -972,3 +972,39 @@ def test_memory_pressure_gate_stops_owned_stage(prepared, monkeypatch):
         _, failure = runner._run_stage(run, "generate", config, stage_state(), lease)
     assert failure == "memory_pressure_limit"
     assert (run / "STOP").exists()
+
+
+def test_r4_provenance_revision_only_repins_original_committed_binding(prepared, monkeypatch):
+    _, run, _, _, _ = prepared
+    config = runner._json(run / "run.json")
+    config["round"] = {"id": "R4-C1"}
+    name = "scripts/check_provenance.sh"
+    original = b'"open_shogi_wasm_bg.wasm": "' + b"0" * 64 + b'"\n'
+    binding = b"original committed Wasm"
+    corrected = original.replace(b"0" * 64, hashlib.sha256(binding).hexdigest().encode())
+    config["code"]["files"][name] = hashlib.sha256(original).hexdigest()
+    revision = {
+        "schema": "open_shogiai_operation_revision/v1",
+        "run_sha256": digest(run / "run.json"),
+        "original_code_commit": config["code"]["commit"],
+        "commit": "b" * 40,
+        "files": {name: hashlib.sha256(corrected).hexdigest()},
+    }
+    monkeypatch.setattr(
+        runner.subprocess,
+        "check_output",
+        lambda command, **kwargs: (
+            binding
+            if command[-1].endswith("bindings/wasm/open_shogi_wasm_bg.wasm")
+            else corrected
+            if command[-1].startswith("b" * 40)
+            else original
+        ),
+    )
+    assert (
+        runner._operation_code(run, config, revision)[name] == hashlib.sha256(corrected).hexdigest()
+    )
+    corrected += b"# unrelated code change\n"
+    revision["files"][name] = hashlib.sha256(corrected).hexdigest()
+    with pytest.raises(ValueError, match="only correct"):
+        runner._operation_code(run, config, revision)
