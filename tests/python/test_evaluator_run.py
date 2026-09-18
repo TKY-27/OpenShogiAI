@@ -31,11 +31,15 @@ PROJECT = Path(__file__).resolve().parents[2]
         (True, True, True),
     ],
 )
+@pytest.mark.parametrize("is_round", [False, True])
 def test_candidate_review_requires_all_independent_gates(
-    tmp_path, monkeypatch, scalar, screen, arena
+    tmp_path, monkeypatch, scalar, screen, arena, is_round
 ):
     monkeypatch.setattr(runner, "ROOT", tmp_path)
-    atomic(tmp_path / "run.json", encoded({"fixture": True}))
+    atomic(tmp_path / "run.json", encoded({"round": {}} if is_round else {"fixture": True}))
+    groups = (
+        ("general", "opening", "defense", "attack_end") if is_round else ("general", "attack_end")
+    )
     atomic(tmp_path / "fit/best.osaval03", b"fixture")
     atomic(tmp_path / "arena/arena.json", encoded({"adoption_criteria_met": arena}))
     atomic(
@@ -43,17 +47,15 @@ def test_candidate_review_requires_all_independent_gates(
         encoded(
             {
                 "groups": {
-                    "r3": {g: {"loss": 1.0} for g in ("general", "attack_end")},
-                    "candidate": {
-                        g: {"loss": 1.02 if scalar else 1.04} for g in ("general", "attack_end")
-                    },
+                    "baseline" if is_round else "r3": {g: {"loss": 1.0} for g in groups},
+                    "candidate": {g: {"loss": 1.02 if scalar else 1.04} for g in groups},
                 },
                 "move_quality_screen": {"screen_pass": screen},
             }
         ),
     )
     review = runner._candidate_review(tmp_path)
-    assert review["meets_frozen_criteria"] is bool(scalar and screen and arena)
+    assert review["meets_frozen_criteria"] is bool(scalar and (is_round or screen) and arena)
     assert review["move_quality_screen_pass"] is screen
     assert review["promotion_performed"] is False
     assert review["human_shodan_validated"] is False
@@ -68,6 +70,9 @@ def put(path: Path, content: bytes = b"fixture") -> Path:
 @pytest.fixture
 def prepared(tmp_path, monkeypatch):
     config = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
+    config["resources"]["maximum_retries"] = 1
+    config.pop("round", None)
+    config["generation"].pop("prepared_dataset", None)
     config["generation"].pop("defense_campaign", None)
     config["generation"].pop("recovery_policy", None)
     config.pop("resource_epoch", None)
@@ -649,6 +654,7 @@ def test_defense_contract_rejects_legacy_state_and_terminal_transitions(prepared
     _, run, _, _, _ = prepared
     config = runner._json(run / "run.json")
     reviewed = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
+    reviewed["generation"]["prepared_dataset"]["path"] = str(run.relative_to(runner.ROOT))
     reviewed["state_machine"]["transitions"]["awaiting_astra_review"] = ["running"]
     with pytest.raises(ValueError, match="transitions"):
         runner._validate_config(reviewed)

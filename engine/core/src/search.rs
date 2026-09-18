@@ -235,6 +235,10 @@ pub struct SearchStats {
     /// Candidate moves left unsearched specifically because of beta cutoffs.
     pub pruned_moves: u64,
     pub qnodes: u64,
+    /// Nodes spent proving a checking mate, included in the total node budget.
+    pub mate_nodes: u64,
+    /// Length of the shortest proven checking mate, zero when unknown.
+    pub mate_plies: u8,
     /// Number of static evaluations performed by the configured neural model.
     pub neural_inference_calls: u64,
     /// Wall-clock time spent encoding features and running neural inference.
@@ -290,6 +294,7 @@ pub struct SearchResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MateSearchResult {
     pub found: bool,
+    /// False means unknown within the supplied depth/budget, never proof of no mate.
     pub pv: Vec<Move>,
     pub nodes: u64,
     pub termination: SearchTermination,
@@ -1232,7 +1237,59 @@ impl SearchEngine {
             pv: fallback.into_iter().collect(),
         };
         let mut completed_depth = 0;
-        let depths: Vec<u8> = if self.config.enable_iterative_deepening {
+        // A small proof budget shares the real deadline and node allowance. A failed
+        // proof is unknown and leaves the last evaluated legal move intact.
+        if limits.max_depth >= 3 && context.check_termination().is_ok() {
+            let allowance = limits.max_nodes.map_or(2_048, |n| (n / 32).min(2_048));
+            let time = managed
+                .and_then(|p| p.soft_limit)
+                .or(limits.movetime)
+                .map(|t| t / 20)
+                .map(|t| t.min(Duration::from_millis(20)));
+            let hard_left = limits.movetime.map(|t| t.saturating_sub(context.elapsed()));
+            let time = match (time, hard_left) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            let mate = self.find_mate_with_limits(
+                position,
+                SearchLimits {
+                    max_depth: limits.max_depth.min(5),
+                    max_nodes: Some(allowance),
+                    movetime: time,
+                },
+                cancellation,
+            );
+            context.nodes += mate.nodes;
+            context.stats.mate_nodes = mate.nodes;
+            if mate.found {
+                let distance = u8::try_from(mate.pv.len()).expect("bounded mate proof");
+                context.stats.mate_plies = distance;
+                context.seldepth = distance;
+                completed = NodeValue {
+                    score: MATE_SCORE - i32::from(distance),
+                    pv: mate.pv,
+                };
+                // Depth here reports the completed proof; no incomplete alpha-beta
+                // iteration may overwrite it, even if cancellation arrives now.
+                completed_depth = distance;
+                context.root_moves = vec![RootMoveStat {
+                    movement: completed.pv[0],
+                    score: completed.score,
+                    depth: distance,
+                    nodes: mate.nodes,
+                    pv: completed.pv.clone(),
+                }];
+                context.complete_root_iteration(distance);
+                callback(
+                    &make_info(&completed, distance, &context, context.elapsed()),
+                    self,
+                );
+            }
+        }
+        let depths: Vec<u8> = if context.stats.mate_plies > 0 {
+            Vec::new()
+        } else if self.config.enable_iterative_deepening {
             (1..=limits.max_depth).collect()
         } else {
             vec![limits.max_depth]
@@ -1376,23 +1433,60 @@ impl SearchEngine {
         max_nodes: Option<u64>,
         cancellation: &CancellationToken,
     ) -> MateSearchResult {
+        self.find_mate_with_limits(
+            position,
+            SearchLimits {
+                max_depth,
+                max_nodes,
+                movetime: None,
+            },
+            cancellation,
+        )
+    }
+
+    /// Bounded proof through legal checking moves and every legal reply.
+    /// No position-only transposition table is used: repetition depends on history.
+    /// Unproved results are unknown, not a certificate that no mate exists.
+    pub fn find_mate_with_limits(
+        &mut self,
+        position: &Position,
+        limits: SearchLimits,
+        cancellation: &CancellationToken,
+    ) -> MateSearchResult {
+        let history_matches = self.a1_game_positions.last().is_some_and(|p| p == position);
         let mut context = MateContext {
             attacker: position.side_to_move(),
-            max_nodes,
-            cancellation,
-            nodes: 0,
-            termination: None,
+            budget: SearchContext::new(limits, cancellation, self.clock.now(), self.clock.as_ref()),
+            positions: if history_matches {
+                self.a1_game_positions.clone()
+            } else {
+                vec![position.clone()]
+            },
+            checks: if history_matches {
+                self.a1_game_checks.clone()
+            } else {
+                Vec::new()
+            },
         };
-        let outcome = mate_dfs(&mut position.clone(), max_depth, &mut context);
-        let (found, pv) = match outcome {
-            Ok(Some(pv)) => (true, pv),
-            Ok(None) | Err(()) => (false, Vec::new()),
-        };
+        let mut pv = Vec::new();
+        for depth in (1..=limits.max_depth.min(63)).step_by(2) {
+            match mate_dfs(&mut position.clone(), depth, &mut context) {
+                Ok(Some(line)) => {
+                    pv = line;
+                    break;
+                }
+                Ok(None) => (),
+                Err(()) => break,
+            }
+        }
         MateSearchResult {
-            found,
+            found: !pv.is_empty(),
             pv,
-            nodes: context.nodes,
-            termination: context.termination.unwrap_or(SearchTermination::Completed),
+            nodes: context.budget.nodes,
+            termination: context
+                .budget
+                .termination
+                .unwrap_or(SearchTermination::Completed),
         }
     }
 
@@ -2155,27 +2249,28 @@ impl<'a> SearchContext<'a> {
 
 struct MateContext<'a> {
     attacker: Side,
-    max_nodes: Option<u64>,
-    cancellation: &'a CancellationToken,
-    nodes: u64,
-    termination: Option<SearchTermination>,
+    budget: SearchContext<'a>,
+    positions: Vec<Position>,
+    checks: Vec<bool>,
 }
 
 impl MateContext<'_> {
-    fn enter_node(&mut self) -> Result<(), ()> {
-        if self.termination.is_some() {
-            return Err(());
-        }
-        if self.cancellation.is_cancelled() {
-            self.termination = Some(SearchTermination::Cancelled);
-            return Err(());
-        }
-        if self.max_nodes.is_some_and(|limit| self.nodes >= limit) {
-            self.termination = Some(SearchTermination::NodeLimit);
-            return Err(());
-        }
-        self.nodes += 1;
-        Ok(())
+    fn child(
+        &mut self,
+        position: &mut Position,
+        movement: Move,
+        remaining: u8,
+    ) -> Result<Option<Vec<Move>>, ()> {
+        self.budget.check_termination()?;
+        let undo = position.make_generated_move(movement);
+        self.positions.push(position.clone());
+        self.checks
+            .push(position.is_in_check(position.side_to_move()));
+        let result = mate_dfs(position, remaining, self);
+        self.checks.pop();
+        self.positions.pop();
+        position.unmake_move(undo);
+        result
     }
 }
 
@@ -2184,7 +2279,10 @@ fn mate_dfs(
     remaining: u8,
     context: &mut MateContext<'_>,
 ) -> Result<Option<Vec<Move>>, ()> {
-    context.enter_node()?;
+    context.budget.enter_node(0, false)?;
+    if crate::game::repetition_outcome_from_history(&context.positions, &context.checks).is_some() {
+        return Ok(None); // A rule outcome is not a checkmate certificate.
+    }
     let defender_turn = position.side_to_move() != context.attacker;
     let mut moves = position.legal_moves();
     if moves.is_empty() {
@@ -2201,10 +2299,7 @@ fn mate_dfs(
         }
         let mut longest_defence = Vec::new();
         for movement in moves {
-            let undo = position.make_generated_move(movement);
-            let child = mate_dfs(position, remaining - 1, context);
-            position.unmake_move(undo);
-            let Some(child) = child? else {
+            let Some(child) = context.child(position, movement, remaining - 1)? else {
                 return Ok(None);
             };
             let mut line = vec![movement];
@@ -2216,14 +2311,15 @@ fn mate_dfs(
         Ok(Some(longest_defence))
     } else {
         for movement in moves {
+            context.budget.check_termination()?;
             let undo = position.make_generated_move(movement);
             let gives_check = position.is_in_check(position.side_to_move());
+            position.unmake_move(undo);
             let child = if gives_check {
-                mate_dfs(position, remaining - 1, context)
+                context.child(position, movement, remaining - 1)
             } else {
                 Ok(None)
             };
-            position.unmake_move(undo);
             if let Some(child) = child? {
                 let mut pv = vec![movement];
                 pv.extend(child);
@@ -2916,6 +3012,60 @@ mod tests {
 
         assert!(result.found);
         assert_eq!(result.pv.len(), 1);
+    }
+
+    #[test]
+    fn mate_proof_uses_history_deadline_legal_replies_and_survives_cancel() {
+        let position = crate::parse_sfen("3lkl3/3p1p3/4G4/9/9/9/9/9/K8 b R 1").unwrap();
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let cancellation = CancellationToken::new();
+        let unknown = engine.find_mate_with_limits(
+            &position,
+            SearchLimits {
+                max_depth: 5,
+                max_nodes: Some(2_048),
+                movetime: Some(Duration::ZERO),
+            },
+            &cancellation,
+        );
+        assert!(!unknown.found);
+        assert_eq!(unknown.termination, SearchTermination::TimeLimit);
+        let result = engine.search_with_callback(
+            &position,
+            SearchLimits {
+                max_depth: 5,
+                max_nodes: Some(65_536),
+                movetime: None,
+            },
+            &cancellation,
+            |_| cancellation.cancel(),
+        );
+        assert_eq!(result.stats.mate_plies, 1);
+        assert_eq!(result.score, MATE_SCORE - 1);
+        assert_eq!(result.pv.len(), 1);
+        let mut child = position.clone();
+        child.make_move(result.best_move.unwrap()).unwrap();
+        assert!(child.is_in_check(child.side_to_move()));
+        assert!(child.legal_moves().is_empty());
+        // Same checking geometry, but the root game has already repeated.
+        engine.a1_game_positions = vec![position.clone(); 4];
+        engine.a1_game_checks = vec![false; 3];
+        let repeated = engine.find_mate(&position, 5, Some(2_048), &CancellationToken::new());
+        assert!(!repeated.found);
+        // A pawn-drop mate is illegal, even when every geometric escape is covered.
+        let pawn = crate::parse_sfen("3lkl3/3p1p3/4G4/9/9/9/9/9/K8 b P 1").unwrap();
+        assert!(
+            !pawn
+                .legal_moves()
+                .iter()
+                .any(|m| crate::to_usi_move(*m) == "P*5b")
+        );
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        assert!(
+            !engine
+                .find_mate(&pawn, 1, None, &CancellationToken::new())
+                .found
+        );
     }
 
     #[test]

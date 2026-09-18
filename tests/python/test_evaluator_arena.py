@@ -160,6 +160,15 @@ def test_acceptance_keeps_losses_incomplete_and_recovered_failures_visible(tmp_p
     ]
     assert not arena._summary(plan, one_clock_loses, one_clock_loses)["adoption_criteria_met"]
     assert arena._summary(plan, wins, wins)["promotion_performed"] is False
+    # A winning overall result must not hide a losing R4 stratum.
+    plan["criteria"]["minimum_stratum_score"] = 0.5
+    regressed = [
+        dict(g, stratum="edge" if i < 2 else "general", score_candidate=0.0 if i < 2 else 1.0)
+        for i, g in enumerate(wins)
+    ]
+    summary = arena._summary(plan, regressed, regressed)
+    assert summary["stratum_scores"]["edge"] == 0.0
+    assert not summary["adoption_criteria_met"]
 
 
 class SimulatedClock:

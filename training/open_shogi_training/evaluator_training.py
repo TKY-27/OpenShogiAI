@@ -91,13 +91,25 @@ def grouped_arrays(folder: Path, split: str) -> dict:
     data["groups"] = np.load(folder / f"{split}-groups.npy", allow_pickle=False)
     if data["groups"].shape != data["targets"].shape or not np.isin(data["groups"], range(4)).all():
         raise ValueError("invalid sampling groups")
+    if (folder / f"{split}-sources.npy").exists():
+        data["sources"] = np.load(folder / f"{split}-sources.npy", allow_pickle=False)
+        if (
+            data["sources"].shape != data["targets"].shape
+            or not np.isin(data["sources"], (0, 1)).all()
+        ):
+            raise ValueError("invalid source sampling membership")
     return data
 
 
-def evaluate_groups(parameters: list, data: dict, batch_size: int) -> dict:
+def evaluate_groups(
+    parameters: list, data: dict, batch_size: int, *, source: int | None = None
+) -> dict:
     result = {}
     for i, name in enumerate(GROUPS):
-        indexes = np.flatnonzero(data["groups"] == i)
+        mask = data["groups"] == i
+        if source is not None:
+            mask &= data["sources"] == source
+        indexes = np.flatnonzero(mask)
         if not len(indexes):
             raise ValueError(f"missing independent validation group: {name}")
         result[name] = evaluate(parameters, data, batch_size, indexes=indexes)
@@ -119,6 +131,29 @@ def stratified_order(
         count = max(1, int(size * fraction))
         chosen.append(m[torch.randperm(len(m), generator=generator)[:count]])
     order = torch.cat(chosen)
+    return order[torch.randperm(len(order), generator=generator)]
+
+
+def mixed_order(
+    data: dict, fractions: list[float], sources: list[float], generator: torch.Generator
+) -> torch.Tensor:
+    """Fixed new/replay ratio without replacement; every exposure remains countable."""
+    if len(sources) != 2 or min(sources) <= 0 or abs(sum(sources) - 1) > 1e-9:
+        raise ValueError("invalid new/replay sampling fractions")
+    replay = torch.from_numpy(np.flatnonzero(data["sources"] == 0))
+    new = torch.from_numpy(np.flatnonzero(data["sources"] == 1))
+    replay = replay[
+        stratified_order({"groups": data["groups"][replay.numpy()]}, fractions, generator)
+    ]
+    size = int(min(len(replay) / sources[0], len(new) / sources[1]))
+    if size < 8:
+        raise ValueError("insufficient mixed source data")
+    order = torch.cat(
+        (
+            replay[: int(size * sources[0])],
+            new[torch.randperm(len(new), generator=generator)[: int(size * sources[1])]],
+        )
+    )
     return order[torch.randperm(len(order), generator=generator)]
 
 
@@ -267,6 +302,7 @@ def train(
     torch.use_deterministic_algorithms(True)
     torch.manual_seed(config["seed"])
     fractions = config.get("sampling_fractions")
+    source_fractions = config.get("source_fractions")
     loader = grouped_arrays if fractions is not None else arrays
     data, validation = loader(dataset, "train"), loader(dataset, "validation")
     n = len(data["targets"])
@@ -283,7 +319,9 @@ def train(
 
     def next_order():
         return (
-            stratified_order(data, fractions, generator)
+            mixed_order(data, fractions, source_fractions, generator)
+            if source_fractions
+            else stratified_order(data, fractions, generator)
             if fractions
             else torch.randperm(n, generator=generator)
         )
@@ -360,7 +398,12 @@ def train(
                     raise ValueError("completed run identity mismatch")
                 return result
     if fractions and baseline_groups is None:
-        baseline_groups = evaluate_groups(torch_parameters(model), validation, config["batch_size"])
+        baseline_groups = evaluate_groups(
+            torch_parameters(model),
+            validation,
+            config["batch_size"],
+            source=0 if source_fractions else None,
+        )
     initial_step = step
     started = time.monotonic()
 
@@ -405,7 +448,12 @@ def train(
             groups = (
                 baseline_groups
                 if not history
-                else evaluate_groups(parameters, validation, config["batch_size"])
+                else evaluate_groups(
+                    parameters,
+                    validation,
+                    config["batch_size"],
+                    source=0 if source_fractions else None,
+                )
             )
             count = sum(group["positions"] for group in groups.values())
             metrics = {
@@ -424,7 +472,18 @@ def train(
             eligible = all(
                 groups[g]["loss"]
                 <= baseline_groups[g]["loss"] * config["maximum_replay_regression_ratio"]
-                for g in ("general", "attack_end")
+                for g in (GROUPS if source_fractions else ("general", "attack_end"))
+            )
+        new_metrics = None
+        if source_fractions:
+            new_metrics = evaluate(
+                parameters,
+                validation,
+                config["batch_size"],
+                indexes=np.flatnonzero(validation["sources"] == 1),
+            )
+            metrics["loss"] = (
+                source_fractions[0] * metrics["loss"] + source_fractions[1] * new_metrics["loss"]
             )
         if not all(math.isfinite(v) for v in metrics.values()):
             raise FloatingPointError("nonfinite validation")
@@ -454,6 +513,7 @@ def train(
             "model_sha256": current.sha256,
             "groups": groups,
             "replay_guard_eligible": eligible,
+            "new_source": new_metrics,
         }
         history.append(event)
         train_loss_sum, train_rows = 0.0, 0
@@ -565,6 +625,13 @@ def train(
         "example_exposures": exposures,
         "maximum_exposure": int(counts.max()),
         "sampling_fractions": fractions,
+        "source_fractions": source_fractions,
+        "source_exposures": {
+            name: int(counts[torch.from_numpy(data["sources"] == i)].sum())
+            for i, name in enumerate(("replay", "new"))
+        }
+        if source_fractions
+        else None,
         "group_exposures": {
             name: int(counts[torch.from_numpy(data["groups"] == i)].sum())
             for i, name in enumerate(GROUPS)

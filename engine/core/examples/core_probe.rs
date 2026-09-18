@@ -183,6 +183,7 @@ fn probe(
         "pv":result.pv.iter().copied().map(to_usi_move).collect::<Vec<_>>(),
         "outcome":result.outcome,"time_hard_limit_ms":time_hard_limit_ms,
         "elapsed_ms":result.elapsed.as_secs_f64()*1000.0,"termination":format!("{:?}",result.termination),
+        "mate_nodes":result.stats.mate_nodes,"mate_plies":result.stats.mate_plies,
         "time_target_ms":search.managed_target_ms(),
         "legal":result.best_move.is_some_and(|m|game.position().legal_moves().contains(&m)),
         "proof":proof,"iterations":iterations,"compute_control":search.compute_control_summary(),

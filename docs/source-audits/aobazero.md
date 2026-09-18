@@ -2,6 +2,25 @@
 
 Review date: 2026-08-03 (Asia/Tokyo)
 
+Rechecked for R4-C1 on 2026-09-18: the live sample index now also lists
+`w4750` through `w4765` (213 `Kifu.load` references). All original exact100
+catalog entries remain present; the catalog and rights scope are unchanged.
+The current index SHA-256 is
+`04d3f1dccc797ce9ed6fd7596c28d21a16617f63ea4f6fba9ad51901f676e676`.
+The immutable rights documents retain their recorded hashes. R4 reacquires only
+the 72 train and 18 validation games identified in the retained game partition
+ledger, requiring the original per-file hashes; it neither fetches nor opens the
+10 final-holdout games. Existing validation remains validation.
+
+For value-label semantics, the pinned upstream
+[`ysszero.cpp`](https://github.com/kobanium/aobazero/blob/5eb944165300d5b88924c917a147e80d9d173eed/src/usi-engine/bona/ysszero.cpp)
+emits `v` from the searched best child's value in the root player's perspective,
+and `r` from the raw root network. `winrate_to_score` uses
+`600 * log(v / (1-v))`, truncated toward zero, capped at ±5000 outside
+0.0003..0.9997. R4 uses only `v` on the pre-move root, never treats `r` or visit
+counts as cp, and never attaches the root target to a search leaf. This is a
+publisher-defined scale mapping, not a claim of calibration equivalence to Apery.
+
 ## Decision
 
 Approval is limited to the 100 exact CSA files enumerated in

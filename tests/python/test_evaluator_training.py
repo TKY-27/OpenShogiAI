@@ -143,11 +143,17 @@ def test_group_sampler_preserves_balance_without_duplicate_exposure():
     assert np.bincount(data["groups"][order.numpy()]).tolist() == [30, 20, 30, 20]
 
 
-def test_stratified_resume_restores_every_parameter_and_sampler_state(tmp_path):
+@pytest.mark.parametrize("mixed_sources", [False, True])
+def test_stratified_resume_restores_every_parameter_and_sampler_state(tmp_path, mixed_sources):
     data, config = setup(tmp_path)
     for split in ("train", "validation"):
-        make_dataset(data, corpus()[:8], split)
-        np.save(data / f"{split}-groups.npy", np.arange(8, dtype=np.uint8) % 4)
+        size = 32 if mixed_sources else 8
+        make_dataset(data, (corpus()[:8] * 4)[:size], split)
+        np.save(data / f"{split}-groups.npy", np.arange(size, dtype=np.uint8) % 4)
+        if mixed_sources:
+            np.save(data / f"{split}-sources.npy", np.array([0] * 24 + [1] * 8, dtype=np.uint8))
+    if mixed_sources:
+        config["source_fractions"] = [0.75, 0.25]
     config.update(sampling_fractions=[0.3, 0.2, 0.3, 0.2], maximum_replay_regression_ratio=1.03)
     identity = {"dataset": "four-groups", "code": "fixture"}
     whole = train(data, tmp_path / "whole", config, identity)

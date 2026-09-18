@@ -20,4 +20,4 @@ evidence:
   - evidence_id: official-sample-index
     url: http://www.yss-aya.com/aobazero/no_noise/sample.html
     max_bytes: 524288
-    sha256: 178b6bfdd4a128eef14bc1ae7d057fae3781230cef9dc5cc3e2351291e15f9ad
+    sha256: 04d3f1dccc797ce9ed6fd7596c28d21a16617f63ea4f6fba9ad51901f676e676

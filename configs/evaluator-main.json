@@ -1,25 +1,25 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "defense-20260912-recovery-r3",
-  "output": "local/runs/defense-20260912/recovery-r3",
-  "seed": 20260912,
+  "run_id": "r4-c1-attempt-01",
+  "output": "local/runs/r4-c1/attempt-01",
+  "seed": 20260918,
   "generation": {
     "first_game": 0,
-    "games": 3072,
+    "games": 90,
     "workers": 1,
     "max_plies": 192,
     "sample_stride": 2,
     "deviation_stride": 12,
     "teacher_nodes": 2000000,
-    "leaf_path": "local/runs/evaluator-20260910/main-r3/fit/best.osaval03",
-    "leaf_sha256": "cd07f2a202f6e781afcb6a8af3c7a198c4203373e4505fe089f8c7f05eefd983",
+    "leaf_path": "local/runs/defense-20260912/recovery-r3/fit/best.osaval03",
+    "leaf_sha256": "8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a",
     "teacher_config_path": "local/frozen/metadata/teacher-config.yaml",
     "teacher_binary_sha256": "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403",
     "split_guard_path": "local/frozen/metadata/split-guard.json",
     "development_exclusions_path": "local/runs/defense-20260912/exclusions.json",
     "development_exclusions_sha256": "0574747158aec48357a360f8ada3d2c84d2d088209017bd173bb2d54eb6d3126",
     "teacher_depth": 12,
-    "teacher_retry_nodes": 32000000,
+    "teacher_retry_nodes": 2000000,
     "defense_campaign": {
       "families": [
         {
@@ -211,100 +211,54 @@
           ]
         }
       ],
-      "variants_per_family": 256,
       "probe_nodes": 20000,
       "probe_stride": 12,
       "relabel_depth": 16,
       "relabel_nodes": 2000000,
       "replay_dataset": {
-        "path": "local/runs/evaluator-20260910/main-r3/data/dataset",
-        "manifest_sha256": "d2ddabbf3415fc518c202b607f59855b889ab1c8d33e362bd5e611bbb9ec56aa"
-      },
-      "source_row_caps": {
-        "generated": 900000,
-        "r3_replay": 300000
-      },
-      "maximum_unlabeled_focus": 200,
-      "minimum_focus_completion_rate": 0.95
+        "path": "local/runs/defense-20260912/recovery-r3/data/dataset",
+        "manifest_sha256": "67289ab62f78a1cb8f54af25367e27df729c7d3fc96cd6ad9bb573203a2dda42"
+      }
     },
-    "recovery_policy": {
-      "schema": "open_shogiai_label_recovery/v1",
-      "parent_generation_sha256": "20b7d9b2972e6cc2161c07eecd5e3336055821a5c07aa85d05c3c162fa02664b",
-      "main_nodes": 2000000,
-      "hard_nodes": 32000000,
-      "maximum_attempts_per_task": 2,
-      "maximum_attempt_seconds": 75,
-      "maximum_task_seconds": 150,
-      "maximum_task_nodes": 34000000,
-      "maximum_worker_restarts": 3,
-      "maximum_supplemental_games": 192,
-      "maximum_supplemental_per_family": 16,
-      "minimum_completed_per_family": 240,
-      "maximum_deferred_roots": 96,
-      "maximum_deferred_per_family": 8,
-      "minimum_focus_stratum_requests": 20,
-      "minimum_focus_stratum_completion_rate": 0.95,
-      "unique_data_goal": {
-        "expected_unique_positions": [
-          400000,
-          1200000
-        ],
-        "minimum_train_positions": 400000,
-        "minimum_new_train_positions": 150000,
-        "minimum_train_rows_per_group": 10000,
-        "minimum_evaluation_rows_per_group": 128,
-        "report_actual_counts": true,
-        "independence": "12 predefined scenario families; all variants/colors share family split; shared and old-r3 split symmetries excluded. Not independent human games."
-      },
-      "health_window_tasks": 32,
-      "health_failure_tasks": 24,
-      "health_minimum_games": 8,
-      "maximum_hard_attempts": 8192,
-      "maximum_hard_seconds": 43200,
-      "inherited_hard_attempts": 359,
-      "inherited_hard_seconds": 2205.209,
-      "hard_requested_node_ceiling": 262144000000,
-      "hard_budget_evidence": {
-        "path": "local/runs/defense-20260912/recovery-evidence/inherited-hard-budget.json",
-        "sha256": "66f4ac4a3514853f68e202d1dbb6d3cef4025249b84dc7b40e6c041f73dda74c"
-      },
-      "maximum_search_seconds": 60,
-      "ready_seconds": 5,
-      "stop_seconds": 1,
-      "quit_seconds": 1,
-      "startup_seconds": 10
+    "prepared_dataset": {
+      "path": "local/r4-c1-preparation/dataset",
+      "manifest_sha256": "41eda6ac25760d041bc76f19e59338ac09bddc4335ae7c5953d9a4bba06cc3fe"
     }
   },
   "training": {
     "device": "cpu",
     "threads": 4,
     "batch_size": 256,
-    "max_steps": 12288,
-    "max_epochs": 8,
+    "max_steps": 2048,
+    "max_epochs": 16,
     "validation_every": 256,
     "patience": 6,
     "minimum_relative_improvement": 0.002,
-    "learning_rate": 0.0001,
-    "minimum_learning_rate": 1e-05,
+    "learning_rate": 5e-05,
+    "minimum_learning_rate": 5e-06,
     "warmup_steps": 128,
     "gradient_norm_limit": 5.0,
     "sampling_fractions": [
+      0.25,
       0.3,
       0.2,
-      0.3,
-      0.2
+      0.25
     ],
-    "maximum_replay_regression_ratio": 1.03
+    "maximum_replay_regression_ratio": 1.03,
+    "source_fractions": [
+      0.75,
+      0.25
+    ],
+    "microbatch_size": 32
   },
   "resources": {
-    "maximum_wall_seconds": 259200,
-    "free_space_floor_gib": 60,
+    "maximum_wall_seconds": 604800,
+    "free_space_floor_gib": 20,
     "maximum_process_rss_gib": 12,
-    "maximum_swap_growth_gib": 0.5,
+    "maximum_swap_growth_gib": 16,
     "stalled_seconds": 1800,
-    "maximum_retries": 1,
-    "monitor_interval_seconds": 15,
-    "minimum_memory_free_percent": 50
+    "maximum_retries": 3,
+    "monitor_interval_seconds": 15
   },
   "evaluation": {
     "depth": 64,
@@ -312,7 +266,7 @@
     "paired_3minute_games": 24,
     "paired_10minute_games": 8,
     "startpos_demonstration_games": 4,
-    "criterion": "Only validation-selected best is evaluated against r3. Require complete valid 32 stress games, score >0.5 at each clock and family-cluster bootstrap one-sided 95% lower >0.5, opening/defense move-screen major errors strictly reduced and mean regret <=0.9*r3, general/attack major errors not increased and mean regret <=r3+50cp. Also unknown scalar general/attack loss <=1.03*r3. No automatic adoption; Astra reviews. 4 unique clock/color startpos demonstrations are separate. No success-based early exit; failures retained, maxplies draw, time forfeits adverse.",
+    "criterion": "One validation-selected best against defense-best1536 under the same new runtime. Fixed 32 stress games (24x3min,8x10min), colors paired, no win-until-retry. Require all scored/valid; each clock score >0.5, family-cluster bootstrap one-sided 95% lower >0.5; each stratum score >=0.5; each of four development scalar losses <=1.03 baseline. 4 clock/color startpos demonstrations are separate, not independent replicates. Draws=0.5; maxplies/invalid unscored; time/deadline failures adverse. Missing optional screens stay unverified and never gate completion/adoption metrics. No automatic adoption or shodan claim.",
     "groups": [
       "general",
       "opening",
@@ -322,21 +276,28 @@
     "screen_teacher_depth": 16,
     "screen_probe_nodes": 100000,
     "regression_positions_path": "local/runs/defense-20260912/diagnosis/regression-roots.json",
-    "regression_positions_sha256": "8a8304f2b3c71646a7ccdcf7e02177cb08886e3b5658588a0364f3559e8d5269"
+    "regression_positions_sha256": "8a8304f2b3c71646a7ccdcf7e02177cb08886e3b5658588a0364f3559e8d5269",
+    "optional_screen": "retained_only",
+    "minimum_stratum_score": 0.5
   },
   "unique_data_goal": {
-    "expected_unique_positions": [
-      400000,
-      1200000
-    ],
-    "minimum_train_positions": 400000,
-    "minimum_new_train_positions": 150000,
-    "minimum_train_rows_per_group": 10000,
-    "minimum_evaluation_rows_per_group": 128,
+    "actual_manifest": {
+      "path": "local/r4-c1-preparation/dataset",
+      "manifest_sha256": "41eda6ac25760d041bc76f19e59338ac09bddc4335ae7c5953d9a4bba06cc3fe"
+    },
+    "train_unique": 491520,
+    "new_train": 8034,
+    "relabeled_train": 35,
+    "new_validation": 1826,
+    "source_games": {
+      "public_train": 72,
+      "public_validation": 18,
+      "focus_train_roots": 12
+    },
     "report_actual_counts": true,
-    "independence": "12 predefined scenario families; all variants/colors share family split; shared and old-r3 split symmetries excluded. Not independent human games."
+    "independence": "existing source-game/family split and symmetry keys preserved; public games retain historical partitions; no final holdout opened; new metadata has source/trajectory identity"
   },
-  "controller": "off; r3 continuation and fixed-depth relabeling are not a new control mechanism",
+  "controller": "off; continue all scalar evaluator layers, no handcrafted nonterminal scores",
   "excluded_development_sfens": [
     "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
     "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
@@ -349,7 +310,7 @@
     "format": "OSAVAL03",
     "width": 256,
     "objective": "all-layer scalar smooth L1 cp/600, exact Q20/f64 accumulation; no nonterminal handcrafted scores",
-    "selection": "one best validation export constrained by general and attack_end loss <=1.03 initial r3; two latest coherent resume checkpoints; development_test never selects best"
+    "selection": "weighted validation .75 replay/.25 new; all four replay group loss <=1.03 initial defense; best plus latest two coherent resume checkpoints; development_test never selects best"
   },
   "state_machine": {
     "schema": "open_shogiai_evaluator_state/v2",
@@ -381,90 +342,60 @@
   },
   "operations": {
     "cwd": ".",
+    "cwd_identity": "OpenShogiAI Git root; exact absolute execution_cwd saved in ignored run.json",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 </dev/null",
-    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/defense-20260912/recovery-r3",
-    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/defense-20260912/recovery-r3",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 </dev/null",
-    "evaluate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r3 arena",
-    "export_audit": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stage local/runs/defense-20260912/recovery-r3 audit",
-    "export": "best runtime export is atomically published by train; audit uses that checkpoint-bound export",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c1/attempt-01 </dev/null",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c1/attempt-01 </dev/null",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c1/attempt-01",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c1/attempt-01",
+    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c1/attempt-01 </dev/null",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c1/attempt-01 --pause-after-updates 4 </dev/null",
     "stages": [
-      "generate",
-      "prepare",
-      "train",
-      "audit",
-      "arena"
+      "generate (verify existing inputs only)",
+      "prepare (immutable snapshot)",
+      "train (continue saved prefix)",
+      "audit (native/Wasm and scalar; optional teacher retained-only)",
+      "arena (fixed 36 games)",
+      "awaiting_astra_review"
     ],
-    "state": "local/runs/defense-20260912/recovery-r3/state.json",
-    "best": "local/runs/defense-20260912/recovery-r3/fit/best.osaval03",
-    "resume_checkpoint": "local/runs/defense-20260912/recovery-r3/fit/resume.json",
-    "logs": "local/runs/defense-20260912/recovery-r3/{supervisor.log,monitor.jsonl,*-0.log}",
-    "outputs": "local/runs/defense-20260912/recovery-r3/data/dataset/manifest.json; local/runs/defense-20260912/recovery-r3/development-test.json; local/runs/defense-20260912/recovery-r3/arena/arena.json",
-    "cleanup_allowlist": [
-      "fit/checkpoint-*.pt older than latest two after hash/open-file check",
-      "data/dataset-building incomplete owned staging after containment/link/open-file verification"
-    ],
+    "best": "local/runs/r4-c1/attempt-01/fit/best.osaval03",
+    "resume_checkpoint": "local/runs/r4-c1/attempt-01/fit/resume.json",
+    "state": "local/runs/r4-c1/attempt-01/state.json",
+    "logs": "local/runs/r4-c1/attempt-01/supervisor.log; local/runs/r4-c1/attempt-01/monitor.jsonl",
+    "review_result": "local/runs/r4-c1/attempt-01/candidate-review.json",
+    "finite_bounds": {
+      "acquisition": "complete: 90 public records; 2 retries each; no giant archive",
+      "new_teacher": "complete:12 train roots,53 labeled states, depth12/2M nodes per state; no further generation",
+      "train_updates": 2048,
+      "epochs": 16,
+      "validation_interval": 256,
+      "patience": 6,
+      "microbatch": [
+        32,
+        16,
+        8,
+        4,
+        2,
+        1
+      ],
+      "allocation_process_retries": 3,
+      "arena": "36 planned tasks; at most one retry for process failure, cumulative clocks; no success-based restart"
+    },
     "recovery": [
-      "The original run/seal, generated data, split/rights metadata, prepare manifest and completed training remain unchanged. Formal resume verifies and skips them.",
-      "Astra approves committed post-training code through approve-operations --post-training-evaluation; it records the original optional D16 failure and completed training/audit identities. Luna uses ordinary resume, never hand-edits state or creates another run.",
-      "optional-screen-v1 retains existing optional screen evidence without additional teacher calls in this evaluation. Typed depth/timeout/budget misses are missing observations, not zero scores or losses; runtime/hash/legal/save failures remain required.",
-      "Normal host pressure/swap is diagnostic. Confirmed allocation failures retain the coherent checkpoint and use the existing finite microbatch fallback and at most 3 process retries per task. Resource wait preserves cumulative budgets and resumes when recovered; user STOP is never cleared automatically.",
-      "resume holds the exclusive lease and starts a separate supervisor/stage with DEVNULL stdin. Completed arena task IDs are verified and skipped; all failed attempts and spent clocks remain in receipts.",
-      "A 2-game arena probe is only a bounded execution prefix, never full Arena acceptance. The following ordinary resume completes the same plan. Max-plies exhaustion is unscored but does not prevent final review of the finite workload.",
-      "No new calendar deadline, generation, retraining, public-default promotion, weight publication, main merge, deploy, forced history change, or model/branch cleanup is authorized in session 2."
+      "No calendar expiry; pressure/swap diagnostic only. Real allocation failure uses microbatch reduction then finite process retries and resource wait. Stop is respected.",
+      "Exact same-run resume restores optimizer, random states, sampler and update count; completed receipts and game IDs are verified and skipped.",
+      "Missing optional teacher labels are unknown; valid independent scalar labels admitted; no fake zero/PASS. Mandatory integrity, split, finite output, legality and saving remain required.",
+      "Only C1; no C2, full holdout, public-default promotion, weight distribution, main merge or deploy."
     ],
-    "return_to_astra": [
-      "identity, split, corruption, numerical, illegal-move or save-integrity failure",
-      "unrecoverable runtime/clock failure, with original evidence preserved",
-      "awaiting_astra_review after the finite fixed evaluation, including losses or unscored max-plies cases"
-    ],
-    "acquisition": "All inputs already local; hash-pinned Apery 2.0.0 engine GPL-3.0 and separately licensed evaluation MIT; own generated trajectories. Verify sealed inputs before generation, seal actual dataset manifest during prepare; no additional public archive acquisition.",
-    "cwd_identity": "OpenShogiAI Git root; absolute execution_cwd is bound in the ignored sealed run.json",
-    "review_result": "local/runs/defense-20260912/recovery-r3/candidate-review.json",
-    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/defense-20260912/recovery-r3 --pause-after-arena-games 2 </dev/null",
-    "migrate": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run migrate local/runs/defense-20260912/recovery-r3",
-    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/defense-20260912/recovery-r3 </dev/null",
-    "session_2": {
-      "plan": "A: evaluate the existing best1536 only; no additional training",
-      "candidate_sha256": "8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a",
-      "dataset_manifest_sha256": "67289ab62f78a1cb8f54af25367e27df729c7d3fc96cd6ad9bb573203a2dda42",
-      "approval": "approved-operation.json; optional-screen-v1; original run/seal and training identity retained",
-      "completed_stages": "generate, prepare, train, mandatory runtime audit and development scalar evaluation; verify and skip completed receipts",
-      "optional_screen": "retained_only; completed/missing/not_run separate; screen_pass null when incomplete; never blocks independent arena or development loading",
-      "arena": "same fixed 32 stress games (24 at 3 minutes, 8 at 10 minutes) plus 4 startpos demonstrations; reuse completed task IDs exactly once",
-      "supplementary": "2 fixed-50ms games against shared-search handcrafted evaluation; saved separate, not shodan-calibrated and not added to main arena",
-      "handoff": "finish finite evaluation and candidate-review then awaiting_astra_review regardless of win rate; max-plies exhaustion stays unscored",
-      "promotion": "none; development candidate only"
-    }
+    "acquisition": "Public-domain AobaZero annotated premove root probabilities mapped by upstream 600-logit; same historical source hashes/partitions. Old defense replay and 53 direct Apery D12 root labels (including played children) preserve lineage. See docs/source-audits/aobazero.md."
   },
-  "contract_revision": 2,
-  "recovery_from": {
-    "run_id": "defense-20260912-main-r1",
-    "path": "local/runs/defense-20260912/main",
-    "run_sha256": "3d9cc476e58631f56e6e18323df50c2b547aa993a118b0b6fe577631ae69583b",
-    "state_sha256": "29d4ca21cb194e2ad680928f4004a738e2dd9011754366a873cc2db27b2bbf15",
-    "inventory_path": "local/runs/defense-20260912/recovery-evidence-r2/inventory.json",
-    "inventory_sha256": "1b29a86a37f9839b38df4f61cce24adbc804ddae61b020c1390645e90750137a",
-    "compatibility_path": "local/runs/defense-20260912/recovery-evidence/parent-label-compatibility.json",
-    "compatibility_sha256": "06ee97e7e0a692626ca1bfd560e373ad071b0407f52e552d47859f02767b61b9",
-    "failures": [
-      {
-        "path": "local/runs/defense-20260912/main/data/failures/000211-ply0116-root-59d4b9bf64004507b4fda5a9fc3d01cf.json",
-        "sha256": "cce115dd6b9f145f597fa6aca99292b3e3ecf866a1f7cce5d062c95985996c4c"
-      },
-      {
-        "path": "local/runs/defense-20260912/main/data/failures/000211-ply0116-root-feb0e95a401148549b4d4d422a109ceb.json",
-        "sha256": "ecde9b959f27c5d09b1d793188186905ccb2a09a1262d55b4d9328039f43bcd0"
-      }
-    ]
-  },
-  "resource_epoch": {
-    "authorization": "explicit_user_approval_20260912",
-    "original_initial_swap_bytes": 1500313026,
-    "initial_swap_bytes": 4191221186,
-    "source": "Astra resource-stop diagnosis; retain original deadline and all attempt history",
-    "prior_probe": "local/runs/defense-20260912/recovery-evidence-r2/probe-resource-stop.json",
-    "prior_probe_sha256": "a875942702614a536006a55dc891117fc1bd8c36f8ea4deab74e12f19fda86d4"
+  "round": {
+    "id": "R4-C1",
+    "attempt": 1,
+    "authorization": "explicit_user_20260918",
+    "baseline": "defense-best1536",
+    "scope": "offense construction, coordination, timing and continuity; preserve general/defense/endgame",
+    "optimizer": "fresh AdamW and warmup/cosine schedule for this round; exact optimizer/RNG/sampler restoration for every resume",
+    "next_round": "only after explicit user direction following arena, Astra browser review and human games"
   }
 }

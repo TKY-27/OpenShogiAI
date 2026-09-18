@@ -166,6 +166,17 @@ def _validate_config(config: dict) -> None:
         raise ValueError("run output must remain under local/runs")
     _number(config["seed"], 0, 2**63 - 1, "seed")
     generation = config["generation"]
+    if "round" in config:
+        if (
+            config["round"].get("id") != "R4-C1"
+            or config["round"].get("authorization") != "explicit_user_20260918"
+        ):
+            raise ValueError("unapproved learning round")
+        ref = generation["prepared_dataset"]
+        _hash(ref["manifest_sha256"])
+        inside(ref["path"])
+        if config["evaluation"].get("optional_screen") != "retained_only":
+            raise ValueError("R4-C1 optional screen is retained-only")
     for name, low, high in (
         ("first_game", 0, 10**9),
         ("games", 1, 65536),
@@ -213,6 +224,8 @@ def _validate_config(config: dict) -> None:
         if policy.get("unique_data_goal") != config["unique_data_goal"]:
             raise ValueError("recovery coverage cannot weaken the learning data goal")
     training = config["training"]
+    if "round" in config and training.get("source_fractions") != [0.75, 0.25]:
+        raise ValueError("unreviewed R4 replay/new mixture")
     if training["device"] != "cpu":
         raise ValueError("only the measured CPU training route is enabled")
     for name, maximum in (
@@ -276,7 +289,9 @@ def _validate_config(config: dict) -> None:
     if generation.get("defense_campaign"):
         from .evaluator_training import GROUPS
 
-        if training.get("sampling_fractions") != [0.3, 0.2, 0.3, 0.2]:
+        if training.get("sampling_fractions") != (
+            [0.25, 0.30, 0.20, 0.25] if "round" in config else [0.3, 0.2, 0.3, 0.2]
+        ):
             raise ValueError("defense run requires the reviewed four-group sampling plan")
         if training.get("maximum_replay_regression_ratio") != 1.03:
             raise ValueError("unreviewed replay regression guard")
@@ -291,7 +306,11 @@ def _validate_config(config: dict) -> None:
             machine.get("transitions")
             != {
                 "ready_for_luna": ["running"],
-                "running": (["ready_for_luna"] if generation.get("recovery_policy") else [])
+                "running": (
+                    ["ready_for_luna"]
+                    if generation.get("recovery_policy") or "round" in config
+                    else []
+                )
                 + ["stopped", "needs_astra", "awaiting_astra_review"],
                 "stopped": ["running"],
                 "needs_astra": [],
@@ -476,6 +495,9 @@ def verify(run: Path, *, operation_revision: dict | None = None) -> dict:
         if key == "source_config" and ref["path"] == "configs/evaluator-main.json":
             expected = code_files.get(ref["path"], expected)
         _reference(inside(ref["path"]), expected)
+    if "round" in config:
+        config["_resource_policy"] = RESOURCE_POLICY
+        config["_optional_screen"] = config["evaluation"]["optional_screen"]
     return config
 
 
@@ -576,6 +598,14 @@ def seal(config_path: Path) -> dict:
             raise ValueError(f"missing {path_key}")
         inputs[name] = _reference(inside(generation[path_key]), generation.get(hash_key))
         generation[hash_key] = inputs[name]["sha256"]
+    if generation.get("prepared_dataset"):
+        from .r4_data import verify_dataset
+
+        source = inside(generation["prepared_dataset"]["path"])
+        manifest = verify_dataset(ROOT, source, generation["prepared_dataset"]["manifest_sha256"])
+        inputs["prepared_manifest"] = _reference(source / "manifest.json")
+        for i, ref in enumerate(manifest["artifacts"]):
+            inputs[f"prepared_{i}"] = _reference(source / ref["path"], ref["sha256"])
     sources = {name: _reference(inside(path)) for name, path in RUNTIME_SOURCES.items()}
     campaign = generation.get("defense_campaign")
     if campaign:
@@ -751,6 +781,23 @@ def _resume_snapshot(run: Path, config: dict) -> dict:
     from .evaluator_data import Replay
 
     data = run / "data"
+    if config["generation"].get("prepared_dataset"):
+        snapshot = {"games": 0, "rows": 0, "files": {}, "pending": {}, "tasks": {}, "counters": {}}
+        for stage in ("generate", "prepare"):
+            if (run / f"{stage}-complete.json").exists():
+                _verify_completion(run, stage, config)
+                snapshot["files"][f"{stage}-complete.json"] = digest(run / f"{stage}-complete.json")
+        if (data / "dataset/manifest.json").exists():
+            dataset = _dataset(run, config)
+            snapshot["rows"] = sum(dataset["unique_positions"].values())
+        if (run / "fit/resume.json").exists():
+            ref = _json(run / "fit/resume.json")
+            path = inside(run / "fit" / ref["path"])
+            if path.parent != run / "fit":
+                raise ValueError("checkpoint outside fit")
+            _reference(path, ref["sha256"])
+            snapshot["checkpoint"] = ref
+        return snapshot
     if (data / "generation.json").read_bytes() != encoded(config["generation"]):
         raise ValueError("generation cursor belongs to another configuration")
     inventory, games, rows = {}, set(), 0
@@ -1226,19 +1273,28 @@ def _record_resume(run: Path, status: str, reason: str, **details) -> None:
 
 def _prepare_resume(run: Path) -> tuple[dict, dict]:
     current = _resume_idle_state(run)
-    ref = _json(run / "approved-operation.json")
-    revision_path = inside(ref["path"])
-    if revision_path.parent != run / "operations":
-        raise ValueError("approved operation outside run")
-    _reference(revision_path, ref["sha256"])
-    revision = _json(revision_path)
-    config = verify(run, operation_revision=revision)
+    if "round" in _json(run / "run.json"):
+        # A new round is authorized by its original seal. Operational revisions
+        # exist only for legacy recoveries; do not manufacture one for each round.
+        ref, revision_path = None, None
+        config = verify(run)
+        expected_code = config["code"]["files"]
+    else:
+        ref = _json(run / "approved-operation.json")
+        revision_path = inside(ref["path"])
+        if revision_path.parent != run / "operations":
+            raise ValueError("approved operation outside run")
+        _reference(revision_path, ref["sha256"])
+        revision = _json(revision_path)
+        config = verify(run, operation_revision=revision)
+        expected_code = {**config["code"]["files"], **revision["files"]}
     code = _code_identity()
-    if code["files"] != {**config["code"]["files"], **revision["files"]}:
-        raise ValueError("resume code differs from Astra-approved operation revision")
+    if code["files"] != expected_code:
+        raise ValueError("resume code differs from Astra-approved code")
     _require_migration(run, config)
     snapshot = _resume_snapshot(run, config)
-    _finalize_existing_generation(run, config, snapshot)
+    if "round" not in config:
+        _finalize_existing_generation(run, config, snapshot)
     for stage in STAGES:
         if (run / f"{stage}-complete.json").exists():
             _verify_completion(run, stage, config)
@@ -1284,7 +1340,7 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
         "at": time.time(),
         "previous_state": current,
         "snapshot": snapshot,
-        "operation_revision": _reference(revision_path),
+        "operation_revision": _reference(revision_path) if revision_path else None,
         "interpreter": sys.executable,
         "cwd": str(ROOT),
         "stdin": "DEVNULL",
@@ -1307,7 +1363,7 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
         status="running",
         reason="startup_pending",
         execution_attempt=number,
-        operation_revision=record["operation_revision"],
+        **({"operation_revision": record["operation_revision"]} if revision_path else {}),
     )
     if admission is not None:
         pending["resource_baseline"] = record["resource_baseline"]
@@ -1733,6 +1789,7 @@ def start(
     pause_after_new_games: int | None = None,
     recover_startup: bool = False,
     pause_after_arena_games: int | None = None,
+    pause_after_updates: int | None = None,
 ) -> dict:
     if pause_after_new_games is not None:
         _number(pause_after_new_games, 1, 12, "probe trajectory bound")
@@ -1740,6 +1797,10 @@ def start(
         _number(pause_after_arena_games, 2, 36, "arena completed-task pause bound")
         if pause_after_arena_games % 2 or pause_after_new_games is not None:
             raise ValueError("arena probe requires a complete color pair and no generation probe")
+    if pause_after_updates is not None:
+        _number(pause_after_updates, 1, 32, "initial training update prefix")
+        if pause_after_new_games is not None or pause_after_arena_games is not None:
+            raise ValueError("one bounded prefix per invocation")
     try:
         with _lease(run) as lease:
             if recover_startup:
@@ -1798,6 +1859,11 @@ def start(
                         *(
                             ["--pause-after-new-games", str(pause_after_new_games)]
                             if pause_after_new_games is not None
+                            else []
+                        ),
+                        *(
+                            ["--pause-after-updates", str(pause_after_updates)]
+                            if pause_after_updates is not None
                             else []
                         ),
                         *(
@@ -2013,7 +2079,7 @@ def _resource_condition(
     sample: dict, previous: dict | None, config: dict, *, admission=False
 ) -> str:
     policy, limits = RESOURCE_POLICY, config["resources"]
-    if "_dataset_admission" in config:
+    if "_dataset_admission" in config or "round" in config:
         # Host pressure flags (1=normal,2=warning,4=critical) and swap are diagnostics.
         return (
             "critical:disk"
@@ -2068,9 +2134,13 @@ def _resource_condition(
 
 def _calendar_expired(config: dict, state: dict) -> bool:
     # Calendar age is historical metadata, not active computation consumption.
-    return "_calendar_policy" not in config and (
-        time.time()
-        >= state.get("began_at", time.time()) + config["resources"]["maximum_wall_seconds"]
+    return (
+        "round" not in config
+        and "_calendar_policy" not in config
+        and (
+            time.time()
+            >= state.get("began_at", time.time()) + config["resources"]["maximum_wall_seconds"]
+        )
     )
 
 
@@ -2174,6 +2244,12 @@ def _progress_signature(run: Path, stage: str) -> tuple:
 
 
 def _dataset(run: Path, config: dict) -> dict:
+    if config["generation"].get("prepared_dataset"):
+        from .r4_data import verify_dataset
+
+        return verify_dataset(
+            ROOT, run / "data/dataset", config["generation"]["prepared_dataset"]["manifest_sha256"]
+        )
     if not (run / "data" / "dataset" / "manifest.json").exists():
         raise ValueError("completed dataset manifest is required")
     manifest = _json(run / "data" / "dataset" / "manifest.json")
@@ -2466,6 +2542,11 @@ def _run_stage(
                     else []
                 ),
                 *(
+                    ["--pause-after-updates", str(state["probe_updates"])]
+                    if stage == "train" and state.get("probe_updates") is not None
+                    else []
+                ),
+                *(
                     ["--pause-after-arena-games", str(state["probe_arena_games"])]
                     if stage == "arena" and state.get("probe_arena_games") is not None
                     else []
@@ -2498,6 +2579,7 @@ def _run_stage(
                 condition = _resource_condition(sample, previous, config)
                 if (
                     "_dataset_admission" not in config
+                    and "round" not in config
                     and condition == "safe"
                     and previous is not None
                     and sample["swap_bytes"] - state["resource_baseline"]["swap_bytes"]
@@ -2691,6 +2773,7 @@ def work(
     *,
     pause_after_new_games: int | None = None,
     pause_after_arena_games: int | None = None,
+    pause_after_updates: int | None = None,
 ) -> dict:
     with _lease(run, inherited_fd) as lease:
         config = verify(run)
@@ -2745,6 +2828,9 @@ def work(
         ):
             if key in prior:
                 state[key] = prior[key]
+        if pause_after_updates is not None:
+            _number(pause_after_updates, 1, 32, "initial training update prefix")
+            state["probe_updates"] = pause_after_updates
         if pause_after_new_games is not None:
             _number(pause_after_new_games, 1, 12, "probe trajectory bound")
             state["probe_new_games"] = pause_after_new_games
@@ -2778,16 +2864,16 @@ def work(
                     state.pop("reason", None)
                     state.pop("startup_failure", None)
                     atomic(run / "state.json", encoded(state))
-                    if "_dataset_admission" in config and not _wait_allocation(
-                        run, config, state, stage
-                    ):
+                    if (
+                        "_dataset_admission" in config or "round" in config
+                    ) and not _wait_allocation(run, config, state, stage):
                         state.update(status="stopped", reason="requested_stop")
                         break
                     returncode, failure = _run_stage(run, stage, config, state, lease)
                     if (
                         returncode == RESOURCE_EXIT
                         and failure is None
-                        and "_dataset_admission" in config
+                        and ("_dataset_admission" in config or "round" in config)
                     ):
                         counters_path = run / "allocation-retries.json"
                         counters = _json(counters_path) if counters_path.exists() else {}
@@ -2821,6 +2907,13 @@ def work(
                             reason="generation_probe_complete",
                             generation=pause["result"],
                         )
+                        break
+                    if (
+                        pause_after_updates is not None
+                        and stage == "train"
+                        and not (run / "train-complete.json").exists()
+                    ):
+                        state.update(status="ready_for_luna", reason="training_prefix_complete")
                         break
                     if pause_after_arena_games is not None and stage == "arena":
                         arena = _json(run / "arena/arena.json")
@@ -2893,9 +2986,13 @@ def _candidate_review(run: Path) -> dict:
     offline = _json(run / "development-test.json")
     arena = _json(run / "arena/arena.json")
     groups = offline["groups"]
+    is_round = "round" in _json(run / "run.json")
+    baseline = "baseline" if is_round else "r3"
+    checked_groups = (
+        ("general", "opening", "defense", "attack_end") if is_round else ("general", "attack_end")
+    )
     scalar_preserved = all(
-        groups["candidate"][g]["loss"] <= groups["r3"][g]["loss"] * 1.03
-        for g in ("general", "attack_end")
+        groups["candidate"][g]["loss"] <= groups[baseline][g]["loss"] * 1.03 for g in checked_groups
     )
     screen = offline["move_quality_screen"]
     screen_pass = screen["screen_pass"]
@@ -2906,7 +3003,9 @@ def _candidate_review(run: Path) -> dict:
         "candidate_sha256": digest(run / "fit/best.osaval03"),
         "offline_sha256": digest(run / "development-test.json"),
         "arena_sha256": digest(run / "arena/arena.json"),
-        "scalar_general_attack_preserved": scalar_preserved,
+        "scalar_all_groups_preserved"
+        if is_round
+        else "scalar_general_attack_preserved": scalar_preserved,
         "move_quality_screen_pass": screen_pass,
         "move_quality_screen_status": screen.get("status", "complete"),
         "arena_complete": arena.get("summary", {}).get("all_planned_complete", False),
@@ -2914,8 +3013,12 @@ def _candidate_review(run: Path) -> dict:
         if (run / "model-audit.json").exists()
         else False,
         "development_candidate_available": (run / "audit-complete.json").exists(),
-        "r3_arena_pass": arena_pass,
-        "meets_frozen_criteria": bool(scalar_preserved and screen_pass and arena_pass),
+        "baseline_arena_pass" if is_round else "r3_arena_pass": arena_pass,
+        "scalar_checked_groups": list(checked_groups),
+        "optional_screen_required": not is_round,
+        "meets_frozen_criteria": bool(
+            scalar_preserved and (is_round or screen_pass) and arena_pass
+        ),
         "promotion_performed": False,
         "decision_owner": "Astra; review actual independence, evidence and browser behavior",
         "human_shodan_validated": False,
@@ -2931,6 +3034,7 @@ def stage_run(
     *,
     pause_after_new_games: int | None = None,
     pause_after_arena_games: int | None = None,
+    pause_after_updates: int | None = None,
 ) -> dict:
     if stage not in STAGES:
         raise ValueError("unknown stage")
@@ -2951,7 +3055,20 @@ def stage_run(
                 _verify_completion(run, previous, config)
         _register_stage_group(run, stage)
         generation = config["generation"]
-        if stage == "generate":
+        if stage == "generate" and generation.get("prepared_dataset"):
+            from .r4_data import verify_dataset
+
+            ref = generation["prepared_dataset"]
+            dataset = verify_dataset(ROOT, inside(ref["path"]), ref["manifest_sha256"])
+            atomic(run / "data/generation.json", encoded(generation))
+            result = {
+                "status": "complete",
+                "mode": "verified_existing_inputs",
+                "dataset_sha256": ref["manifest_sha256"],
+                "source_rows": dataset["source_rows"],
+            }
+            atomic(run / "data/generation-complete.json", encoded(result))
+        elif stage == "generate":
             if pause_after_new_games is not None:
                 _number(pause_after_new_games, 1, 12, "probe trajectory bound")
                 result = generate(
@@ -2974,7 +3091,14 @@ def stage_run(
             if not generation.get("recovery_policy") and result.get("games") != generation["games"]:
                 raise ValueError("generation stopped before the planned trajectory count")
         elif stage == "prepare":
-            result = prepare(ROOT, run / "data", generation, config["excluded_development_sfens"])
+            if generation.get("prepared_dataset"):
+                from .r4_data import import_dataset
+
+                result = import_dataset(ROOT, run / "data", generation)
+            else:
+                result = prepare(
+                    ROOT, run / "data", generation, config["excluded_development_sfens"]
+                )
             if generation.get("recovery_policy"):
                 result = _dataset(run, config)
         else:
@@ -2987,7 +3111,11 @@ def stage_run(
                     run / "fit",
                     config["training"],
                     _training_identity(run, config),
+                    stop_after=pause_after_updates,
                 )
+                if result["status"] == "paused_for_resume_check":
+                    verify(run)
+                    return result
                 if result["status"] != "complete":
                     raise InterruptedError("training stopped with coherent resume checkpoint")
             elif stage == "audit":
@@ -3038,7 +3166,10 @@ def stage_run(
                             config["training"]["batch_size"],
                         )
                         for name, path in (
-                            ("r3", inside(generation["leaf_path"])),
+                            (
+                                "baseline" if "round" in config else "r3",
+                                inside(generation["leaf_path"]),
+                            ),
                             ("candidate", model),
                         )
                     }
@@ -3102,6 +3233,7 @@ def main():
     parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--pause-after-new-games", type=int, default=None)
     parser.add_argument("--pause-after-arena-games", type=int, default=None)
+    parser.add_argument("--pause-after-updates", type=int, default=None)
     parser.add_argument("--abolish-calendar-limit", action="store_true")
     parser.add_argument("--admit-existing-data", action="store_true")
     parser.add_argument("--post-training-evaluation", action="store_true")
@@ -3134,6 +3266,7 @@ def main():
                 args.lease_fd,
                 pause_after_new_games=args.pause_after_new_games,
                 pause_after_arena_games=args.pause_after_arena_games,
+                pause_after_updates=args.pause_after_updates,
             )
         except (MemoryError, RuntimeError) as error:
             from .evaluator_training import TrainingResourceWaitError, allocation_failure
@@ -3182,6 +3315,7 @@ def main():
             args.lease_fd,
             pause_after_new_games=args.pause_after_new_games,
             pause_after_arena_games=args.pause_after_arena_games,
+            pause_after_updates=args.pause_after_updates,
         )
     elif args.command == "probe":
         result = start(path, pause_after_new_games=args.pause_after_new_games or 1)
@@ -3191,6 +3325,7 @@ def main():
             pause_after_new_games=args.pause_after_new_games,
             recover_startup=True,
             pause_after_arena_games=args.pause_after_arena_games,
+            pause_after_updates=args.pause_after_updates,
         )
     elif args.command == "pause":
         result = pause(path)

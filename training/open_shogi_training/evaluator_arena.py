@@ -199,6 +199,11 @@ def _plan(root: Path, config: dict) -> dict:
         "root_history": "same restored SFEN; repetition history starts at that root",
         "criteria": {
             "evaluation_games": 32,
+            **(
+                {"minimum_stratum_score": config["minimum_stratum_score"]}
+                if "minimum_stratum_score" in config
+                else {}
+            ),
             "demonstration_games": 4 if defense else 8,
             "all_planned_games_must_finish": True,
             "no_adverse_attempts": True,
@@ -613,12 +618,21 @@ def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
         rng = np.random.default_rng(plan["criteria"]["bootstrap_seed"])
         draws = rng.integers(0, len(clusters), size=(10_000, len(clusters)))
         lower = float(np.percentile(pair_scores[draws].mean(axis=1), 5))
+    strata = (
+        {
+            s: float(np.mean([g["score_candidate"] for g in scored if g.get("stratum") == s]))
+            for s in sorted({g["stratum"] for g in scored if "stratum" in g})
+        }
+        if complete
+        else {}
+    )
     adopted = (
         all_complete
         and not adverse
         and complete
         and all(s > 0.5 for s in scores.values())
         and lower > 0.5
+        and all(s >= plan["criteria"].get("minimum_stratum_score", 0) for s in strata.values())
     )
     return {
         "evaluation_complete": complete,
@@ -630,12 +644,7 @@ def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
         "candidate_score_by_clock": scores,
         "paired_bootstrap_one_sided_95_lower": lower,
         "source_family_count": len({g.get("family", g["pair"]) for g in scored}),
-        "stratum_scores": {
-            s: float(np.mean([g["score_candidate"] for g in scored if g.get("stratum") == s]))
-            for s in sorted({g["stratum"] for g in scored if "stratum" in g})
-        }
-        if complete
-        else {},
+        "stratum_scores": strata,
         "demonstration_scores": [
             g.get("score_candidate") for g in games if g["group"] == "demonstration"
         ],
