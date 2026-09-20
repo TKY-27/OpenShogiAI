@@ -1,4 +1,4 @@
-# R4-C3 — Astra preparation
+# R4-C3 — ready_for_luna / 準備・実経路確認完了
 
 唯一の人間向け入口はこの文書、機械向け設定は `configs/evaluator-main.json`。
 2026-09-21の明示承認はC3の診断・修正・生成・学習準備・ローカル開発統合と作業枝pushまで。
@@ -108,7 +108,8 @@ Lunaは学習後にaudit→固定arena→export/descriptor更新→loopback起�
 同じrunnerで実行する。編集範囲はignored C3 descriptorとrun証拠だけ。
 失敗時は旧descriptorを復元。ソース設計をLunaへ残さない。
 R4-C3（比較候補・未採用）、防御、C1/r3/W256を「最新←→開発初期」で表示。
-解析も同じ一覧を維持し、大規模解析UXは学習後に扱う。
+局面解析にも同じ一覧を使う方針を維持する。既存解析は変更せず、モデル選択の拡大と
+大規模解析UXは学習後に扱う。
 legacy `awaiting_astra_review` はdevelopment/result.json PASSならユーザー対局待ち。
 対局するためだけのAstra再起動は不要。
 
@@ -126,9 +127,54 @@ Astraは実データ初期更新→保存→正常pause→別プロセスresume�
 さらに少数短時間対局と実ブラウザーまで確認してからready_for_lunaで止める。
 その初期更新は本runで継承する。rehearsalは本Arena/採用実績へ加算しない。
 途中の全体best0・任意screen欠測・更新候補不採用はfixtureでも通す。
-現時点の実試験結果とrun identityは以下の完了記録へ追記する。
+実試験結果とrun identityは下記の完了記録を参照。
 
 暦日wall limitなし。pressure/swapは診断のみ。実OOMはmicrobatch32→16→8→4→2→1、
 有限process retry/resource wait。同run resume、stop/pauseを尊重する。
 ディスク保存不能、広範な破損/漏洩、非有限値、必須runtime不整合は保護停止。
 旧全root成功必須/固定focus絶対上限/C3未承認/統合にAstra必須の指示は本契約へ更新済み。
+
+
+## Astra完了記録（2026-09-21）
+
+run `local/runs/r4-c3/attempt-01`、原封印
+`b772b0c35961f5cdd7b967f93d2fc84077451f21569c65be2687e59dc383f842`。
+初回4更新→正式pause→別プロセスstdin=/dev/null resume→step8で正常pause。
+実露出2,048、seen2,048、最大1。出典別は独自Apery1,268 / r3 replay276 /
+Hao497 / C3自作7。これは本学習へ引き継ぐoptimizer prefixであり、学習完了ではない。
+checkpoint `1b88e2c252776ad6de99e1fc76d116b02cb8496c2ac1159aec5d8adaa3aa612d`。
+export `2f95db0994b247052f5e3346249c64552f562882fb5280ccd3a314a4affb2728`、
+同形式/seedの6tensorに470,350 / 212 / 12,220 / 16 / 16 / 1要素の実変更。
+自作8診断局面の1局面で整数cpも452→451へ変化。これは強化証明ではない。
+
+**PASS:** `make check`（Python1,176件、Rust、format/lint、境界/来歴、native、決定的Wasm）。
+その後の運用修正は関連87件＋診断25件PASS。OSUI239件と静的/a11y/来歴検査PASS。
+公開allowlist空の通常buildは意図どおり拒否。既存ローカル許可リストによる2モデルbuildと
+出力監査はPASS。公開許可は付与していない。
+
+実exportのnative/Wasmは10root/300child、cp/WDL差0。
+同exportの30秒先後2局は各64手でmax_plies_unscored、期限違反0。
+任意screen欠測をnullのまま後段へ進め、実Chromeで正しいleaf/Worker/Wasmを照合。
+3分高品質の先後、3分標準後手、10分高品質先手、10分標準後手の5ケースを確認。
+各手の時計減算、停止/再開、投了終局、再対局、USI/診断保存、1280px/390px描画、
+console error0、C2旧URL→防御aliasを確認。対局中のモデル切替は無効。
+画面も目視確認済み。物理スマートフォン/長時間完局の総当たりは未実施。
+Browser専用skillは一覧になかったため、frontend-testing-debugging skillと既存Playwrightを使用。
+結果はrunの `post-training-rehearsal/result.json`。本固定Arenaには加算しない。
+rehearsal descriptorは正常rollback。本候補の恒久登録はLunaの学習・固定比較後。
+
+best0・更新候補の不採用・任意screen欠測でも別重みの比較/結果保存/登録へ進むfixture、
+連続実行と途中resumeの同一optimizer/RNG/sampler/実tensor、改竄監査の拒否もPASS。
+初回ブラウザー試験で時計ボタン名の誤指定、再試行で既存export/監査の再利用不足を
+確認して修正。失敗記録を保持し、正常成果のhash一致を確認して再利用した。
+さらにread-only diagnoseがsafeをblockedと表示する不整合を修正。
+学習/データ/モデル/runtimeの封印は変えず、正式approve-operationsで運用改訂を記録した。
+最終運用revision `573f1e6f1db15a323e374894c3f991157bb3531965355db2d7cf9240ad7b6268`。
+Lunaは上のresume一コマンドでこの改訂を検証して継承し、再承認は不要。
+最終状態ready_for_luna、process/stage停止、lease解放。diagnoseは
+eligible_pending_resource_admission（再開時の新しい資源観測のみ保留）。
+
+C2の同一step8192・同一tensor/optimizer/RNG/countsを持つ重複checkpointを、
+参照/open-file/symlink/mount確認後に1個（48,177,359 bytes）削除。
+最終step8192と診断export、代表W256/r3/防御/C1、C3再開資産は保持。
+記録は `local/r4-c3-preparation/storage-cleanup.json`。不要なremote枝はなく、mainは未変更。
