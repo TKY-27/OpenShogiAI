@@ -1808,7 +1808,7 @@ def diagnose(run: Path, *, _lease_held: bool = False) -> dict:
                 if config is not None:
                     condition = _resource_condition(observed, None, config, admission=True)
                     checks["current_resource_condition"] = {
-                        "status": "pass" if condition == "warming" else "blocked",
+                        "status": "pass" if condition in {"warming", "safe"} else "blocked",
                         "reason": condition,
                     }
             report["unchecked"].append("fresh consecutive resource admission at resume")

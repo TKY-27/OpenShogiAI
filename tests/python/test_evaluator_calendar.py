@@ -334,3 +334,16 @@ def test_diagnose_rejects_new_committed_file_outside_approved_inventory(calendar
     assert report["resume"] == "blocked"
     with runner._lease(run), pytest.raises(ValueError, match="code differs"):
         runner._prepare_resume(run)
+
+
+@pytest.mark.parametrize("condition", ["warming", "safe"])
+def test_diagnose_accepts_safe_round_resources_pending_fresh_admission(
+    calendar_run, monkeypatch, condition
+):
+    runner._approve_operations(calendar_run, abolish_calendar_limit=True)
+    monkeypatch.setattr(runner, "_resource_sample", lambda *args: sample(runner.time.time()))
+    monkeypatch.setattr(runner, "_resource_condition", lambda *args, **kwargs: condition)
+    report = runner.diagnose(calendar_run)
+    assert report["checks"]["current_resource_condition"]["status"] == "pass"
+    assert report["resume"] == "eligible_pending_resource_admission"
+    assert "fresh consecutive resource admission at resume" in report["unchecked"]
