@@ -99,7 +99,11 @@ ADMISSION_FILES = {
     "training/open_shogi_training/evaluator_training.py",
     "configs/evaluator-main.json",
 }
-OPERATIONAL_FILES = {"training/open_shogi_training/evaluator_run.py", "configs/evaluator-main.json"}
+OPERATIONAL_FILES = {
+    "training/open_shogi_training/evaluator_run.py",
+    "training/open_shogi_training/evaluator_development.py",
+    "configs/evaluator-main.json",
+}
 POST_TRAINING_FILES = ADMISSION_FILES | {
     "training/open_shogi_training/defense_evaluation.py",
     "training/open_shogi_training/evaluator_arena.py",

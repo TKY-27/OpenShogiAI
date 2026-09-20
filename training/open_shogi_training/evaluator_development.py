@@ -213,7 +213,8 @@ def rehearsal(root: Path, run: Path, config: dict) -> dict:
     )
     if model.exists() and digest(model) != exported.sha256:
         raise ValueError("prefix export changed")
-    exported.write(model)
+    if not model.exists():
+        exported.write(model)
     optional = screen(
         root, run, config, output=output / "missing-screen", model=model, mode="retained_only"
     )
