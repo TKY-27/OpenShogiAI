@@ -2254,6 +2254,7 @@ def _progress_signature(run: Path, stage: str) -> tuple:
         "train": run / "fit",
         "audit": run,
         "arena": run / "arena",
+        "integrate": run / "development",
     }[stage]
     ignored = {
         "state.json",
@@ -2529,11 +2530,11 @@ def _verify_completion(run: Path, stage: str, config: dict) -> dict:
         raise ValueError("completion receipt belongs to another run/stage")
     if receipt["artifacts"] != _completion_artifacts(run, stage):
         raise ValueError("completed stage artifact changed")
-    if stage in ("prepare", "train", "audit", "arena"):
+    if stage in ("prepare", "train", "audit", "arena", "integrate"):
         _dataset(run, config)
-    if stage in ("train", "audit", "arena"):
+    if stage in ("train", "audit", "arena", "integrate"):
         _training_summary(run, config)
-    if stage in ("audit", "arena"):
+    if stage in ("audit", "arena", "integrate"):
         _audit_report(run, config)
     if stage == "arena":
         _arena_complete(
@@ -2541,6 +2542,21 @@ def _verify_completion(run: Path, stage: str, config: dict) -> dict:
         )
         if receipt["result"] != _json(run / "arena" / "arena.json"):
             raise ValueError("arena summary differs from its completion receipt")
+    if stage == "integrate":
+        result = _json(run / "development/result.json")
+        browser = _json(run / "development/browser/browser.json")
+        model_sha = digest(run / "fit/best.osaval03")
+        if (
+            receipt["result"] != result
+            or result.get("status") != "PASS"
+            or result.get("rehearsal") is not False
+            or result.get("run_sha256") != digest(run / "run.json")
+            or result.get("model", {}).get("sha256") != model_sha
+            or browser.get("status") != "PASS"
+            or browser.get("expectedHash") != model_sha
+            or result.get("browser_sha256") != digest(run / "development/browser/browser.json")
+        ):
+            raise ValueError("development completion is not the verified selected candidate")
     return receipt["result"]
 
 
@@ -3383,6 +3399,8 @@ def main():
                     "stop requested before stage launch",
                     "training stopped with coherent resume checkpoint",
                     "arena stopped with retained game receipts",
+                    "move screen stopped",
+                    "stop requested before completion publication",
                 }
                 or not (path / "STOP").exists()
             ):

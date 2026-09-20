@@ -221,3 +221,10 @@ def test_failed_registration_restores_existing_descriptor(tmp_path, monkeypatch)
         development.register(tmp_path, tmp_path / "local", config, model, output)
     assert descriptor.read_bytes() == b"previous exact bytes"
     assert json.loads((output / "rollback.json").read_text())["restored_previous"]
+
+
+def test_every_c2_stage_has_progress_monitoring(tmp_path):
+    from open_shogi_training.evaluator_run import ALL_STAGES, _progress_signature
+
+    for stage in ALL_STAGES:
+        assert isinstance(_progress_signature(tmp_path, stage), tuple)
