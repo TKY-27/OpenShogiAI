@@ -48,3 +48,19 @@ mutual-position descendants. Current files are listed; reusable downstream/deriv
 conditions remain unverified. GCT adoption and actual learning count are **0**, pending rights;
 it does not stop the admitted Hao/replay round. Tanuki/Suisho multipart archives,
 Knowledge_distilled descendants and other suggested tournaments were not adopted or downloaded.
+
+## C3 reuse (2026-09-21)
+
+C3 reuses the exact admitted C2 dataset; no additional external shards or GCT rows
+are claimed. The original download plan is retained in the sealed C2 run and
+`local/r4-c2-preparation/dataset/manifest.json`. The current configuration pins
+that manifest and the publisher card. Inherited acquisition statistics describe
+C2; `added_counterfactual_rows` describes only new C3 authored/Apery observations.
+
+A local source review confirmed `evaluate_leaf` reverses leaf evaluation when
+leaf/root side differs, and `PawnValue=90` explains the existing 100/90 conversion.
+Apery MultiPV root scores are negated for child-side scalar labels; root boards
+are not confused with search leaves. No new train/test-fitted scale is introduced.
+Sibling ranking is restricted to one source/root and ignores differences at most
+50 cp; cross-teacher absolute equivalence remains a hypothesis tested by separate
+source losses. Original generating weights/history remain unknown.

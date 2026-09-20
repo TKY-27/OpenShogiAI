@@ -1,8 +1,8 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "r4-c2-attempt-01",
-  "output": "local/runs/r4-c2/attempt-01",
-  "seed": 20260920,
+  "run_id": "r4-c3-attempt-01",
+  "output": "local/runs/r4-c3/attempt-01",
+  "seed": 20260921,
   "generation": {
     "first_game": 0,
     "games": 90,
@@ -221,49 +221,51 @@
       }
     },
     "prepared_dataset": {
-      "path": "local/r4-c2-preparation/dataset",
-      "manifest_sha256": "96781b8baaaaaa4a9ea9148fa5a1cb79b3524f4536502133cb0b4b716f21c95f"
+      "path": "local/r4-c3-preparation/dataset",
+      "manifest_sha256": "cb755c86f7359299f7e02c4e5504d8ec8ffa776351fcbdc2d380bac4b371e17d"
     }
   },
   "training": {
     "device": "cpu",
     "threads": 4,
     "batch_size": 256,
-    "max_steps": 12288,
-    "max_epochs": 12,
+    "max_steps": 16384,
+    "max_epochs": 16,
     "validation_every": 512,
-    "patience": 4,
+    "patience": 6,
     "minimum_relative_improvement": 0.002,
-    "learning_rate": 2e-05,
-    "minimum_learning_rate": 2e-06,
-    "warmup_steps": 256,
+    "learning_rate": 1e-05,
+    "minimum_learning_rate": 1e-06,
+    "warmup_steps": 128,
     "gradient_norm_limit": 5.0,
     "sampling_fractions": [
-      0.25,
-      0.3,
       0.2,
-      0.25
+      0.4,
+      0.2,
+      0.2
     ],
     "maximum_replay_regression_ratio": 1.03,
     "source_fractions": [
-      0.25,
-      0.75
+      0.75,
+      0.25
     ],
     "microbatch_size": 32,
     "weight_decay": 0.01,
     "coverage_sampler": {
       "epoch_examples": 262144,
       "maximum_per_example": [
-        3,
-        2
+        8,
+        3
       ],
-      "maximum_per_sequence": 512,
+      "maximum_per_sequence": 2048,
       "maximum_per_sequence_batch": 4,
       "minimum_coverage_before_patience": [
-        0.5,
-        0.6
+        0.6,
+        0.3
       ]
-    }
+    },
+    "pair_weight": 0.25,
+    "trained_candidate": "best_updated_objective_v1"
   },
   "resources": {
     "maximum_wall_seconds": 604800,
@@ -280,7 +282,7 @@
     "paired_3minute_games": 24,
     "paired_10minute_games": 8,
     "startpos_demonstration_games": 4,
-    "criterion": "One validation-selected best against defense-best1536 under the same new runtime. Fixed 32 stress games (24x3min,8x10min), colors paired, no win-until-retry. Require all scored/valid; each clock score >0.5, family-cluster bootstrap one-sided 95% lower >0.5; each stratum score >=0.5; each of four development scalar losses <=1.03 baseline. 4 clock/color startpos demonstrations are separate, not independent replicates. Draws=0.5; maxplies/invalid unscored; time/deadline failures adverse. Optional screen: 2 unknown trajectories per group plus retained known regressions, one finite D16/2M observation per requested move; incomplete labels excluded. Its descriptive metrics never block independent completion. Missing cells remain unverified. No automatic adoption or shodan claim.",
+    "criterion": "One distinct validation-selected trained_candidate versus defense best1536, common book-free controller-OFF runtime. Fixed32 stress games 24x3min+8x10min colors paired; 4 startpos demonstrations separate. No repeats until victory. Draw=.5; maxplies/invalid unscored; deadline failures adverse. Adoption recommendation requires each clock>0.5, family-cluster one-sided95% lower>0.5, each stratum>=.5, all four scalar development losses<=1.03 baseline. Optional screens missing remain unknown and never block arena/export/registration. User games required for adoption; no shodan/stable-user-win claim. No C4/publication/main integration.",
     "groups": [
       "general",
       "opening",
@@ -293,21 +295,18 @@
     "regression_positions_sha256": "8a8304f2b3c71646a7ccdcf7e02177cb08886e3b5658588a0364f3559e8d5269",
     "optional_screen": "execute",
     "minimum_stratum_score": 0.5,
-    "screen_per_group": 2
+    "screen_per_group": 2,
+    "preferred_families": [
+      "c3:ureshino_delayed",
+      "c3:third_edge",
+      "c3:fourth_early_push",
+      "c3:central_tempo"
+    ]
   },
   "unique_data_goal": {
-    "actual_manifest": {
-      "path": "local/r4-c2-preparation/dataset",
-      "manifest_sha256": "96781b8baaaaaa4a9ea9148fa5a1cb79b3524f4536502133cb0b4b716f21c95f"
-    },
-    "train_unique": 2067381,
-    "new_source_train": 1583895,
-    "new_source_total": 1600279,
-    "supplied_records": 30784543,
-    "spaced_candidates": 1801041,
     "report_actual_counts": true,
-    "ancestral_exposure": "unknown; acquired unique is not proof of never seen by an ancestor",
-    "independence": "PSV has no original game ID/history; resets and first retained state infer families, not certified independence"
+    "ancestral_exposure": "unknown; reused labels remain replay; authored examples are not user kifu",
+    "independence": "Existing splits immutable; new scenario family and rotation stay in one split. PSV original trajectories remain uncertified."
   },
   "controller": "off; continue all scalar evaluator layers, no handcrafted nonterminal scores",
   "excluded_development_sfens": [
@@ -321,8 +320,8 @@
   "model": {
     "format": "OSAVAL03",
     "width": 256,
-    "objective": "all-layer scalar smooth L1 cp/600, exact Q20/f64 accumulation; no nonterminal handcrafted scores",
-    "selection": "One raw validation-loss minimum eligible under four replay group <=1.03 guards; .25 replay/.75 Hao scalar loss. Patience .2% is separate from raw best preservation, starts after replay50%/Hao60% pool coverage. One best only in fixed Arena; latest retained for exact resume, not extra candidate selection."
+    "objective": "OSAVAL03 W256 all-layer scalar cp/600 plus same-source sibling margin ordering; 50cp tolerance and capped600cp margin; no handcrafted nonterminal scores",
+    "selection": "Incumbent remains defense. Preserve guarded overall best independently. Save one best distinct post-update candidate by fixed .75 replay/.25 Hao scalar plus .25 paired ranking validation objective, without replay veto; raw minimum saving independent from .2% patience. Test exactly this one candidate; 3% replay limit remains an adoption diagnostic, never a registration gate."
   },
   "state_machine": {
     "schema": "open_shogiai_evaluator_state/v2",
@@ -356,12 +355,12 @@
     "cwd": ".",
     "cwd_identity": "OpenShogiAI Git root; exact absolute execution_cwd saved in ignored run.json",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 </dev/null",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 </dev/null",
-    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c2/attempt-01",
-    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c2/attempt-01",
-    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c2/attempt-01 </dev/null",
-    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 --pause-after-updates 4 </dev/null",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 </dev/null",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 </dev/null",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c3/attempt-01",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c3/attempt-01",
+    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c3/attempt-01 </dev/null",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 --pause-after-updates 4 </dev/null",
     "stages": [
       "generate (verify prepared public/replay inputs)",
       "prepare (immutable snapshot)",
@@ -371,18 +370,18 @@
       "integrate (register, serve loopback, verify actual browser both sides)",
       "awaiting_astra_review (legacy label; user play waiting)"
     ],
-    "best": "local/runs/r4-c2/attempt-01/fit/best.osaval03",
-    "resume_checkpoint": "local/runs/r4-c2/attempt-01/fit/resume.json",
-    "state": "local/runs/r4-c2/attempt-01/state.json",
-    "logs": "local/runs/r4-c2/attempt-01/supervisor.log; local/runs/r4-c2/attempt-01/monitor.jsonl",
-    "review_result": "local/runs/r4-c2/attempt-01/candidate-review.json",
+    "best": "local/runs/r4-c3/attempt-01/fit/best.osaval03",
+    "resume_checkpoint": "local/runs/r4-c3/attempt-01/fit/resume.json",
+    "state": "local/runs/r4-c3/attempt-01/state.json",
+    "logs": "local/runs/r4-c3/attempt-01/supervisor.log; local/runs/r4-c3/attempt-01/monitor.jsonl",
+    "review_result": "local/runs/r4-c3/attempt-01/candidate-review.json",
     "finite_bounds": {
-      "acquisition": "4 spread Hao PSV shards, each exact pinned hash; 2 acquisition attempts; completed 1,231,381,720 bytes",
-      "new_teacher": "only optional finite development screen; no wholesale D12 relabel",
-      "train_updates": 12288,
-      "epochs": 12,
+      "acquisition": "No new external download; reuse pinned four Hao shards and defense/r3 labels",
+      "new_teacher": "14 authored families x 2 colors x 8 roots, plus at most 48 current-model-child roots; D12 at 2M nodes each, missing excluded locally; optional development screens finite",
+      "train_updates": 16384,
+      "epochs": 16,
       "validation_interval": 512,
-      "patience": 4,
+      "patience": 6,
       "microbatch": [
         32,
         16,
@@ -398,78 +397,301 @@
       "No calendar expiry; pressure/swap diagnostic only. Real allocation failure uses microbatch reduction then finite process retries and resource wait. Stop is respected.",
       "Exact same-run resume restores optimizer, random states, sampler and update count; completed receipts and game IDs are verified and skipped.",
       "Missing optional teacher labels are unknown; valid independent scalar labels admitted; no fake zero/PASS. Mandatory integrity, split, finite output, legality and saving remain required.",
-      "Only C2; no C3, unopened final holdout, public promotion/distribution, main merge or deploy."
+      "Only C3; no C4, final holdout access, public promotion/distribution, main merge or deployment."
     ],
-    "acquisition": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.r4_sources configs/evaluator-main.json",
-    "rehearsal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run rehearsal local/runs/r4-c2/attempt-01 </dev/null",
+    "acquisition": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.r4_c3 configs/evaluator-main.json",
+    "rehearsal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run rehearsal local/runs/r4-c3/attempt-01 </dev/null",
     "development_url": "http://127.0.0.1:5175/#/match",
-    "source_audit": "docs/source-audits/hao.md; GCT independent hcpe3 identified but distribution conditions unresolved, zero selected"
+    "source_audit": "docs/source-audits/hao.md; GCT independent hcpe3 identified but distribution conditions unresolved, zero selected",
+    "trained_candidate": "local/runs/r4-c3/attempt-01/fit/trained_candidate.osaval03"
   },
   "round": {
-    "id": "R4-C2",
+    "id": "R4-C3",
     "attempt": 1,
-    "authorization": "explicit_user_20260920",
+    "authorization": "explicit_user_20260921",
     "baseline": "defense-best1536",
-    "scope": "Hao D9 root supervision for opening, attack and endgame with general/defense replay; existing verified book-free pure search, controller OFF",
+    "scope": "Replay-first all-layer scalar and sibling ordering; static-rook development, defenses against silver/ranging rook/Ureshino, attack continuation; common book-free controller-OFF runtime",
     "optimizer": "fresh AdamW and warmup/cosine schedule for this round; exact optimizer/RNG/sampler restoration for every resume",
-    "next_round": "C3 only after user games and separate explicit direction; no automatic repeat"
+    "next_round": "C4 and publication require separate explicit user direction; no automatic repeat"
   },
   "development_integration": {
     "port": 5175,
-    "selection": "r4c2",
-    "registry": "local/core-prototype/r4c2.json",
+    "selection": "r4c3",
+    "registry": "local/core-prototype/r4c3.json",
     "policy": "automatic local registration after audit and fixed arena even if adoption criteria not met; exact candidate identity, no silent fallback; failed registration restores prior descriptor",
-    "allowed_mutation": "C2 descriptor and ignored run evidence only; no OSUI code modification by Luna",
+    "allowed_mutation": "C3 descriptor and ignored run evidence only; no OSUI source changes by Luna",
     "terminal_meaning": "awaiting_astra_review is retained legacy machine status; development/result.json PASS means ready for user games, no Astra restart required for integration"
   },
-  "data_preparation": {
-    "output": "local/r4-c2-preparation/dataset",
-    "source": "nodchip_hao_depth9",
-    "revision": "7bc19a9e880ea307a52c57f57ea6c752301b25bc",
-    "license": "MIT; publisher dataset README metadata, not engine license",
-    "stride": 16,
+  "c3_preparation": {
     "replay": {
-      "path": "local/runs/defense-20260912/recovery-r3/data/dataset",
-      "manifest_sha256": "67289ab62f78a1cb8f54af25367e27df729c7d3fc96cd6ad9bb573203a2dda42"
+      "path": "local/r4-c2-preparation/dataset",
+      "manifest_sha256": "96781b8baaaaaa4a9ea9148fa5a1cb79b3524f4536502133cb0b4b716f21c95f"
     },
-    "split_guard": "local/frozen/metadata/split-guard.json",
-    "exclusions": "local/runs/defense-20260912/exclusions.json",
-    "shards": [
+    "focus": "local/r4-c3-preparation/focus",
+    "output": "local/r4-c3-preparation/dataset",
+    "depth": 12,
+    "nodes": 2000000,
+    "probe_nodes": 12000,
+    "roots_per_scenario": 8,
+    "scenarios": [
       {
-        "path": "local/r4-c2-preparation/sources/hao-0.bin",
-        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=000.bin?download=true",
-        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=000.bin",
-        "bytes": 289626920,
-        "sha256": "878e58fde10423e797499065d2d27717d99651f9536a27a7d72818db077e5fc1"
+        "id": "mutual_silver",
+        "group": "opening",
+        "split": "train",
+        "moves": [
+          "2g2f",
+          "8c8d",
+          "2f2e",
+          "8d8e",
+          "7g7f",
+          "3c3d",
+          "3i3h",
+          "7a7b",
+          "3h2g",
+          "7b8c",
+          "2g2f",
+          "8c8d"
+        ]
       },
       {
-        "path": "local/r4-c2-preparation/sources/hao-1.bin",
-        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=032.bin?download=true",
-        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=032.bin",
-        "bytes": 295929280,
-        "sha256": "26dc5dc787d55f0f7becce17347ee75af3d5bb5681d2ffad24f4a71449621bcb"
+        "id": "vs_fourth",
+        "group": "defense",
+        "split": "train",
+        "moves": [
+          "7g7f",
+          "3c3d",
+          "2g2f",
+          "4c4d",
+          "2f2e",
+          "8b4b",
+          "4i5h",
+          "3a3b",
+          "5i6h",
+          "5a6b",
+          "6h7h",
+          "6b7b"
+        ]
       },
       {
-        "path": "local/r4-c2-preparation/sources/hao-2.bin",
-        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695606850.thread_index=001.bin?download=true",
-        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695606850.thread_index=001.bin",
-        "bytes": 337325800,
-        "sha256": "52962a795b0f8999f82ef25ce424753ef3e4c4a9f22b76cfe316462b4fbd1833"
+        "id": "vs_third",
+        "group": "opening",
+        "split": "train",
+        "moves": [
+          "7g7f",
+          "3c3d",
+          "2g2f",
+          "4c4d",
+          "2f2e",
+          "8b3b",
+          "4i5h",
+          "3a4b",
+          "5i6h",
+          "5a6b",
+          "6h7h",
+          "6b7b"
+        ]
       },
       {
-        "path": "local/r4-c2-preparation/sources/hao-3.bin",
-        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695872823.thread_index=002.bin?download=true",
-        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695872823.thread_index=002.bin",
-        "bytes": 308499720,
-        "sha256": "6b7b55a7c71f619943be7fced6662c4dc8bec6055599a89e7f1f0a7031fa5651"
+        "id": "vs_center",
+        "group": "defense",
+        "split": "train",
+        "moves": [
+          "7g7f",
+          "5c5d",
+          "2g2f",
+          "8b5b",
+          "2f2e",
+          "5d5e",
+          "6i7h",
+          "5a6b",
+          "3i4h",
+          "6b7b"
+        ]
+      },
+      {
+        "id": "vs_ureshino",
+        "group": "opening",
+        "split": "train",
+        "moves": [
+          "2g2f",
+          "3a4b",
+          "2f2e",
+          "5c5d",
+          "7g7f",
+          "4b5c",
+          "3i4h",
+          "2b3a",
+          "5i6h",
+          "5a4b"
+        ]
+      },
+      {
+        "id": "early_silver",
+        "group": "defense",
+        "split": "train",
+        "moves": [
+          "7g7f",
+          "8c8d",
+          "6i7h",
+          "8d8e",
+          "2g2f",
+          "7a7b",
+          "2f2e",
+          "7b8c",
+          "3i3h",
+          "8c8d",
+          "3h2g",
+          "8d9e"
+        ]
+      },
+      {
+        "id": "edge_preparation",
+        "group": "attack_end",
+        "split": "train",
+        "moves": [
+          "7g7f",
+          "3c3d",
+          "2g2f",
+          "4c4d",
+          "1g1f",
+          "1c1d",
+          "2f2e",
+          "8b4b",
+          "1i1h",
+          "3a3b"
+        ]
+      },
+      {
+        "id": "bishop_trade",
+        "group": "general",
+        "split": "train",
+        "moves": [
+          "7g7f",
+          "3c3d",
+          "8h2b+",
+          "3a2b",
+          "2g2f",
+          "8c8d",
+          "2f2e",
+          "8d8e"
+        ]
+      },
+      {
+        "id": "quiet_castle",
+        "group": "opening",
+        "split": "validation",
+        "moves": [
+          "7g7f",
+          "8c8d",
+          "6g6f",
+          "3c3d",
+          "7i6h",
+          "7a6b",
+          "6h6g",
+          "5a4b",
+          "5i6h",
+          "4b3b"
+        ]
+      },
+      {
+        "id": "crossing_pawns",
+        "group": "general",
+        "split": "validation",
+        "moves": [
+          "2g2f",
+          "8c8d",
+          "2f2e",
+          "8d8e",
+          "2e2d",
+          "2c2d",
+          "2h2d",
+          "8e8f",
+          "8g8f",
+          "8b8f"
+        ]
+      },
+      {
+        "id": "ureshino_delayed",
+        "group": "opening",
+        "split": "development_test",
+        "moves": [
+          "7g7f",
+          "3a4b",
+          "2g2f",
+          "5c5d",
+          "2f2e",
+          "4b5c",
+          "6i7h",
+          "2b3a",
+          "3i3h",
+          "9c9d",
+          "3h2g",
+          "5a4b"
+        ]
+      },
+      {
+        "id": "fourth_early_push",
+        "group": "defense",
+        "split": "development_test",
+        "moves": [
+          "2g2f",
+          "3c3d",
+          "2f2e",
+          "4c4d",
+          "7g7f",
+          "8b4b",
+          "2e2d",
+          "2c2d",
+          "2h2d",
+          "4d4e"
+        ]
+      },
+      {
+        "id": "third_edge",
+        "group": "opening",
+        "split": "development_test",
+        "moves": [
+          "2g2f",
+          "3c3d",
+          "7g7f",
+          "4c4d",
+          "1g1f",
+          "8b3b",
+          "2f2e",
+          "3a4b",
+          "4i5h",
+          "1c1d",
+          "5i6h",
+          "5a6b"
+        ]
+      },
+      {
+        "id": "central_tempo",
+        "group": "defense",
+        "split": "development_test",
+        "moves": [
+          "2g2f",
+          "5c5d",
+          "7g7f",
+          "3c3d",
+          "2f2e",
+          "8b5b",
+          "5g5f",
+          "5d5e",
+          "5f5e",
+          "5b5e"
+        ]
       }
-    ],
+    ]
+  },
+  "data_preparation": {
     "license_evidence": [
       {
         "path": "local/r4-c2-preparation/hao-readme.txt",
         "sha256": "677e5da7b738ad84cf89b175fc5f81775ca198b173662cc701a267224c38b839",
         "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/raw/7bc19a9e880ea307a52c57f57ea6c752301b25bc/README.md"
       }
-    ]
+    ],
+    "reuse": "No new external download. Exact C2 shards and parser provenance inherited via pinned C2 dataset."
   }
 }

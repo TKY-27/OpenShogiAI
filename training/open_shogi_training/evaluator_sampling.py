@@ -31,6 +31,9 @@ def exposure_summary(data: dict, counts: torch.Tensor) -> dict:
     result["round_sources"] = {
         str(source): distribution(values[data["sources"] == source]) for source in (0, 1)
     }
+    result["groups"] = {
+        str(group): distribution(values[data["groups"] == group]) for group in range(4)
+    }
     return result
 
 
@@ -78,6 +81,42 @@ def coverage_order(data: dict, counts: torch.Tensor, config: dict, generator) ->
     if not picked:
         return torch.empty(0, dtype=torch.int64)
     order = torch.randperm(len(picked), generator=generator).numpy()
+    if "partners" in data:
+        # Keep selected siblings together without adding another exposure or
+        # bypassing a source/sequence cap. One pair is an indivisible batch unit.
+        remaining = set(picked)
+        units = []
+        for i in order:
+            index = picked[i]
+            if index not in remaining:
+                continue
+            remaining.remove(index)
+            partner = int(data["partners"][index])
+            unit = [index]
+            if partner in remaining:
+                remaining.remove(partner)
+                unit.append(partner)
+            units.append(unit)
+        pending = deque(units)
+        result = []
+        while pending:
+            current, seen = [], Counter()
+            for _ in range(len(pending)):
+                unit = pending.popleft()
+                additions = Counter(int(sequences[i]) for i in unit)
+                if len(current) + len(unit) > batch or any(
+                    seen[s] + n > limit for s, n in additions.items()
+                ):
+                    pending.append(unit)
+                    continue
+                current.extend(unit)
+                seen.update(additions)
+                if len(current) == batch:
+                    break
+            if len(current) < batch and pending:
+                break
+            result.extend(current)
+        return torch.tensor(result, dtype=torch.int64)
     pending = deque(picked[i] for i in order)
     result = []
     # Bounded one-pass packing. A short final batch is permitted; never duplicate

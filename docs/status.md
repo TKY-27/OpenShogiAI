@@ -1,203 +1,134 @@
-# R4-C2 — ready_for_luna / step8正常pause
+# R4-C3 — Astra preparation
 
-人間向け正本はこの文書、機械向け正本は `configs/evaluator-main.json`。
-今回の明示承認（2026-09-20）はC2一ラウンドとローカル開発登録まで。
-C2の初期更新・別プロセスresume・後学習経路の実証が完了し、正式pause済み。
-Lunaは別セッションでユーザーが起動する。互いを起動しない。
-**棋力向上・ユーザーへの安定勝利・対初段は未検証。** C1採用保留を維持する。
+唯一の人間向け入口はこの文書、機械向け設定は `configs/evaluator-main.json`。
+2026-09-21の明示承認はC3の診断・修正・生成・学習準備・ローカル開発統合と作業枝pushまで。
+C4、公開、外部preview、重み配布、公開既定昇格、main統合、有料資源は別GO。
+Lunaはユーザーが別セッションで起動する。棋力成功やユーザーへの安定勝利は未確認。
 
-実run `local/runs/r4-c2/attempt-01`、run SHA-256
-`79dff50b1d7a1c7466d7d0984dfbed5f85af92460c9d5235091ac8285b378dcd`。
-原封印はOSAI `62bef42`、OSUI `e691e6f`。停止中に統合段階の進捗監視表と結果照合を
-補完し、正式 `approve-operations` で運用改訂 `096e86ea…`（commit `f590901`）を記録。
-原封印・4更新・学習/data設定は維持。手編集した成功状態や後継runはない。
-step4→正式pause→別プロセスstdin=/dev/null resume→step8を確認済み。
-乱数/順序hash、optimizer step、単調なcounts、run/data identityは一致した。
-実optimizer投入はHao1,564・防御生成386・r3 replay98の**計2,048局面/2,048例**。
-bestはまだ初期step0（C2追加露出0）。初回定期検証前の最新step8を経路実証に用いる。
-この8更新をLunaが継続し、捨てたりstep0へ戻したりしない。
+## 初期モデルとC2診断
 
-## 継承した成果と診断
-
-初期重み・主比較は防御best1536
+初期・主要比較は防御best1536
 `8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a`。
 C1 best512 `6b49c3361194011c0c8ac114491dcdb6c67a3b4f4cc6c17262a867572aefb3a6`
-は3分12勝12敗、10分4勝4敗。ユーザー評価も同程度。番号による昇格はしない。
+は対防御3分12勝12敗、10分4勝4敗で未採用。番号を棋力順位にしない。
 
-| 実績 | best時点の見た局面 / 延べ例 | 全学習の見た局面 / 延べ例 |
-|---|---:|---:|
-| 防御best1536 | 230,762 / 392,514 | 315,253 / 785,028 |
-| C1 best512 | 90,997 / 130,128 | 215,635 / 516,416 |
+C2 `local/runs/r4-c2/attempt-01` はattempt3、step8192、延べ2,096,579例、
+validation_patienceで正常完了。pool2,067,381、seen1,850,644、最大露出3。
+Haoのseen/露出は1,575,287/1,616,553、独自Apery157,440/362,109、
+r3 replay117,917/117,917。best0は防御と同一8,679,836 bytes。
+任意screen18/19、Arena18勝14敗、export・開発統合完了という履歴は保持する。
+原封印 `79dff50b1d7a1c7466d7d0984dfbed5f85af92460c9d5235091ac8285b378dcd` と
+運用改訂 `096e86ea…` は変更しない。C2完了時の文書もignored領域に保存した。
 
-防御の学習プールは独自Apery教師付き183,486局面と、以前の独自Apery生成r3 replay
-300,000局面。現在の防御プールを「すべてAobaZero」とは呼ばない。
-C1の学習プールにはこれに由来する483,451局面、AobaZero 8,016局面、
-Apery D12 focus 53局面（既存35再ラベル＋18新規）が入った。
-C1全体の実optimizer投入はreplay387,312例、新追加側129,104例。
-新追加側8,069局面は16回反復。bestまでと全体を混同しない。
-保存済み最終countsと完全一致するdeterministic sampler再現で、best時点の内訳も照合した。
+保存checkpointから全6tensorのoptimizer step8192と有限・非ゼロ勾配を確認。
+更新後export `f2c413d2932816cf20a139ed8e3e0d61c5a474cbecafd43676bae1eb819eadea` は
+実tensorも変化し、量子化で更新が消えていない。全層の変更要素数は
+2,152,514 / 256 / 12,288 / 16 / 64 / 4。初期モデルの誤exportではない。
+混合validation損失は1.07853→0.87676、Haoは1.06775→0.78968。
+一方、replayのgeneralは0.85612→0.90151、opening0.96269→0.98188、
+defense1.09411→1.10508、attack_end1.55672→1.58822。
+すべての更新後検証でgeneralの1.03倍guardに抵触し、best0が残った。
+固定標本のreplay trainも悪化し、単純な「未知データだけの過学習」とは断定しない。
+教師間の尺度・目的・混合比による干渉が主仮説。容量限界は未証明。
 
-| round / 実際の出典 | bestのseen / 延べ例 | 全体のseen / 延べ例 |
-|---|---:|---:|
-| 防御 / 独自Apery生成 | 139,261 / 289,478 | 160,194 / 578,802 |
-| 防御 / 独自r3 replay | 91,501 / 103,036 | 155,059 / 206,226 |
-| C1 / 防御生成由来 | 62,141 / 76,255 | 132,847 / 302,198 |
-| C1 / r3 replay | 20,787 / 21,332 | 74,719 / 85,114 |
-| C1 / Apery focus | 53 / 214 | 53 / 848 |
-| C1 / AobaZero | 8,016 / 32,327 | 8,016 / 128,256 |
+C2 Arenaは両側の重み・probe・profile・設定が同一、controller OFF、乱数による
+着手選択なし。pair8の同一局面14手目で、実時計/探索時間の差からdepth5の4f4g+と
+depth4の2c2dへ分岐した。18勝14敗を学習改善の証拠にしない。
+OSUIの独立C2項目を除き、古いC2選択/URLは防御への別名として表示する。
+C2の学習済みcheckpointは診断資産として保持。
+根拠は `local/r4-c3-preparation/c2-diagnosis.json`、
+`c2-identical-arena-divergence.json`、`search-diagnosis.json`。
 
-祖先W256等の全生涯露出は今回確定しておらず、新取得局面を祖先未見と断言しない。
-根拠は既存runのmanifest/training.jsonと `local/r4-c1-review/training-review.json`。
+## C3の一つの学習仮説
 
-C1では0.2%改善条件が保存とpatienceを兼ね、step1024の損失最小1.252780を
-保存対象にできなかった（閾値1.252689）。C2は**観測上の最小の保存**と
-**0.2%の意味ある改善によるpatience更新**を分離した。損失最小は棋力最良とは限らない。
+W256/OSAVAL03の全層を防御から継続し、replay75%・Hao25%にする。
+replay内general/opening/defense/attack_endは20/40/20/20%。
+従来のcp/600 scalar損失に、同一教師・同一rootの兄弟候補の順位損失を0.25加える。
+差50cp以内は複数許容、要求marginは600cpで上限。子局面は子の手番視点。
+両方が実batchへ投入された対だけを比較し、欠測対を0点にしない。
+既存の防御・駒得・終盤を保持しながら、静かな準備と応手後の価値差を学ぶ仮説である。
+これが実着手を改善するかは本比較待ちで、損失改善だけを棋力向上と呼ばない。
 
-既知の攻め継続、棒銀系受け、受けから攻め、端の詰みの4合法局面を750/3000msで
-比較した。端の5手詰は両方232 nodesで証明。時間を増やすと評価の変わる局面もあり、
-全弱点を評価器だけのせいにはしない。通常探索は静かな合法手を含む既存alpha-beta/PVS、
-連続王手のAND/OR証明、合法合駒・打歩詰・反復履歴・絶対期限/stopを再利用する。
-この診断で新たな探索不具合は特定できず、今回エンジン/runtimeは変更しない。
-共通探索の変更効果を学習効果と取り違える対照差は発生しない。
-`local/r4-c2-preparation/search-diagnosis.json` は既知例の診断であり未知局面の合格証ではない。
+[出典・形式・利用条件](source-audits/hao.md)。今回の外部新規ダウンロードは0。
+C2の4つのhash固定Hao shard、独自Apery、防御/r3 replayを再利用する。
+Haoは元局面に対するPV末端のroot視点評価、Value→cpは100/90。
+正確な生成binary/weightと元対局の完全な独立性は未保証。D9全件をD12再解析しない。
+GCTは独立hcpe3を識別済みだが派生利用条件未確認で採用0。未取得値を実績にしない。
 
-## データと反復制御
+相居飛車、棒銀、対四間/三間/中飛車、嬉野流、端、角交換の合法な自作14系列を
+先後反転し各8root、trainの一部は現モデル候補の子と強い応手もD12/2M nodesで解析。
+ユーザー棋譜ではない。272解析、raw1,087行から重複・対称・split衝突を除き714行追加。
+既存splitと保護済み検証全キーを優先し、45衝突キーを除外。final holdout未開封。
 
-[出典判断・形式・条件](source-audits/hao.md)。nodchip Hao depth9の4つの離れたshardを
-SHA-256照合して取得済み。1,231,381,720 bytes、提供30,784,543 records。
-16手間隔の候補1,801,041例から、出典横断の実局面・合法対称キー、保護済みsplitと照合。
-重複/除外120,337例。検証・開発側はhash固定抽出で各8,192件に限定する。
-
-| 出典 | train局面 | validation局面 | development局面 |
+| 出典 | train | validation | development |
 |---|---:|---:|---:|
-| 新取得Hao D9 | 1,583,895 | 8,192 | 8,192 |
-| 防御/r3 replay | 483,486 | 8,890 | 8,586 |
-| 合計 | 2,067,381 | 17,082 | 16,778 |
+| 独自Apery生成 | 183,486 | 8,890 | 8,586 |
+| r3 replay | 300,000 | 上段に含む | 上段に含む |
+| Hao D9再利用 | 1,583,895 | 8,192 | 8,192 |
+| C3自作counterfactual | 431 | 94 | 189 |
+| 合計 | 2,067,812 | 17,176 | 16,967 |
 
-Haoユニーク採用総数1,600,279は提供件数やoptimizer延べ例数ではない。
-元系列IDのないPSVは手数resetと初期実局面から系列/派生familyを推定し、同じfamilyを
-split間へ割り振らない。trainのfamily93,947。ただし完全な系列独立性は保証しない。
-駒数・戦型だけの機械的統合はしない。元の検証局面キーは抽出外も全てtrainから保護。
-既存の未開封final holdoutは開かない。旧独立生成由来の検証も併用する。
+兄弟候補対はtrain115,893、validation250、development295。
+manifestのsupplied_records/new_unique_positions等の継承値は**C2取得時の統計**。
+C3の追加はadded_counterfactual_rows、総poolはunique_positionsを読む。
+元系列不明なHaoのfamilyは推定。ユーザー診断と自作developmentを最終未知試験とは呼ばない。
 
-dlshogi/GCTの独立 `hcpe3/selfplay_gct-???.hcpe3.xz` を現物一覧まで確認したが、
-派生重み等の利用条件未確認のため採用0。AobaZero変換版を別出典として水増ししない。
-Tanuki/Suisho巨大multipart、Knowledge_distilled等は今回は未採用。
-取得済み・採用済み・実学習済みは別に報告する。
+AdamW LR1e-5→1e-6、warmup128、weight_decay0.01、有効batch256、microbatch32。
+最大16巡/16,384更新、各巡262,144例以下、検証512更新間隔、patience6。
+露出上限replay8/Hao3、系列2,048、batch内4。少数shard先頭の循環で埋めない。
+patienceはreplay60%・Hao30%coverage以後。optimizer/RNG/order/countsを再開で保持。
+全runと各候補の出典・群・系列・露出分布はcheckpoint/training.jsonへ保存する。
+祖先モデルからの生涯露出は不明。
+16巡の実プールdry samplerは2,776,376露出、候補対237,219組。
+少ない層が先に上限へ達するため、75/25は各巡の要求quotaであり固定実比率ではない。
+実累積はreplay1,727,811/Hao1,048,565、新自作431例はseen431/露出3,253。
+このdry値は本学習実績ではない。本runは実countsを記録する。
 
-主案はW256 scalar全層の防御モデル継続、AdamW LR2e-5→2e-6、warmup256、
-weight decay0.01、有効batch256、microbatch32、controller OFF。非終端手作業評価なし。
-新側75%・replay25%、replay内general/opening/defense/attack_endは25/30/20/25%。
-各層で未使用を優先し、1例の上限は新側2回・replay3回、1系列512例、同batch内4例。
-枯渇層は反復で埋めず、残る有効例へ進み、全枯渇なら正常完結する。
+## 選抜・固定比較・開発用登録
 
-1巡の計画上限262,144例、最大12巡/12,288更新。検証512更新間隔、patience4。
-patience消費はreplayの50%・Haoの60%を見てから。破損/非有限はそれ以前も保護する。
-4群のreplay損失が初期値の1.03倍以内のcheckpointだけ保存候補にする。
-全件走査の追加基盤は使わず、実samplerのcounts/系列/出典分布、最近の新規増分、
-実プールcoverageとbest時点の集計をcheckpoint/training.jsonへ保存する。
-名前変更や再開でcountsをリセットしない。
+incumbentは防御。従来のguard付きbestとは別に、更新後のraw最小validation目的値を
+trained_candidateとして保存する。0.2%はpatience専用で、保存の足切りにしない。
+固定形式/seedの実tensor変更とexport差を必要とし、metadataだけの差を候補にしない。
+選抜候補は一つ。本比較までに勝つ候補を探し直すことはしない。
 
-実samplerを12巡だけdry実行し、延べ2,911,283例、seen1,921,165局面、
-Haoは全1,583,895局面を見て最大2回、replay最大3回を確認した。
-これはoptimizer実行ではない。学習実績には加算しない。
-`local/r4-c2-preparation/sampler-simulation.json` に実分布を保存。
+共通の既存book-free探索で対防御32局（3分24・10分8）、先後交換。
+自力startpos4局は別枠。静かな序中盤/棒銀/対振り/嬉野流/攻め終盤のdevelopmentを含み、
+自作4familyは結果を見る前に指定。draw=.5、max-plies/無効は未採点、期限違反は不利結果。
+同一決定的対局を独立試行として水増ししない。family単位bootstrapで扱う。
+推奨基準は両時計score>.5、片側95%下限>.5、各層>=.5、4群scalar悪化<=3%。
+これはユーザー/初段への安定勝利の証明ではない。ユーザー対局後に採否判断する。
+任意screen欠測・best0・低棋力・採用保留は独立arena/export/UIの停止条件にしない。
 
-## 固定評価と停止
+750/3000msの短い診断で予算による候補変化を確認。未完了反復の誤採用や詰み証明を
+捨てる不具合は今回特定できず、Rust探索・詰み実装は変更しない。
+非終端手作業加点、初手固定、戦法別応手、教師呼出し、訓練ノイズは対局へ入れない。
+controller OFFのまま完全な選択重みを使う。
 
-保存候補はvalidation最良1つだけ。防御best1536との先後交換24局×3分＋8局×10分を
-同じruntime/clock/loadで比較。4局の初期局面デモは別で、独立多数局へ水増ししない。
-引分0.5、maxplies/invalidは未採点、時間/期限違反は不利益として既存の固定集計を使う。
-両時計score>0.5、family-cluster片側95%下限>0.5、各層score>=0.5、4群のscalar退行<=3%。
-境界を満たしても自動採用・対初段認定・公開はしない。僅差は不確実。
+Lunaは学習後にaudit→固定arena→export/descriptor更新→loopback起動→実ブラウザーを
+同じrunnerで実行する。編集範囲はignored C3 descriptorとrun証拠だけ。
+失敗時は旧descriptorを復元。ソース設計をLunaへ残さない。
+R4-C3（比較候補・未採用）、防御、C1/r3/W256を「最新←→開発初期」で表示。
+解析も同じ一覧を維持し、大規模解析UXは学習後に扱う。
+legacy `awaiting_astra_review` はdevelopment/result.json PASSならユーザー対局待ち。
+対局するためだけのAstra再起動は不要。
 
-開発screenは未知別系列各群2局面＋既知11回帰、各要求はD16/2Mの有限教師観測。
-攻め継続/重大ミス/棒銀・端/終盤を分け、詰み誤認を合格扱いしない。
-少数screenは記述的で、旧大規模screenの必要件数を満たすとは主張しない。
-未完了深度・局所欠測・not_runは依存ラベルだけ欠測扱い。独立Arena/export/登録を止めない。
-広範教師障害・不正合法手・破損/漏洩・保存不能は技術異常として証拠を保持する。
-早期停止は正常完結し、最良を比較・登録する。弱ければ防御既定を維持する。
+## 実行と引継ぎ
 
-通常pressure/swapは診断のみ。実割当失敗は既存microbatch32→16→8→4→2→1、
-実効batch不変の勾配蓄積、最大3プロセス再試行と資源待ちへ進む。
-暦日上限なし。ユーザーpause、資源待ち、正常early stop、技術異常を区別する。
-他アプリ終了・OS保護解除・状態ファイル手編集は禁止。
-
-## 唯一のLuna入口と開発登録
-
-cwdはOpenShogiAIのGitルート。初期prefixの正式確認済み。このresumeだけを実行する。
+実cwdはOpenShogiAI Git root。封印run内execution_cwdにも絶対パスを記録する。
+設定のoperationsが正式コマンドと保持/復旧範囲の正本。
 
 ```sh
-PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 </dev/null
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 </dev/null
+PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c3/attempt-01
 ```
 
-`status` / `pause` は同じmoduleとrunパス。復帰も同じresume。step0へ戻さない。
-取得/prepareが必要な環境では、同設定の固定4shardだけを
-`PYTHONPATH=training uv run --frozen python -m open_shogi_training.r4_sources configs/evaluator-main.json`
-で取得・検証できる。今回は既に準備済みなので再生成不要。
-`seal`はAstraが実施済み。Lunaは再sealせず、この入口から既存更新を継続する。
+Astraは実データ初期更新→保存→正常pause→別プロセスresume→追加更新→export、
+さらに少数短時間対局と実ブラウザーまで確認してからready_for_lunaで止める。
+その初期更新は本runで継承する。rehearsalは本Arena/採用実績へ加算しない。
+途中の全体best0・任意screen欠測・更新候補不採用はfixtureでも通す。
+現時点の実試験結果とrun identityは以下の完了記録へ追記する。
 
-正式経路はgenerate検証→prepare snapshot→train→audit/screen→固定arena→integrate。
-`integrate`がcheckpoint-bound bestを監査し、実Wasm/profile/hashを照合する。
-Lunaの更新範囲は **`local/core-prototype/r4c2.json` とrun内のignored結果のみ**。
-OSUIソース/設定の任意変更は禁止。reviewed OSUIソースhashはsealへ固定する。
-登録失敗は旧descriptorへ戻し、失敗と新重みを残す。無言fallbackしない。
-
-OSUIはloopback **http://127.0.0.1:5175/#/match** で起動・再利用する。
-既存5174のユーザー用プロセスは止めない。新登録のdefaultは防御のまま。
-「最新←→開発初期」の順にR4-C2/C1/防御/r3/W256を選択し、照合完了後に対局。
-一対局一構成、途中切替禁止、旧応答破棄、モデル別TT/Worker分離を維持する。
-旧重みも共通のpure-v3探索で動かすため、当時のAI全体の完全再現とは区別する。
-高品質でも既存の3分/10分時計とhard stopを守る。完全な選抜重みを使用する。
-
-実ブラウザー検証は`OpenShogiUI/scripts/verify-development-candidate.mjs` を自動実行し、
-URL/title/console/実寸盤面、Worker identity、先後応手、stop/再対局、USIと診断保存、
-小画面を確認する。棋譜・局面・両時計・消費時間・探索終了理由・profile/hashを自動保存。
-診断欄展開時に盤面が潰れる高さ依存を今回修正した。
-Browser専用skillは利用不可のため、frontend-testing-debugging skillの代替手順として
-既存Playwrightと実Chromeを使用する。
-
-`development/result.json` とbrowser結果がPASSなら、そのままユーザー対局待ちで終了。
-機械の既存終端名 `awaiting_astra_review` は互換維持で、統合のためだけのAstra再起動は不要。
-`rehearsal`コマンドは保存済み初期更新をexportし、30秒先後2局・任意screen未実施・
-同じ登録/ブラウザー経路を小さく通す。最後に暫定descriptorを戻す。
-本Arena完了/棋力採用のreceiptは作らない。
-
-今回の正式rehearsalは**PASS**。step8 export
-`e20a1f73a3dd50cf035e36ae9290b6143274ab59ef215547d939b8ac7aa658f6` を使用。
-先後2局とも64手上限で未採点、期限違反0。勝ち/引分へ読み替えない。
-任意screen19件はnot_run、screen_pass=nullのまま登録・ブラウザーまで通過した。
-実Chromeで3分・高品質の先後応手、Worker実identity、stop/再対局、USI/診断保存、
-1280px/390px描画、console error0を確認。暫定C2 descriptorは正常復元済みで、
-現時点のC2ボタンは本学習後の登録待ち。C2を学習完了候補として公開していない。
-
-Wasm/native実監査は10 roots/300 childrenで差0。モデル8,679,836 bytes。
-当機のNode内実Wasmはmodel load148ms、full evaluation平均0.0293ms（128回）。
-単一model load後のWasm linear memory割当32,833,536 bytes（live heapの測定ではない）。
-学習用全checkpointをブラウザーに載せていない。
-根拠: `local/runs/r4-c2/attempt-01/post-training-rehearsal/`。
-
-検証: `make check` PASS（Python1,172件・Rust・format/lint・boundary/rights/provenance・
-決定的Wasm）、運用修正後の対象71件PASS、OSUI `npm run check` PASS（236件）。
-2代表モデルのローカルbuild出力監査と実Chrome切替/応手もPASS。初期loadは防御のみ、
-C1選択後だけC1重みを取得し、登録外weights/dataの出力なし。
-証拠は `local/r4-c2-preparation/`。コード差分レビュー・秘密/重み混入確認済み。
-未実施はC2本学習・本Arena・C2の10分Web実対局・ユーザー対局、後工程の解析UI/広範UX。
-部分試験のPASSをそれらの達成と混同しない。
-
-## 保持範囲と後工程
-
-代表W256/r3/防御/C1/C2と対応runtime/profile/hash/来歴、sealed split、bestと有限resume
-checkpoint、復旧証拠を保持。今回不明ファイルや旧枝の削除はしない。
-開始時OSAI未追跡 `.playwright-mcp/` は保護。OSUIは開始時clean。
-開始HEADはOSAI95e33e1/OSUI0d04f27、両方codex/core-prototype。
-準備資産は約1.8GiB、実run約756MiB、最終確認時の空き約292GiB。削除なし。
-
-本番一モデル制約を撤回。将来の公開は権利確認した代表allowlistで、重み/optimizer/
-元データを通常Gitへ入れない。OSUIの公開allowlistは未承認の空配列でfail closed。
-ローカル複数モデルbuildは構造試験で、権利fixtureやローカル成果を配布承認にしない。
-公開名OSAI R4はGO後の採用構成のみ。現段階はR4-C2比較候補。
-
-解析モードでの同一覧・identity付き実解析、OSUI全体の時計/読込/入力/終局/保存/操作性
-改善は学習後のAstra工程。このプロンプトの再送時は完了runを確認し再学習せず対応する。
-C3、main merge、外部preview、公開、モデル配布、有料資源は別の明示GOまで停止。
+暦日wall limitなし。pressure/swapは診断のみ。実OOMはmicrobatch32→16→8→4→2→1、
+有限process retry/resource wait。同run resume、stop/pauseを尊重する。
+ディスク保存不能、広範な破損/漏洩、非有限値、必須runtime不整合は保護停止。
+旧全root成功必須/固定focus絶対上限/C3未承認/統合にAstra必須の指示は本契約へ更新済み。

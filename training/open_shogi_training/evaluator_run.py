@@ -177,6 +177,7 @@ def _validate_config(config: dict) -> None:
         if (config["round"].get("id"), config["round"].get("authorization")) not in {
             ("R4-C1", "explicit_user_20260918"),
             ("R4-C2", "explicit_user_20260920"),
+            ("R4-C3", "explicit_user_20260921"),
         }:
             raise ValueError("unapproved learning round")
         ref = generation["prepared_dataset"]
@@ -282,6 +283,9 @@ def _validate_config(config: dict) -> None:
         integer=False,
     )
     _number(training["gradient_norm_limit"], 1e-12, 1e6, "gradient_norm_limit", integer=False)
+    if training.get("trained_candidate") not in (None, "best_updated_objective_v1"):
+        raise ValueError("unknown trained candidate selection")
+    _number(training.get("pair_weight", 0), 0, 1, "pair_weight", integer=False)
     resources = config["resources"]
     for name, low, high, integer in (
         ("maximum_wall_seconds", 1, 604800, True),
@@ -318,7 +322,11 @@ def _validate_config(config: dict) -> None:
         from .evaluator_training import GROUPS
 
         if training.get("sampling_fractions") != (
-            [0.25, 0.30, 0.20, 0.25] if "round" in config else [0.3, 0.2, 0.3, 0.2]
+            [0.20, 0.40, 0.20, 0.20]
+            if config.get("round", {}).get("id") == "R4-C3"
+            else [0.25, 0.30, 0.20, 0.25]
+            if "round" in config
+            else [0.3, 0.2, 0.3, 0.2]
         ):
             raise ValueError("defense run requires the reviewed four-group sampling plan")
         if training.get("maximum_replay_regression_ratio") != 1.03:
@@ -574,7 +582,7 @@ def _state(run: Path) -> dict:
         _reference(run / "candidate-review.json", value["review_sha256"])
         for key, path in (
             ("run_sha256", run / "run.json"),
-            ("candidate_sha256", run / "fit/best.osaval03"),
+            ("candidate_sha256", selected_model(run)),
             ("offline_sha256", run / "development-test.json"),
             ("arena_sha256", run / "arena/arena.json"),
         ):
@@ -2416,12 +2424,31 @@ def _training_identity(run: Path, config: dict) -> dict:
     }
 
 
+def selected_model(run: Path) -> Path:
+    config = _json(run / "run.json")
+    name = (
+        "trained_candidate.osaval03"
+        if config.get("training", {}).get("trained_candidate")
+        else "best.osaval03"
+    )
+    return run / "fit" / name
+
+
 def _training_summary(run: Path, config: dict) -> dict:
     result = _json(run / "fit" / "training.json")
     expected = _training_identity(run, config)
     if result["status"] != "complete" or result["identity"] != expected:
         raise ValueError("training completion identity mismatch")
-    _reference(run / "fit" / "best.osaval03", result["best_sha256"])
+    _reference(run / "fit/best.osaval03", result["best_sha256"])
+    if config["training"].get("trained_candidate"):
+        candidate = result.get("trained_candidate")
+        if (
+            not candidate
+            or candidate["step"] <= 0
+            or candidate["sha256"] == config["generation"]["leaf_sha256"]
+        ):
+            raise ValueError("C3 requires a distinct optimizer-updated candidate")
+        _reference(selected_model(run), candidate["sha256"])
     resume = _json(run / "fit" / "resume.json")
     if resume["step"] != result["step"]:
         raise ValueError("final checkpoint step differs from training completion")
@@ -2453,7 +2480,7 @@ def _audit_report(run: Path, config: dict) -> dict:
         "moduleJs": inside(config["runtime"]["module"]["path"]),
         "wasm": inside(config["runtime"]["wasm"]["path"]),
         "nativeProbe": inside(config["runtime"]["replay"]["path"]),
-        "model": run / "fit" / "best.osaval03",
+        "model": selected_model(run),
     }
     for name, path in paths.items():
         _reference(path, value["artifacts"][name]["sha256"])
@@ -2496,7 +2523,7 @@ def _completion_artifacts(run: Path, stage: str) -> list[dict]:
         "train": [
             run / "fit" / "training.json",
             run / "fit" / "resume.json",
-            run / "fit" / "best.osaval03",
+            selected_model(run),
         ],
         "audit": [run / "model-audit.json", run / "development-test.json"],
         "arena": [run / "arena" / "arena.json", run / "arena" / "plan.json"],
@@ -2515,6 +2542,8 @@ def _completion_artifacts(run: Path, stage: str) -> list[dict]:
                 for ref in [attempt["trace"], *attempt.get("stderr_artifacts", [])]
                 if ref is not None
             )
+    if stage == "train" and selected_model(run).name != "best.osaval03":
+        paths.append(run / "fit/best.osaval03")
     if stage == "audit" and (run / "move-screen").exists():
         paths.extend(sorted((run / "move-screen").glob("*.json")))
     return [_reference(path) for path in paths]
@@ -2545,7 +2574,7 @@ def _verify_completion(run: Path, stage: str, config: dict) -> dict:
     if stage == "integrate":
         result = _json(run / "development/result.json")
         browser = _json(run / "development/browser/browser.json")
-        model_sha = digest(run / "fit/best.osaval03")
+        model_sha = digest(selected_model(run))
         if (
             receipt["result"] != result
             or result.get("status") != "PASS"
@@ -3043,7 +3072,7 @@ def work(
 
 def _arena_config(run: Path, config: dict) -> dict:
     generation = config["generation"]
-    model = run / "fit" / "best.osaval03"
+    model = selected_model(run)
     return {
         **config["evaluation"],
         "seed": config["seed"],
@@ -3076,7 +3105,7 @@ def _candidate_review(run: Path) -> dict:
     result = {
         "schema": "open_shogiai_candidate_review/v1",
         "run_sha256": digest(run / "run.json"),
-        "candidate_sha256": digest(run / "fit/best.osaval03"),
+        "candidate_sha256": digest(selected_model(run)),
         "offline_sha256": digest(run / "development-test.json"),
         "arena_sha256": digest(run / "arena/arena.json"),
         "scalar_all_groups_preserved"
@@ -3204,7 +3233,7 @@ def stage_run(
 
                 _training_summary(run, config)
                 torch.set_num_threads(config["training"]["threads"])
-                model, report = run / "fit" / "best.osaval03", run / "model-audit.json"
+                model, report = selected_model(run), run / "model-audit.json"
                 if not report.exists():
                     subprocess.run(
                         [
@@ -3251,7 +3280,7 @@ def stage_run(
                             ("candidate", model),
                         )
                     }
-                    metrics["move_quality_screen"] = screen(ROOT, run, config)
+                    metrics["move_quality_screen"] = screen(ROOT, run, config, model=model)
                 atomic(run / "development-test.json", encoded(metrics))
                 result = {
                     "model_sha256": digest(model),
@@ -3263,7 +3292,7 @@ def stage_run(
 
                 _training_summary(run, config)
                 _audit_report(run, config)
-                result = register(ROOT, run, config, run / "fit/best.osaval03", run / "development")
+                result = register(ROOT, run, config, selected_model(run), run / "development")
             else:
                 from .evaluator_arena import run_arena
 

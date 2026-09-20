@@ -60,7 +60,74 @@ def _accumulate(parameters: list, data: dict, indexes, microbatch_size: int) -> 
             raise FloatingPointError("nonfinite training loss")
         (loss / len(indexes)).backward()
         total += float(loss.detach())
+    if data.get("pair_weight", 0):
+        pairs = batch_pairs(data, indexes)
+        for start in range(0, len(pairs), max(1, microbatch_size // 2)):
+            chosen = pairs[start : start + max(1, microbatch_size // 2)]
+            features, lengths, y = batch(data, chosen.reshape(-1))
+            predicted = forward(parameters, features, lengths)
+            loss = pair_loss(predicted.reshape(-1, 2), y.reshape(-1, 2)).sum()
+            if not torch.isfinite(loss):
+                raise FloatingPointError("nonfinite candidate ordering loss")
+            (data["pair_weight"] * loss / len(pairs)).backward()
     return total
+
+
+def batch_pairs(data: dict, indexes) -> np.ndarray:
+    """Only compare siblings that are both actual optimizer inputs in this batch."""
+    indexes = np.asarray(indexes)
+    partner = data["partners"][indexes]
+    left = indexes[(partner > indexes) & np.isin(partner, indexes)]
+    return np.column_stack((left, data["partners"][left]))
+
+
+def pair_loss(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    # Both children have the opponent's perspective. Their ordering is retained;
+    # near-ties are permitted, and large teacher scales cannot demand huge margins.
+    difference = target[:, 0] - target[:, 1]
+    margin = (difference.abs() - 50).clamp(0, 600) / 600
+    actual = difference.sign() * (predicted[:, 0] - predicted[:, 1]) / 600
+    return torch.where(difference.abs() > 50, (margin - actual).clamp(min=0).square(), 0)
+
+
+def evaluate_pairs(parameters: list, data: dict, batch_size: int) -> dict:
+    size = max(2, min(batch_size, 32))
+    while True:
+        try:
+            return _evaluate_pairs(parameters, data, size)
+        except (MemoryError, RuntimeError) as error:
+            if not allocation_failure(error):
+                raise
+            error.__traceback__ = None
+            exhausted = size == 2
+        gc.collect()
+        if exhausted:
+            raise TrainingResourceWaitError("pair validation allocation failed at one pair")
+        size = max(2, size // 2)
+
+
+def _evaluate_pairs(parameters: list, data: dict, batch_size: int) -> dict:
+    pairs = batch_pairs(data, np.arange(len(data["targets"])))
+    total, correct, count = 0.0, 0, 0
+    with torch.no_grad():
+        for start in range(0, len(pairs), max(1, min(batch_size, 32) // 2)):
+            chosen = pairs[start : start + max(1, min(batch_size, 32) // 2)]
+            features, lengths, y = batch(data, chosen.reshape(-1))
+            predicted = forward(parameters, features, lengths).reshape(-1, 2)
+            target = y.reshape(-1, 2)
+            mask = (target[:, 0] - target[:, 1]).abs() > 50
+            total += float(pair_loss(predicted, target)[mask].sum())
+            correct += int(
+                (
+                    ((predicted[:, 0] - predicted[:, 1]) * (target[:, 0] - target[:, 1]) > 0) & mask
+                ).sum()
+            )
+            count += int(mask.sum())
+    return {
+        "pairs": count,
+        "loss": total / count if count else None,
+        "order_accuracy": correct / count if count else None,
+    }
 
 
 def accumulate(parameters: list, data: dict, indexes, microbatch_size: int) -> tuple[float, int]:
@@ -110,6 +177,25 @@ def grouped_arrays(folder: Path, split: str) -> dict:
                 or (name == "sequences" and data[name].max() >= len(data[name]))
             ):
                 raise ValueError("invalid sampling lineage")
+    path = folder / f"{split}-partners.npy"
+    if path.exists():
+        partners = np.load(path, mmap_mode="r", allow_pickle=False)
+        indexes = np.arange(len(data["targets"]))
+        if (
+            partners.shape != indexes.shape
+            or partners.dtype.kind != "i"
+            or (partners < -1).any()
+            or (partners >= len(indexes)).any()
+        ):
+            raise ValueError("invalid candidate pair indexes")
+        valid = partners >= 0
+        if (
+            (partners[valid] == indexes[valid]).any()
+            or not np.array_equal(partners[partners[valid]], indexes[valid])
+            or not np.array_equal(data["sequences"][partners[valid]], data["sequences"][valid])
+        ):
+            raise ValueError("candidate pair crosses sequence or is not reciprocal")
+        data["partners"] = partners
     return data
 
 
@@ -317,6 +403,11 @@ def train(
     source_fractions = config.get("source_fractions")
     loader = grouped_arrays if fractions is not None else arrays
     data, validation = loader(dataset, "train"), loader(dataset, "validation")
+    candidate_policy = config.get("trained_candidate")
+    if config.get("pair_weight", 0):
+        if "partners" not in data or "partners" not in validation:
+            raise ValueError("ordering objective requires paired data")
+        data["pair_weight"] = config["pair_weight"]
     n = len(data["targets"])
     if not n:
         raise ValueError("empty training split")
@@ -333,6 +424,8 @@ def train(
     coverage = config.get("coverage_sampler")
     patience_loss = math.inf
     best_exposure = None
+    trained = None
+    trained_bytes = None
 
     def next_order():
         if coverage:
@@ -384,6 +477,21 @@ def train(
         best_bytes = state["best_model_bytes"]
         patience_loss = state.get("patience_loss", state["best_loss"])
         best_exposure = state.get("best_exposure")
+        trained, trained_bytes = (
+            state.get("trained_candidate"),
+            state.get("trained_model_bytes"),
+        )
+        if trained:
+            if hashlib.sha256(trained_bytes).hexdigest() != trained["sha256"]:
+                raise ValueError("trained candidate checksum mismatch")
+            Phase10VModel.from_bytes(trained_bytes)
+            candidate_path = folder / "trained_candidate.osaval03"
+            if candidate_path.exists() and digest(candidate_path) != trained["sha256"]:
+                candidate_path.rename(
+                    folder / f"uncommitted-trained-{digest(candidate_path)}.osaval03"
+                )
+            if not candidate_path.exists():
+                atomic(candidate_path, trained_bytes)
         if hashlib.sha256(best_bytes).hexdigest() != state["best_sha256"]:
             raise ValueError("checkpoint best model checksum mismatch")
         Phase10VModel.from_bytes(best_bytes)
@@ -463,6 +571,8 @@ def train(
             "baseline_groups": baseline_groups,
             "patience_loss": patience_loss,
             "best_exposure": best_exposure,
+            "trained_candidate": trained,
+            "trained_model_bytes": trained_bytes,
         }
         try:
             _save_checkpoint(folder, state)
@@ -476,6 +586,7 @@ def train(
     def save(reason: str) -> dict:
         nonlocal best_loss, best_bytes, stale, best_step, train_loss_sum, train_rows
         nonlocal patience_loss, best_exposure
+        nonlocal trained, trained_bytes
         groups = None
         if fractions:
             groups = (
@@ -520,9 +631,17 @@ def train(
             )
         if not all(math.isfinite(v) for v in metrics.values()):
             raise FloatingPointError("nonfinite validation")
-        improved = eligible and metrics["loss"] < (patience_loss if coverage else best_loss) * (
-            1 - config["minimum_relative_improvement"]
+        ordering = (
+            evaluate_pairs(parameters, validation, config["batch_size"])
+            if data.get("pair_weight")
+            else None
         )
+        if ordering and ordering["loss"] is None:
+            raise ValueError("no valid validation candidate comparisons")
+        objective = metrics["loss"] + (config["pair_weight"] * ordering["loss"] if ordering else 0)
+        improved = (eligible or bool(candidate_policy)) and objective < (
+            patience_loss if coverage else best_loss
+        ) * (1 - config["minimum_relative_improvement"])
         observed_best = eligible and metrics["loss"] < best_loss
         exposure = None
         coverage_ready = True
@@ -534,12 +653,29 @@ def train(
                 for i, required in enumerate(coverage["minimum_coverage_before_patience"])
             )
         current = _snapshot(parameters, model.seed)
+        if (
+            candidate_policy
+            and step > 0
+            and current.sha256 != model.sha256
+            and (trained is None or objective < trained["objective"])
+        ):
+            trained_bytes = current.to_bytes()
+            trained = {
+                "step": step,
+                "sha256": current.sha256,
+                "objective": objective,
+                "sampling": exposure,
+                "exposures": exposures,
+                "replay_guard_eligible": eligible,
+                "ordering": ordering,
+                "adoption": "pending fixed comparison and user play",
+            }
         if observed_best if coverage else improved:
             best_loss, best_step = metrics["loss"], step
             best_bytes = current.to_bytes()
             best_exposure = exposure
         if improved:
-            patience_loss, stale = metrics["loss"], 0
+            patience_loss, stale = objective, 0
         elif coverage_ready:
             stale += 1
         else:
@@ -562,6 +698,9 @@ def train(
             "groups": groups,
             "replay_guard_eligible": eligible,
             "new_source": new_metrics,
+            "ordering": ordering,
+            "selection_objective": objective,
+            "trained_candidate": trained,
             "observed_best_saved": observed_best if coverage else improved,
             "meaningful_improvement": improved,
             "coverage_ready_for_patience": coverage_ready,
@@ -573,6 +712,8 @@ def train(
         train_loss_sum, train_rows = 0.0, 0
         persist()
         atomic(folder / "best.osaval03", best_bytes)
+        if trained:
+            atomic(folder / "trained_candidate.osaval03", trained_bytes)
         atomic(folder / "progress.json", encoded(event))
         return event
 
@@ -697,6 +838,8 @@ def train(
         else None,
         "best_step": best_step,
         "best_exposure": best_exposure,
+        "incumbent": {"sha256": model.sha256, "path": config["initial_model"]},
+        "trained_candidate": trained,
         "sampling": exposure_summary(data, counts) if coverage else None,
         "best_sha256": digest(folder / "best.osaval03"),
         "identity": identity,

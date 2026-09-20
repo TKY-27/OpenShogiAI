@@ -39,7 +39,7 @@ def ui_identity(root: Path) -> dict:
 def register(
     root: Path, run: Path, config: dict, model: Path, output: Path, *, rehearsal=False
 ) -> dict:
-    """Only the C2 descriptor is mutable; failed or rehearsal registration restores its bytes."""
+    """Register one descriptor; failure or rehearsal restores its previous bytes."""
     from .evaluator_run import RUNTIME_SOURCES, inside
 
     policy = config["development_integration"]
@@ -71,7 +71,10 @@ def register(
     )
     if json.loads(report.read_text()).get("status") != "PASS":
         raise ValueError("candidate audit did not pass")
-    descriptor = inside("local/core-prototype/r4c2.json", exists=False)
+    selection = policy.get("selection", "r4c2")
+    if selection not in {"r4c2", "r4c3"}:
+        raise ValueError("unreviewed registration target")
+    descriptor = inside(f"local/core-prototype/{selection}.json", exists=False)
     previous = descriptor.read_bytes() if descriptor.exists() else None
     if previous is not None:
         atomic(output / "previous-descriptor.json", previous)
@@ -136,7 +139,7 @@ def register(
                 "node",
                 "scripts/verify-development-candidate.mjs",
                 url + "/#/match",
-                "r4c2",
+                selection,
                 sha,
                 str(output / "browser"),
             ],

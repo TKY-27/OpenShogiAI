@@ -88,7 +88,9 @@ def _starts(dataset: Path, seed: int) -> tuple[list[dict], dict]:
     raise ValueError("need 16 distinct development-test trajectory roots at ply 16 or 12..32")
 
 
-def _defense_starts(dataset: Path, seed: int, groups: list[str]) -> tuple[list[dict], dict]:
+def _defense_starts(
+    dataset: Path, seed: int, groups: list[str], preferred_families: list[str] | None = None
+) -> tuple[list[dict], dict]:
     """Four predeclared strata, four distinct games each; never rank by scores."""
     manifest = json.loads((dataset / "manifest.json").read_text())
     ref = next(r for r in manifest["artifacts"] if r["path"] == "development_test-rows.jsonl.gz")
@@ -110,15 +112,23 @@ def _defense_starts(dataset: Path, seed: int, groups: list[str]) -> tuple[list[d
             if row["game"] not in permitted:
                 raise ValueError("development-test lineage mismatch")
             lo, hi = bounds[group]
+            if row["family"] in (preferred_families or []):
+                lo = 0  # Authored early-contact tests are selected before results are observed.
             if row["kind"] == "root" and lo <= row["ply"] <= hi:
                 pools[group].append(row)
     selected, seen = {}, set()
     for group in groups:
         selected[group], games = [], set()
-        for row in sorted(
+        ordered = sorted(
             pools[group],
             key=lambda r: hashlib.sha256(encoded([seed, r["game"], r["ply"]])).digest(),
-        ):
+        )
+        preferred = preferred_families or []
+        reserved = [next((r for r in ordered if r["family"] == f), None) for f in preferred]
+        ordered = [r for r in reserved if r is not None] + [
+            r for r in ordered if r["family"] not in preferred
+        ]
+        for row in ordered:
             key = min(symmetry_keys(row["sfen"]))
             if row["game"] in games or key in seen:
                 continue
@@ -148,7 +158,7 @@ def _plan(root: Path, config: dict) -> dict:
     assets["dataset_manifest"] = _reference(root, dataset / "manifest.json")
     defense = bool(config.get("groups"))
     starts, rows = (
-        _defense_starts(dataset, config["seed"], config["groups"])
+        _defense_starts(dataset, config["seed"], config["groups"], config.get("preferred_families"))
         if defense
         else _starts(dataset, config["seed"])
     )

@@ -10,7 +10,7 @@
   checks. Never inspect or repartition final holdout contents during routine development.
 - Generated data, models, logs and receipts belong in ignored `local/`; Cargo output belongs
   in `target/`. Never commit weights, teacher assets, secrets or machine-specific paths.
-- Keep the allowlisted representative W256, r3, defense, C1 and C2 models with matching
+- Keep the allowlisted representative W256, r3, defense, C1 and distinct C3 models with matching
   runtime/profile/hash/provenance and necessary recovery assets. Do not publish every checkpoint.
   Old campaigns do not require permanent retention of every intermediate artifact.
 - Before deleting, verify actual paths, symlinks/mounts, references and open files; stay inside
@@ -56,8 +56,8 @@
   the old Session 2 restrictions above apply to the old defense run, not this new round.
   Luna resumes the preserved initial updates in local/runs/r4-c1/attempt-01, never step zero.
   Missing optional screens do not gate independent completion. Stop at awaiting_astra_review.
-  C2/C3, publication, weight distribution, public-default promotion and main integration
-  still require the user's separate explicit instruction.
+  This historical C1 authorization was superseded by the later C2 and C3 instructions.
+  Publication, weight distribution, public-default promotion and main integration still require GO.
 
 - The explicit 2026-09-20 R4-C2 authorization supersedes the C1-only and single-production-model
   policies. The sole current handoff is docs/status.md and configs/evaluator-main.json.
@@ -65,7 +65,18 @@
   resumes it, completes the fixed round, then executes the reviewed local OSUI registration and
   browser check without designing/changing code or requiring Astra solely for integration.
   The legacy terminal state awaiting_astra_review means user-play waiting when development/result
-  is PASS. C3, model distribution, external previews, main integration and deployment need separate GO.
+  is PASS. Model distribution, external previews, main integration and deployment need separate GO.
 - Public play/analysis remains book-free and uses one selected configuration throughout a game.
   Future distribution is an explicit rights-verified representative allowlist. Display generations
   in the order `最新←→開発初期`, not as a strength ranking. Broad OSUI analysis/UX work follows training.
+
+- The explicit 2026-09-21 R4-C3 authorization supersedes the old C3 prohibition.
+  Astra prepares the one C3 plan, verifies preserved updates/resume/export and local play,
+  then stops normally at ready_for_luna. A separately user-started Luna Max/max resumes
+  the prefix and completes the fixed round through reviewed local OSUI registration/browser QA.
+  Incumbent, distinct optimizer-updated trained_candidate and adoption are separate.
+  A best0 incumbent, weak updated candidate, or optional missing screen never prevents
+  independent candidate comparison/registration. Do not rename incumbent weights as C3.
+  C2 identical weights/runtime are a defense alias in UI; retain its experiment/checkpoints.
+  C4, public preview/distribution/default promotion, main integration and paid resources
+  require another explicit GO. Local development and reviewed work-branch commit/push are authorized.
