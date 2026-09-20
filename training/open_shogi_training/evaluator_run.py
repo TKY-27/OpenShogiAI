@@ -481,6 +481,23 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
                 raise ValueError("previous operation outside run")
             _reference(path, previous["sha256"])
         config["_calendar_policy"] = revision["calendar_policy"]
+    if "development_verification" in revision:
+        browser = revision["development_verification"]
+        name = "scripts/verify-development-candidate.mjs"
+        if (
+            config.get("round", {}).get("id") != "R4-C3"
+            or browser.get("path") != name
+            or browser.get("original_sha256")
+            != config["development_integration"]["ui_identity"]["files"][name]
+            or not re.fullmatch(r"[a-f0-9]{40}", browser.get("commit", ""))
+        ):
+            raise ValueError("only the C3 browser verification script can be revised")
+        committed = subprocess.check_output(
+            ["git", "show", f"{browser['commit']}:{name}"], cwd=ROOT.parent / "OpenShogiUI"
+        )
+        if hashlib.sha256(committed).hexdigest() != _hash(browser["sha256"]):
+            raise ValueError("browser revision is not committed code")
+        config["development_integration"]["ui_identity"]["files"][name] = browser["sha256"]
     expected = {**config["code"]["files"], **revision["files"]}
     for name, sha in revision["files"].items():
         committed = subprocess.check_output(
@@ -1282,6 +1299,26 @@ def _approve_operations(
             "commit": code["commit"],
             "files": changed,
         }
+        if config.get("round", {}).get("id") == "R4-C3":
+            from .evaluator_development import ui_identity
+
+            original = config["development_integration"]["ui_identity"]["files"]
+            ui = ui_identity(ROOT)
+            changed_ui = {
+                p
+                for p in original.keys() | ui["files"].keys()
+                if original.get(p) != ui["files"].get(p)
+            }
+            name = "scripts/verify-development-candidate.mjs"
+            if changed_ui:
+                if changed_ui != {name}:
+                    raise ValueError("operational revision cannot change OSUI product code")
+                revision["development_verification"] = {
+                    "path": name,
+                    "commit": ui["commit"],
+                    "original_sha256": original[name],
+                    "sha256": ui["files"][name],
+                }
         if config.get("resource_epoch"):
             revision["resource_policy"] = RESOURCE_POLICY
         if abolish_calendar_limit or "calendar_policy" in previous:
@@ -3372,7 +3409,15 @@ def main():
         from .evaluator_development import rehearsal
 
         with _lease(path):
-            config = verify(path)
+            revision = None
+            if (path / "approved-operation.json").exists():
+                ref = _json(path / "approved-operation.json")
+                revision_path = inside(ref["path"])
+                if revision_path.parent != path / "operations":
+                    raise ValueError("operation revision outside run")
+                _reference(revision_path, ref["sha256"])
+                revision = _json(revision_path)
+            config = verify(path, operation_revision=revision)
             if (
                 _state(path)["status"] != "ready_for_luna"
                 or _residual_stage_group(path) is not None

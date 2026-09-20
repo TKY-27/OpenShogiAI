@@ -175,3 +175,49 @@ def test_updated_route_registers_when_incumbent_best0_and_optional_screen_missin
     assert registered["model"]["sha256"] == digest(candidate)
     descriptor = json.loads((tmp_path / "local/core-prototype/r4c3.json").read_text())
     assert descriptor["leaf"]["sha256"] == digest(candidate)
+
+
+def test_operational_browser_revision_cannot_change_product_or_training(tmp_path, monkeypatch):
+    import copy
+    import hashlib
+
+    from open_shogi_training import evaluator_run as runner
+    from open_shogi_training.evaluator_data import atomic, digest
+
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    atomic(tmp_path / "run.json", b"original sealed experiment")
+    name = "scripts/verify-development-candidate.mjs"
+    old, updated = "a" * 64, hashlib.sha256(b"corrected selectors").hexdigest()
+    config = {
+        "round": {"id": "R4-C3"},
+        "code": {"commit": "b" * 40, "files": {}},
+        "training": {"seed": 1, "learning_rate": 1e-5},
+        "development_integration": {"ui_identity": {"files": {name: old}}},
+    }
+    revision = {
+        "schema": "open_shogiai_operation_revision/v1",
+        "run_sha256": digest(tmp_path / "run.json"),
+        "original_code_commit": "b" * 40,
+        "commit": "c" * 40,
+        "files": {},
+        "development_verification": {
+            "path": name,
+            "original_sha256": old,
+            "sha256": updated,
+            "commit": "d" * 40,
+        },
+    }
+    monkeypatch.setattr(runner.subprocess, "check_output", lambda *a, **k: b"corrected selectors")
+    before = copy.deepcopy(config)
+    assert runner._operation_code(tmp_path, config, revision) == {}
+    assert config["training"] == before["training"]
+    assert config["development_integration"]["ui_identity"]["files"][name] == updated
+    for key, value in (
+        ("path", "src/CorePrototype.tsx"),
+        ("original_sha256", "e" * 64),
+        ("sha256", "f" * 64),
+    ):
+        invalid = copy.deepcopy(revision)
+        invalid["development_verification"][key] = value
+        with pytest.raises(ValueError):
+            runner._operation_code(tmp_path, copy.deepcopy(before), invalid)
