@@ -1,10 +1,21 @@
-# R4-C2 — Astra準備・最終実行確認中
+# R4-C2 — ready_for_luna / step8正常pause
 
 人間向け正本はこの文書、機械向け正本は `configs/evaluator-main.json`。
 今回の明示承認（2026-09-20）はC2一ラウンドとローカル開発登録まで。
-C2の初期更新・別プロセスresume・後学習経路の実証を終えてから `ready_for_luna` とする。
+C2の初期更新・別プロセスresume・後学習経路の実証が完了し、正式pause済み。
 Lunaは別セッションでユーザーが起動する。互いを起動しない。
 **棋力向上・ユーザーへの安定勝利・対初段は未検証。** C1採用保留を維持する。
+
+実run `local/runs/r4-c2/attempt-01`、run SHA-256
+`79dff50b1d7a1c7466d7d0984dfbed5f85af92460c9d5235091ac8285b378dcd`。
+原封印はOSAI `62bef42`、OSUI `e691e6f`。停止中に統合段階の進捗監視表と結果照合を
+補完し、正式 `approve-operations` で運用改訂 `096e86ea…`（commit `f590901`）を記録。
+原封印・4更新・学習/data設定は維持。手編集した成功状態や後継runはない。
+step4→正式pause→別プロセスstdin=/dev/null resume→step8を確認済み。
+乱数/順序hash、optimizer step、単調なcounts、run/data identityは一致した。
+実optimizer投入はHao1,564・防御生成386・r3 replay98の**計2,048局面/2,048例**。
+bestはまだ初期step0（C2追加露出0）。初回定期検証前の最新step8を経路実証に用いる。
+この8更新をLunaが継続し、捨てたりstep0へ戻したりしない。
 
 ## 継承した成果と診断
 
@@ -24,6 +35,17 @@ C1の学習プールにはこれに由来する483,451局面、AobaZero 8,016局
 Apery D12 focus 53局面（既存35再ラベル＋18新規）が入った。
 C1全体の実optimizer投入はreplay387,312例、新追加側129,104例。
 新追加側8,069局面は16回反復。bestまでと全体を混同しない。
+保存済み最終countsと完全一致するdeterministic sampler再現で、best時点の内訳も照合した。
+
+| round / 実際の出典 | bestのseen / 延べ例 | 全体のseen / 延べ例 |
+|---|---:|---:|
+| 防御 / 独自Apery生成 | 139,261 / 289,478 | 160,194 / 578,802 |
+| 防御 / 独自r3 replay | 91,501 / 103,036 | 155,059 / 206,226 |
+| C1 / 防御生成由来 | 62,141 / 76,255 | 132,847 / 302,198 |
+| C1 / r3 replay | 20,787 / 21,332 | 74,719 / 85,114 |
+| C1 / Apery focus | 53 / 214 | 53 / 848 |
+| C1 / AobaZero | 8,016 / 32,327 | 8,016 / 128,256 |
+
 祖先W256等の全生涯露出は今回確定しておらず、新取得局面を祖先未見と断言しない。
 根拠は既存runのmanifest/training.jsonと `local/r4-c1-review/training-review.json`。
 
@@ -103,7 +125,7 @@ Haoは全1,583,895局面を見て最大2回、replay最大3回を確認した。
 
 ## 唯一のLuna入口と開発登録
 
-cwdはOpenShogiAIのGitルート。初期prefixの正式確認後、このresumeだけを実行する。
+cwdはOpenShogiAIのGitルート。初期prefixの正式確認済み。このresumeだけを実行する。
 
 ```sh
 PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 </dev/null
@@ -113,7 +135,7 @@ PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run 
 取得/prepareが必要な環境では、同設定の固定4shardだけを
 `PYTHONPATH=training uv run --frozen python -m open_shogi_training.r4_sources configs/evaluator-main.json`
 で取得・検証できる。今回は既に準備済みなので再生成不要。
-`seal`はAstra準備で一度だけ実施済みになるまで、この入口を実行しない。
+`seal`はAstraが実施済み。Lunaは再sealせず、この入口から既存更新を継続する。
 
 正式経路はgenerate検証→prepare snapshot→train→audit/screen→固定arena→integrate。
 `integrate`がcheckpoint-bound bestを監査し、実Wasm/profile/hashを照合する。
@@ -125,6 +147,7 @@ OSUIはloopback **http://127.0.0.1:5175/#/match** で起動・再利用する。
 既存5174のユーザー用プロセスは止めない。新登録のdefaultは防御のまま。
 「最新←→開発初期」の順にR4-C2/C1/防御/r3/W256を選択し、照合完了後に対局。
 一対局一構成、途中切替禁止、旧応答破棄、モデル別TT/Worker分離を維持する。
+旧重みも共通のpure-v3探索で動かすため、当時のAI全体の完全再現とは区別する。
 高品質でも既存の3分/10分時計とhard stopを守る。完全な選抜重みを使用する。
 
 実ブラウザー検証は`OpenShogiUI/scripts/verify-development-candidate.mjs` を自動実行し、
@@ -140,12 +163,35 @@ Browser専用skillは利用不可のため、frontend-testing-debugging skillの
 同じ登録/ブラウザー経路を小さく通す。最後に暫定descriptorを戻す。
 本Arena完了/棋力採用のreceiptは作らない。
 
+今回の正式rehearsalは**PASS**。step8 export
+`e20a1f73a3dd50cf035e36ae9290b6143274ab59ef215547d939b8ac7aa658f6` を使用。
+先後2局とも64手上限で未採点、期限違反0。勝ち/引分へ読み替えない。
+任意screen19件はnot_run、screen_pass=nullのまま登録・ブラウザーまで通過した。
+実Chromeで3分・高品質の先後応手、Worker実identity、stop/再対局、USI/診断保存、
+1280px/390px描画、console error0を確認。暫定C2 descriptorは正常復元済みで、
+現時点のC2ボタンは本学習後の登録待ち。C2を学習完了候補として公開していない。
+
+Wasm/native実監査は10 roots/300 childrenで差0。モデル8,679,836 bytes。
+当機のNode内実Wasmはmodel load148ms、full evaluation平均0.0293ms（128回）。
+単一model load後のWasm linear memory割当32,833,536 bytes（live heapの測定ではない）。
+学習用全checkpointをブラウザーに載せていない。
+根拠: `local/runs/r4-c2/attempt-01/post-training-rehearsal/`。
+
+検証: `make check` PASS（Python1,172件・Rust・format/lint・boundary/rights/provenance・
+決定的Wasm）、運用修正後の対象71件PASS、OSUI `npm run check` PASS（236件）。
+2代表モデルのローカルbuild出力監査と実Chrome切替/応手もPASS。初期loadは防御のみ、
+C1選択後だけC1重みを取得し、登録外weights/dataの出力なし。
+証拠は `local/r4-c2-preparation/`。コード差分レビュー・秘密/重み混入確認済み。
+未実施はC2本学習・本Arena・C2の10分Web実対局・ユーザー対局、後工程の解析UI/広範UX。
+部分試験のPASSをそれらの達成と混同しない。
+
 ## 保持範囲と後工程
 
 代表W256/r3/防御/C1/C2と対応runtime/profile/hash/来歴、sealed split、bestと有限resume
 checkpoint、復旧証拠を保持。今回不明ファイルや旧枝の削除はしない。
 開始時OSAI未追跡 `.playwright-mcp/` は保護。OSUIは開始時clean。
 開始HEADはOSAI95e33e1/OSUI0d04f27、両方codex/core-prototype。
+準備資産は約1.8GiB、実run約756MiB、最終確認時の空き約292GiB。削除なし。
 
 本番一モデル制約を撤回。将来の公開は権利確認した代表allowlistで、重み/optimizer/
 元データを通常Gitへ入れない。OSUIの公開allowlistは未承認の空配列でfail closed。
