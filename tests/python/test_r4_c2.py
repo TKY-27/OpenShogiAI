@@ -199,10 +199,19 @@ def test_failed_registration_restores_existing_descriptor(tmp_path, monkeypatch)
         },
     }
     output = tmp_path / "local/proof"
+    from test_evaluator_run import audit_report, put
+
+    put(tmp_path / "scripts/check_evaluator_model.mjs")
 
     def command(args, **kwargs):
         if "check_evaluator_model.mjs" in args[1]:
-            (output / "model-audit.json").write_text('{"status":"PASS"}')
+            audit_report(
+                tmp_path,
+                tmp_path / "local",
+                config,
+                model=model,
+                report_path=output / "model-audit.json",
+            )
         else:
             raise subprocess.CalledProcessError(1, args)
 

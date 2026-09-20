@@ -2500,8 +2500,10 @@ def _training_summary(run: Path, config: dict) -> dict:
     return result
 
 
-def _audit_report(run: Path, config: dict) -> dict:
-    value = _json(run / "model-audit.json")
+def _audit_report(
+    run: Path, config: dict, *, report: Path | None = None, model: Path | None = None
+) -> dict:
+    value = _json(report or run / "model-audit.json")
     if (
         value.get("schema") != "open_shogiai_evaluator_export_audit/v1"
         or value.get("runtime") != "actual-wasm-in-node"
@@ -2521,7 +2523,7 @@ def _audit_report(run: Path, config: dict) -> dict:
         "moduleJs": inside(config["runtime"]["module"]["path"]),
         "wasm": inside(config["runtime"]["wasm"]["path"]),
         "nativeProbe": inside(config["runtime"]["replay"]["path"]),
-        "model": selected_model(run),
+        "model": model or selected_model(run),
     }
     for name, path in paths.items():
         _reference(path, value["artifacts"][name]["sha256"])

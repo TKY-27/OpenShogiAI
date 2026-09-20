@@ -247,8 +247,8 @@ def test_completion_receipt_cannot_skip_missing_or_changed_artifacts(prepared):
         runner._verify_completion(run, "generate", config)
 
 
-def audit_report(root: Path, run: Path, config: dict) -> Path:
-    model = put(run / "fit/best.osaval03", b"best model")
+def audit_report(root: Path, run: Path, config: dict, *, model=None, report_path=None) -> Path:
+    model = model or put(run / "fit/best.osaval03", b"best model")
     paths = {
         "auditScript": root / "scripts/check_evaluator_model.mjs",
         "model": model,
@@ -267,7 +267,7 @@ def audit_report(root: Path, run: Path, config: dict) -> Path:
         "parity": {"errors": 0, "roots": 10, "children": 300, "maximumCpDifference": 0},
         "artifacts": {name: {"sha256": digest(path)} for name, path in paths.items()},
     }
-    return put(run / "model-audit.json", encoded(report))
+    return put(report_path or run / "model-audit.json", encoded(report))
 
 
 def test_interrupted_audit_can_reuse_only_a_matching_success_report(prepared):

@@ -40,7 +40,7 @@ def register(
     root: Path, run: Path, config: dict, model: Path, output: Path, *, rehearsal=False
 ) -> dict:
     """Register one descriptor; failure or rehearsal restores its previous bytes."""
-    from .evaluator_run import RUNTIME_SOURCES, inside
+    from .evaluator_run import RUNTIME_SOURCES, _audit_report, inside
 
     policy = config["development_integration"]
     ui = root.parent / "OpenShogiUI"
@@ -55,22 +55,22 @@ def register(
     output.mkdir(parents=True, exist_ok=True)
     sha = digest(model)
     report = output / "model-audit.json"
-    subprocess.run(
-        [
-            "node",
-            str(root / "scripts/check_evaluator_model.mjs"),
-            str(root / config["runtime"]["module"]["path"]),
-            str(model),
-            sha,
-            str(root / config["runtime"]["replay"]["path"]),
-            str(report),
-        ],
-        cwd=root,
-        check=True,
-        timeout=180,
-    )
-    if json.loads(report.read_text()).get("status") != "PASS":
-        raise ValueError("candidate audit did not pass")
+    if not report.exists():
+        subprocess.run(
+            [
+                "node",
+                str(root / "scripts/check_evaluator_model.mjs"),
+                str(root / config["runtime"]["module"]["path"]),
+                str(model),
+                sha,
+                str(root / config["runtime"]["replay"]["path"]),
+                str(report),
+            ],
+            cwd=root,
+            check=True,
+            timeout=180,
+        )
+    _audit_report(run, config, report=report, model=model)
     selection = policy.get("selection", "r4c2")
     if selection not in {"r4c2", "r4c3"}:
         raise ValueError("unreviewed registration target")

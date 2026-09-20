@@ -149,11 +149,18 @@ def test_updated_route_registers_when_incumbent_best0_and_optional_screen_missin
     assert review["move_quality_screen_pass"] is None
     atomic(run / "candidate-review.json", encoded(review))
     output = run / "development"
+    from test_evaluator_run import audit_report, put
+
+    put(tmp_path / "scripts/check_evaluator_model.mjs")
+    audit_calls = []
 
     def command(args, **kwargs):
         if "check_evaluator_model.mjs" in args[1]:
             assert Path(args[3]) == candidate
-            atomic(output / "model-audit.json", encoded({"status": "PASS"}))
+            audit_calls.append(args)
+            audit_report(
+                tmp_path, run, config, model=candidate, report_path=output / "model-audit.json"
+            )
         else:
             assert args[3] == "r4c3"
             atomic(
@@ -175,6 +182,11 @@ def test_updated_route_registers_when_incumbent_best0_and_optional_screen_missin
     assert registered["model"]["sha256"] == digest(candidate)
     descriptor = json.loads((tmp_path / "local/core-prototype/r4c3.json").read_text())
     assert descriptor["leaf"]["sha256"] == digest(candidate)
+    assert development.register(tmp_path, run, config, candidate, output)["status"] == "PASS"
+    assert len(audit_calls) == 1
+    candidate.write_bytes(b"changed candidate")
+    with pytest.raises(ValueError, match="artifact changed"):
+        development.register(tmp_path, run, config, candidate, output)
 
 
 def test_operational_browser_revision_cannot_change_product_or_training(tmp_path, monkeypatch):
