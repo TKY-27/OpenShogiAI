@@ -16,6 +16,7 @@ import torch
 from torch.nn import functional as functional
 
 from .evaluator_data import atomic, digest, encoded
+from .evaluator_sampling import exposure_summary
 from .phase10v_model import (
     ACCUMULATOR_GRID,
     CP_PARAMETER_SCALE,
@@ -98,6 +99,17 @@ def grouped_arrays(folder: Path, split: str) -> dict:
             or not np.isin(data["sources"], (0, 1)).all()
         ):
             raise ValueError("invalid source sampling membership")
+    for name in ("sequences", "origins"):
+        path = folder / f"{split}-{name}.npy"
+        if path.exists():
+            data[name] = np.load(path, mmap_mode="r", allow_pickle=False)
+            if (
+                data[name].shape != data["targets"].shape
+                or data[name].dtype.kind not in "ui"
+                or (data[name] < 0).any()
+                or (name == "sequences" and data[name].max() >= len(data[name]))
+            ):
+                raise ValueError("invalid sampling lineage")
     return data
 
 
@@ -312,12 +324,21 @@ def train(
     if model.sha256 != config["initial_sha256"]:
         raise ValueError("initial model identity changed")
     parameters = torch_parameters(model)
-    optimizer = torch.optim.AdamW(parameters, lr=config["learning_rate"], weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(
+        parameters, lr=config["learning_rate"], weight_decay=config.get("weight_decay", 1e-4)
+    )
     generator = torch.Generator().manual_seed(config["seed"])
     step, epoch, offset, exposures, stale, best_step = 0, 0, 0, 0, 0, 0
     counts = torch.zeros(n, dtype=torch.int32)
+    coverage = config.get("coverage_sampler")
+    patience_loss = math.inf
+    best_exposure = None
 
     def next_order():
+        if coverage:
+            from .evaluator_sampling import coverage_order
+
+            return coverage_order(data, counts, config, generator)
         return (
             mixed_order(data, fractions, source_fractions, generator)
             if source_fractions
@@ -361,6 +382,8 @@ def train(
             raise ValueError("invalid checkpoint microbatch size")
         baseline_groups = state.get("baseline_groups")
         best_bytes = state["best_model_bytes"]
+        patience_loss = state.get("patience_loss", state["best_loss"])
+        best_exposure = state.get("best_exposure")
         if hashlib.sha256(best_bytes).hexdigest() != state["best_sha256"]:
             raise ValueError("checkpoint best model checksum mismatch")
         Phase10VModel.from_bytes(best_bytes)
@@ -390,6 +413,13 @@ def train(
             or int(counts.max()) > config["max_epochs"]
         ):
             raise ValueError("checkpoint sampler/exposure mismatch")
+        if coverage:
+            limits = np.array(coverage["maximum_per_example"])[data["sources"]]
+            if (counts.numpy() < 0).any() or (counts.numpy() > limits).any():
+                raise ValueError("checkpoint violates example exposure caps")
+            totals = np.bincount(data["sequences"], weights=counts.numpy())
+            if totals.max() > coverage["maximum_per_sequence"]:
+                raise ValueError("checkpoint violates sequence exposure caps")
         completed = folder / "training.json"
         if completed.exists():
             result = json.loads(completed.read_text())
@@ -431,6 +461,8 @@ def train(
             "train_rows": train_rows,
             "microbatch_size": microbatch_size,
             "baseline_groups": baseline_groups,
+            "patience_loss": patience_loss,
+            "best_exposure": best_exposure,
         }
         try:
             _save_checkpoint(folder, state)
@@ -443,6 +475,7 @@ def train(
 
     def save(reason: str) -> dict:
         nonlocal best_loss, best_bytes, stale, best_step, train_loss_sum, train_rows
+        nonlocal patience_loss, best_exposure
         groups = None
         if fractions:
             groups = (
@@ -487,15 +520,30 @@ def train(
             )
         if not all(math.isfinite(v) for v in metrics.values()):
             raise FloatingPointError("nonfinite validation")
-        improved = eligible and metrics["loss"] < best_loss * (
+        improved = eligible and metrics["loss"] < (patience_loss if coverage else best_loss) * (
             1 - config["minimum_relative_improvement"]
         )
+        observed_best = eligible and metrics["loss"] < best_loss
+        exposure = None
+        coverage_ready = True
+        if coverage:
+            exposure = exposure_summary(data, counts)
+            coverage_ready = all(
+                exposure["round_sources"][str(i)]["seen"]
+                >= exposure["round_sources"][str(i)]["pool"] * required
+                for i, required in enumerate(coverage["minimum_coverage_before_patience"])
+            )
         current = _snapshot(parameters, model.seed)
-        if improved:
-            best_loss, stale, best_step = metrics["loss"], 0, step
+        if observed_best if coverage else improved:
+            best_loss, best_step = metrics["loss"], step
             best_bytes = current.to_bytes()
-        else:
+            best_exposure = exposure
+        if improved:
+            patience_loss, stale = metrics["loss"], 0
+        elif coverage_ready:
             stale += 1
+        else:
+            stale = 0
         event = {
             **metrics,
             "step": step,
@@ -514,6 +562,12 @@ def train(
             "groups": groups,
             "replay_guard_eligible": eligible,
             "new_source": new_metrics,
+            "observed_best_saved": observed_best if coverage else improved,
+            "meaningful_improvement": improved,
+            "coverage_ready_for_patience": coverage_ready,
+            "sampling": exposure,
+            "recent_new_unique": int((counts > 0).sum())
+            - (history[-1]["seen_unique_positions"] if history else 0),
         }
         history.append(event)
         train_loss_sum, train_rows = 0.0, 0
@@ -541,6 +595,9 @@ def train(
                 break
             order = next_order()
             offset = 0
+        if not len(order):
+            reason = "sampling_pool_exhausted"
+            break
         indexes = order[offset : offset + config["batch_size"]]
         warmup = min(1.0, (step + 1) / config["warmup_steps"])
         progress = min(1.0, step / config["max_steps"])
@@ -639,6 +696,8 @@ def train(
         if fractions
         else None,
         "best_step": best_step,
+        "best_exposure": best_exposure,
+        "sampling": exposure_summary(data, counts) if coverage else None,
         "best_sha256": digest(folder / "best.osaval03"),
         "identity": identity,
         "history": history,

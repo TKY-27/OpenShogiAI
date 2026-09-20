@@ -371,7 +371,10 @@ def _teacher_observation(
         diagnosis = getattr(teacher, "search_diagnostics", {})
         bestmove_line = getattr(error, "bestmove_line", None) or diagnosis.get("bestmove_line")
         stdout_tail = getattr(error, "stdout_tail", "") or diagnosis.get("stdout_tail", "")
-        stem = f"{game:06d}-ply{ply:04d}-{branch}-{uuid.uuid4().hex}"
+        game_key = (
+            f"{game:06d}" if isinstance(game, int) else hashlib.sha256(encoded(game)).hexdigest()
+        )
+        stem = f"{game_key}-ply{ply:04d}-{branch}-{uuid.uuid4().hex}"
         prefix = output / "failures" / f"{stem}.prefix.json.gz"
         atomic(prefix, gzip.compress(encoded({"moves": moves, "records": records}), mtime=0))
         receipt = {

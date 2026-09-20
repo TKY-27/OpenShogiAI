@@ -1,8 +1,8 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "r4-c1-attempt-01",
-  "output": "local/runs/r4-c1/attempt-01",
-  "seed": 20260918,
+  "run_id": "r4-c2-attempt-01",
+  "output": "local/runs/r4-c2/attempt-01",
+  "seed": 20260920,
   "generation": {
     "first_game": 0,
     "games": 90,
@@ -221,22 +221,22 @@
       }
     },
     "prepared_dataset": {
-      "path": "local/r4-c1-preparation/dataset",
-      "manifest_sha256": "41eda6ac25760d041bc76f19e59338ac09bddc4335ae7c5953d9a4bba06cc3fe"
+      "path": "local/r4-c2-preparation/dataset",
+      "manifest_sha256": "96781b8baaaaaa4a9ea9148fa5a1cb79b3524f4536502133cb0b4b716f21c95f"
     }
   },
   "training": {
     "device": "cpu",
     "threads": 4,
     "batch_size": 256,
-    "max_steps": 2048,
-    "max_epochs": 16,
-    "validation_every": 256,
-    "patience": 6,
+    "max_steps": 12288,
+    "max_epochs": 12,
+    "validation_every": 512,
+    "patience": 4,
     "minimum_relative_improvement": 0.002,
-    "learning_rate": 5e-05,
-    "minimum_learning_rate": 5e-06,
-    "warmup_steps": 128,
+    "learning_rate": 2e-05,
+    "minimum_learning_rate": 2e-06,
+    "warmup_steps": 256,
     "gradient_norm_limit": 5.0,
     "sampling_fractions": [
       0.25,
@@ -246,10 +246,24 @@
     ],
     "maximum_replay_regression_ratio": 1.03,
     "source_fractions": [
-      0.75,
-      0.25
+      0.25,
+      0.75
     ],
-    "microbatch_size": 32
+    "microbatch_size": 32,
+    "weight_decay": 0.01,
+    "coverage_sampler": {
+      "epoch_examples": 262144,
+      "maximum_per_example": [
+        3,
+        2
+      ],
+      "maximum_per_sequence": 512,
+      "maximum_per_sequence_batch": 4,
+      "minimum_coverage_before_patience": [
+        0.5,
+        0.6
+      ]
+    }
   },
   "resources": {
     "maximum_wall_seconds": 604800,
@@ -266,7 +280,7 @@
     "paired_3minute_games": 24,
     "paired_10minute_games": 8,
     "startpos_demonstration_games": 4,
-    "criterion": "One validation-selected best against defense-best1536 under the same new runtime. Fixed 32 stress games (24x3min,8x10min), colors paired, no win-until-retry. Require all scored/valid; each clock score >0.5, family-cluster bootstrap one-sided 95% lower >0.5; each stratum score >=0.5; each of four development scalar losses <=1.03 baseline. 4 clock/color startpos demonstrations are separate, not independent replicates. Draws=0.5; maxplies/invalid unscored; time/deadline failures adverse. Missing optional screens stay unverified and never gate completion/adoption metrics. No automatic adoption or shodan claim.",
+    "criterion": "One validation-selected best against defense-best1536 under the same new runtime. Fixed 32 stress games (24x3min,8x10min), colors paired, no win-until-retry. Require all scored/valid; each clock score >0.5, family-cluster bootstrap one-sided 95% lower >0.5; each stratum score >=0.5; each of four development scalar losses <=1.03 baseline. 4 clock/color startpos demonstrations are separate, not independent replicates. Draws=0.5; maxplies/invalid unscored; time/deadline failures adverse. Optional screen: 2 unknown trajectories per group plus retained known regressions, one finite D16/2M observation per requested move; incomplete labels excluded. Its descriptive metrics never block independent completion. Missing cells remain unverified. No automatic adoption or shodan claim.",
     "groups": [
       "general",
       "opening",
@@ -277,25 +291,23 @@
     "screen_probe_nodes": 100000,
     "regression_positions_path": "local/runs/defense-20260912/diagnosis/regression-roots.json",
     "regression_positions_sha256": "8a8304f2b3c71646a7ccdcf7e02177cb08886e3b5658588a0364f3559e8d5269",
-    "optional_screen": "retained_only",
-    "minimum_stratum_score": 0.5
+    "optional_screen": "execute",
+    "minimum_stratum_score": 0.5,
+    "screen_per_group": 2
   },
   "unique_data_goal": {
     "actual_manifest": {
-      "path": "local/r4-c1-preparation/dataset",
-      "manifest_sha256": "41eda6ac25760d041bc76f19e59338ac09bddc4335ae7c5953d9a4bba06cc3fe"
+      "path": "local/r4-c2-preparation/dataset",
+      "manifest_sha256": "96781b8baaaaaa4a9ea9148fa5a1cb79b3524f4536502133cb0b4b716f21c95f"
     },
-    "train_unique": 491520,
-    "new_train": 8034,
-    "relabeled_train": 35,
-    "new_validation": 1826,
-    "source_games": {
-      "public_train": 72,
-      "public_validation": 18,
-      "focus_train_roots": 12
-    },
+    "train_unique": 2067381,
+    "new_source_train": 1583895,
+    "new_source_total": 1600279,
+    "supplied_records": 30784543,
+    "spaced_candidates": 1801041,
     "report_actual_counts": true,
-    "independence": "existing source-game/family split and symmetry keys preserved; public games retain historical partitions; no final holdout opened; new metadata has source/trajectory identity"
+    "ancestral_exposure": "unknown; acquired unique is not proof of never seen by an ancestor",
+    "independence": "PSV has no original game ID/history; resets and first retained state infer families, not certified independence"
   },
   "controller": "off; continue all scalar evaluator layers, no handcrafted nonterminal scores",
   "excluded_development_sfens": [
@@ -310,7 +322,7 @@
     "format": "OSAVAL03",
     "width": 256,
     "objective": "all-layer scalar smooth L1 cp/600, exact Q20/f64 accumulation; no nonterminal handcrafted scores",
-    "selection": "weighted validation .75 replay/.25 new; all four replay group loss <=1.03 initial defense; best plus latest two coherent resume checkpoints; development_test never selects best"
+    "selection": "One raw validation-loss minimum eligible under four replay group <=1.03 guards; .25 replay/.75 Hao scalar loss. Patience .2% is separate from raw best preservation, starts after replay50%/Hao60% pool coverage. One best only in fixed Arena; latest retained for exact resume, not extra candidate selection."
   },
   "state_machine": {
     "schema": "open_shogiai_evaluator_state/v2",
@@ -344,32 +356,33 @@
     "cwd": ".",
     "cwd_identity": "OpenShogiAI Git root; exact absolute execution_cwd saved in ignored run.json",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c1/attempt-01 </dev/null",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c1/attempt-01 </dev/null",
-    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c1/attempt-01",
-    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c1/attempt-01",
-    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c1/attempt-01 </dev/null",
-    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c1/attempt-01 --pause-after-updates 4 </dev/null",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 </dev/null",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 </dev/null",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c2/attempt-01",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c2/attempt-01",
+    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c2/attempt-01 </dev/null",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c2/attempt-01 --pause-after-updates 4 </dev/null",
     "stages": [
-      "generate (verify existing inputs only)",
+      "generate (verify prepared public/replay inputs)",
       "prepare (immutable snapshot)",
-      "train (continue saved prefix)",
-      "audit (native/Wasm and scalar; optional teacher retained-only)",
-      "arena (fixed 36 games)",
-      "awaiting_astra_review"
+      "train (resume preserved prefix)",
+      "audit (native/Wasm, unknown scalar groups and bounded optional screens)",
+      "arena (fixed36 games)",
+      "integrate (register, serve loopback, verify actual browser both sides)",
+      "awaiting_astra_review (legacy label; user play waiting)"
     ],
-    "best": "local/runs/r4-c1/attempt-01/fit/best.osaval03",
-    "resume_checkpoint": "local/runs/r4-c1/attempt-01/fit/resume.json",
-    "state": "local/runs/r4-c1/attempt-01/state.json",
-    "logs": "local/runs/r4-c1/attempt-01/supervisor.log; local/runs/r4-c1/attempt-01/monitor.jsonl",
-    "review_result": "local/runs/r4-c1/attempt-01/candidate-review.json",
+    "best": "local/runs/r4-c2/attempt-01/fit/best.osaval03",
+    "resume_checkpoint": "local/runs/r4-c2/attempt-01/fit/resume.json",
+    "state": "local/runs/r4-c2/attempt-01/state.json",
+    "logs": "local/runs/r4-c2/attempt-01/supervisor.log; local/runs/r4-c2/attempt-01/monitor.jsonl",
+    "review_result": "local/runs/r4-c2/attempt-01/candidate-review.json",
     "finite_bounds": {
-      "acquisition": "complete: 90 public records; 2 retries each; no giant archive",
-      "new_teacher": "complete:12 train roots,53 labeled states, depth12/2M nodes per state; no further generation",
-      "train_updates": 2048,
-      "epochs": 16,
-      "validation_interval": 256,
-      "patience": 6,
+      "acquisition": "4 spread Hao PSV shards, each exact pinned hash; 2 acquisition attempts; completed 1,231,381,720 bytes",
+      "new_teacher": "only optional finite development screen; no wholesale D12 relabel",
+      "train_updates": 12288,
+      "epochs": 12,
+      "validation_interval": 512,
+      "patience": 4,
       "microbatch": [
         32,
         16,
@@ -385,17 +398,78 @@
       "No calendar expiry; pressure/swap diagnostic only. Real allocation failure uses microbatch reduction then finite process retries and resource wait. Stop is respected.",
       "Exact same-run resume restores optimizer, random states, sampler and update count; completed receipts and game IDs are verified and skipped.",
       "Missing optional teacher labels are unknown; valid independent scalar labels admitted; no fake zero/PASS. Mandatory integrity, split, finite output, legality and saving remain required.",
-      "Only C1; no C2, full holdout, public-default promotion, weight distribution, main merge or deploy."
+      "Only C2; no C3, unopened final holdout, public promotion/distribution, main merge or deploy."
     ],
-    "acquisition": "Public-domain AobaZero annotated premove root probabilities mapped by upstream 600-logit; same historical source hashes/partitions. Old defense replay and 53 direct Apery D12 root labels (including played children) preserve lineage. See docs/source-audits/aobazero.md."
+    "acquisition": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.r4_sources configs/evaluator-main.json",
+    "rehearsal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run rehearsal local/runs/r4-c2/attempt-01 </dev/null",
+    "development_url": "http://127.0.0.1:5175/#/match",
+    "source_audit": "docs/source-audits/hao.md; GCT independent hcpe3 identified but distribution conditions unresolved, zero selected"
   },
   "round": {
-    "id": "R4-C1",
+    "id": "R4-C2",
     "attempt": 1,
-    "authorization": "explicit_user_20260918",
+    "authorization": "explicit_user_20260920",
     "baseline": "defense-best1536",
-    "scope": "offense construction, coordination, timing and continuity; preserve general/defense/endgame",
+    "scope": "Hao D9 root supervision for opening, attack and endgame with general/defense replay; existing verified book-free pure search, controller OFF",
     "optimizer": "fresh AdamW and warmup/cosine schedule for this round; exact optimizer/RNG/sampler restoration for every resume",
-    "next_round": "only after explicit user direction following arena, Astra browser review and human games"
+    "next_round": "C3 only after user games and separate explicit direction; no automatic repeat"
+  },
+  "development_integration": {
+    "port": 5175,
+    "selection": "r4c2",
+    "registry": "local/core-prototype/r4c2.json",
+    "policy": "automatic local registration after audit and fixed arena even if adoption criteria not met; exact candidate identity, no silent fallback; failed registration restores prior descriptor",
+    "allowed_mutation": "C2 descriptor and ignored run evidence only; no OSUI code modification by Luna",
+    "terminal_meaning": "awaiting_astra_review is retained legacy machine status; development/result.json PASS means ready for user games, no Astra restart required for integration"
+  },
+  "data_preparation": {
+    "output": "local/r4-c2-preparation/dataset",
+    "source": "nodchip_hao_depth9",
+    "revision": "7bc19a9e880ea307a52c57f57ea6c752301b25bc",
+    "license": "MIT; publisher dataset README metadata, not engine license",
+    "stride": 16,
+    "replay": {
+      "path": "local/runs/defense-20260912/recovery-r3/data/dataset",
+      "manifest_sha256": "67289ab62f78a1cb8f54af25367e27df729c7d3fc96cd6ad9bb573203a2dda42"
+    },
+    "split_guard": "local/frozen/metadata/split-guard.json",
+    "exclusions": "local/runs/defense-20260912/exclusions.json",
+    "shards": [
+      {
+        "path": "local/r4-c2-preparation/sources/hao-0.bin",
+        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=000.bin?download=true",
+        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=000.bin",
+        "bytes": 289626920,
+        "sha256": "878e58fde10423e797499065d2d27717d99651f9536a27a7d72818db077e5fc1"
+      },
+      {
+        "path": "local/r4-c2-preparation/sources/hao-1.bin",
+        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=032.bin?download=true",
+        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695340981.thread_index=032.bin",
+        "bytes": 295929280,
+        "sha256": "26dc5dc787d55f0f7becce17347ee75af3d5bb5681d2ffad24f4a71449621bcb"
+      },
+      {
+        "path": "local/r4-c2-preparation/sources/hao-2.bin",
+        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695606850.thread_index=001.bin?download=true",
+        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695606850.thread_index=001.bin",
+        "bytes": 337325800,
+        "sha256": "52962a795b0f8999f82ef25ce424753ef3e4c4a9f22b76cfe316462b4fbd1833"
+      },
+      {
+        "path": "local/r4-c2-preparation/sources/hao-3.bin",
+        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/7bc19a9e880ea307a52c57f57ea6c752301b25bc/kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695872823.thread_index=002.bin?download=true",
+        "name": "kifu.tag=train.depth=9.num_positions=1000000000.start_time=1695872823.thread_index=002.bin",
+        "bytes": 308499720,
+        "sha256": "6b7b55a7c71f619943be7fced6662c4dc8bec6055599a89e7f1f0a7031fa5651"
+      }
+    ],
+    "license_evidence": [
+      {
+        "path": "local/r4-c2-preparation/hao-readme.txt",
+        "sha256": "677e5da7b738ad84cf89b175fc5f81775ca198b173662cc701a267224c38b839",
+        "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/raw/7bc19a9e880ea307a52c57f57ea6c752301b25bc/README.md"
+      }
+    ]
   }
 }

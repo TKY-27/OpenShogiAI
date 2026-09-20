@@ -205,17 +205,28 @@ def _report(output: Path, plan_sha: str, cases: list[dict], mode: str) -> dict:
     return report
 
 
-def screen(root: Path, run: Path, config: dict) -> dict:
-    mode = config.get("_optional_screen", "execute")
+def screen(
+    root: Path,
+    run: Path,
+    config: dict,
+    *,
+    output: Path | None = None,
+    model: Path | None = None,
+    mode: str | None = None,
+) -> dict:
+    mode = mode or config.get("_optional_screen", "execute")
     if mode not in {"execute", "retained_only"}:
         raise ValueError("unknown optional screen mode")
-    output = run / "move-screen"
+    output = output or run / "move-screen"
+    model = model or run / "fit/best.osaval03"
     output.mkdir(exist_ok=True)
     generation = copy.deepcopy(config["generation"])
     generation["teacher_depth"] = config["evaluation"]["screen_teacher_depth"]
     generation["teacher_nodes"] = 2_000_000
     generation["defense_campaign"]["probe_nodes"] = config["evaluation"]["screen_probe_nodes"]
-    roots = select_roots(run / "data/dataset", config["seed"])
+    roots = select_roots(
+        run / "data/dataset", config["seed"], config["evaluation"].get("screen_per_group", 16)
+    )
     known_path = root / config["evaluation"]["regression_positions_path"]
     if (
         known_path.is_symlink()
@@ -225,7 +236,7 @@ def screen(root: Path, run: Path, config: dict) -> dict:
     roots.extend(json.loads(known_path.read_text())["roots"])
     plan = {
         "run_sha256": digest(run / "run.json"),
-        "candidate_sha256": digest(run / "fit/best.osaval03"),
+        "candidate_sha256": digest(model),
         "roots": roots,
         "config": config["evaluation"],
     }
@@ -254,7 +265,7 @@ def screen(root: Path, run: Path, config: dict) -> dict:
         return _report(output, plan_sha, cases, mode)
     candidate_config = copy.deepcopy(generation)
     candidate_config.update(
-        leaf_path=str((run / "fit/best.osaval03").relative_to(root)),
+        leaf_path=str(model.relative_to(root)),
         leaf_sha256=plan["candidate_sha256"],
     )
     # Searches run sequentially; no training or teacher work overlaps a measured probe.

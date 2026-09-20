@@ -35,6 +35,13 @@ PAUSED_EXIT = 75
 RESOURCE_EXIT = 76
 SCHEMA = "open_shogiai_evaluator_run/v1"
 STAGES = ("generate", "prepare", "train", "audit", "arena")
+ALL_STAGES = (*STAGES, "integrate")
+
+
+def _stages(config):
+    return ALL_STAGES if config.get("development_integration") else STAGES
+
+
 STATES = {
     "prepared",
     "ready_for_luna",
@@ -167,15 +174,18 @@ def _validate_config(config: dict) -> None:
     _number(config["seed"], 0, 2**63 - 1, "seed")
     generation = config["generation"]
     if "round" in config:
-        if (
-            config["round"].get("id") != "R4-C1"
-            or config["round"].get("authorization") != "explicit_user_20260918"
-        ):
+        if (config["round"].get("id"), config["round"].get("authorization")) not in {
+            ("R4-C1", "explicit_user_20260918"),
+            ("R4-C2", "explicit_user_20260920"),
+        }:
             raise ValueError("unapproved learning round")
         ref = generation["prepared_dataset"]
         _hash(ref["manifest_sha256"])
         inside(ref["path"])
-        if config["evaluation"].get("optional_screen") != "retained_only":
+        if (
+            config["round"]["id"] == "R4-C1"
+            and config["evaluation"].get("optional_screen") != "retained_only"
+        ):
             raise ValueError("R4-C1 optional screen is retained-only")
     for name, low, high in (
         ("first_game", 0, 10**9),
@@ -224,8 +234,26 @@ def _validate_config(config: dict) -> None:
         if policy.get("unique_data_goal") != config["unique_data_goal"]:
             raise ValueError("recovery coverage cannot weaken the learning data goal")
     training = config["training"]
-    if "round" in config and training.get("source_fractions") != [0.75, 0.25]:
+    if config.get("round", {}).get("id") == "R4-C1" and training.get("source_fractions") != [
+        0.75,
+        0.25,
+    ]:
         raise ValueError("unreviewed R4 replay/new mixture")
+    if config.get("round", {}).get("id") == "R4-C2" and (
+        training.get("source_fractions") != [0.25, 0.75]
+        or training.get("coverage_sampler")
+        != {
+            "epoch_examples": 262144,
+            "maximum_per_example": [3, 2],
+            "maximum_per_sequence": 512,
+            "maximum_per_sequence_batch": 4,
+            "minimum_coverage_before_patience": [0.5, 0.6],
+        }
+        or config.get("development_integration", {}).get("port") != 5175
+        or config["evaluation"].get("optional_screen") != "execute"
+        or config["evaluation"].get("screen_per_group") != 2
+    ):
+        raise ValueError("unreviewed R4-C2 coverage/integration policy")
     if training["device"] != "cpu":
         raise ValueError("only the measured CPU training route is enabled")
     for name, maximum in (
@@ -627,6 +655,8 @@ def seal(config_path: Path) -> dict:
         inputs["prepared_manifest"] = _reference(source / "manifest.json")
         for i, ref in enumerate(manifest["artifacts"]):
             inputs[f"prepared_{i}"] = _reference(source / ref["path"], ref["sha256"])
+    for i, ref in enumerate(config.get("data_preparation", {}).get("license_evidence", [])):
+        inputs[f"source_rights_{i}"] = _reference(inside(ref["path"]), ref["sha256"])
     sources = {name: _reference(inside(path)) for name, path in RUNTIME_SOURCES.items()}
     campaign = generation.get("defense_campaign")
     if campaign:
@@ -655,6 +685,10 @@ def seal(config_path: Path) -> dict:
             inputs[f"replay_artifact_{i}"] = _reference(
                 inside(Path(replay["path"]) / ref["path"]), ref["sha256"]
             )
+    if config.get("development_integration"):
+        from .evaluator_development import ui_identity
+
+        config["development_integration"]["ui_identity"] = ui_identity(ROOT)
     run.parent.mkdir(parents=True, exist_ok=True)
     # This temporary directory is exclusively created here and never named by a sealed run.
     staging = Path(tempfile.mkdtemp(prefix=f".{run.name}.sealing-", dir=run.parent))
@@ -1316,7 +1350,7 @@ def _prepare_resume(run: Path) -> tuple[dict, dict]:
     snapshot = _resume_snapshot(run, config)
     if "round" not in config:
         _finalize_existing_generation(run, config, snapshot)
-    for stage in STAGES:
+    for stage in _stages(config):
         if (run / f"{stage}-complete.json").exists():
             _verify_completion(run, stage, config)
     if current.get("reason") == "swap_limit" and "_resource_policy" not in config:
@@ -1692,7 +1726,7 @@ def diagnose(run: Path, *, _lease_held: bool = False) -> dict:
                 )
                 if snapshot:
                     report["progress"] = {k: v for k, v in snapshot.items() if k != "files"}
-                for stage in STAGES:
+                for stage in _stages(config):
                     if (run / f"{stage}-complete.json").exists():
                         check(
                             stage + "_completion",
@@ -2465,6 +2499,11 @@ def _completion_artifacts(run: Path, stage: str) -> list[dict]:
         ],
         "audit": [run / "model-audit.json", run / "development-test.json"],
         "arena": [run / "arena" / "arena.json", run / "arena" / "plan.json"],
+        "integrate": [
+            run / "development/result.json",
+            run / "development/browser/browser.json",
+            run / "development/model-audit.json",
+        ],
     }[stage]
     if stage == "generate" and _json(run / "run.json")["generation"].get("recovery_policy"):
         paths.append(run / "data/recovery-queue.json")
@@ -2824,7 +2863,7 @@ def work(
         initial_swap = _swap_bytes() if initial_swap is None else initial_swap
         _number(initial_swap, 0, 1024**5, "initial_swap_bytes")
         retries = prior.get("retries", {})
-        if not isinstance(retries, dict) or any(stage not in STAGES for stage in retries):
+        if not isinstance(retries, dict) or any(stage not in _stages(config) for stage in retries):
             raise ValueError("invalid persisted retries")
         for count in retries.values():
             _number(count, 0, config["resources"]["maximum_retries"], "retry count")
@@ -2869,7 +2908,7 @@ def work(
                 if state.get("resource_baseline") != attempt.get("resource_baseline"):
                     raise ValueError("attempt resource baseline changed")
             atomic(run / "state.json", encoded(state))
-            for stage in STAGES:
+            for stage in _stages(config):
                 if pause_after_new_games is not None and stage != "generate":
                     state.update(status="ready_for_luna", reason="generation_probe_complete")
                     break
@@ -3041,7 +3080,9 @@ def _candidate_review(run: Path) -> dict:
             scalar_preserved and (is_round or screen_pass) and arena_pass
         ),
         "promotion_performed": False,
-        "decision_owner": "Astra; review actual independence, evidence and browser behavior",
+        "decision_owner": "user after fixed comparison and playable development registration"
+        if is_round
+        else "Astra",
         "human_shodan_validated": False,
     }
     atomic(run / "candidate-review.json", encoded(result))
@@ -3057,7 +3098,7 @@ def stage_run(
     pause_after_arena_games: int | None = None,
     pause_after_updates: int | None = None,
 ) -> dict:
-    if stage not in STAGES:
+    if stage not in ALL_STAGES:
         raise ValueError("unknown stage")
     with _lease(run, inherited_fd):
         config = verify(run)
@@ -3072,7 +3113,7 @@ def stage_run(
         if (run / f"{stage}-complete.json").exists():
             return _verify_completion(run, stage, config)
         if config["generation"].get("defense_campaign"):
-            for previous in STAGES[: STAGES.index(stage)]:
+            for previous in _stages(config)[: _stages(config).index(stage)]:
                 _verify_completion(run, previous, config)
         _register_stage_group(run, stage)
         generation = config["generation"]
@@ -3201,6 +3242,12 @@ def stage_run(
                     "audit_sha256": digest(report),
                     "unknown_development_metrics": metrics,
                 }
+            elif stage == "integrate":
+                from .evaluator_development import register
+
+                _training_summary(run, config)
+                _audit_report(run, config)
+                result = register(ROOT, run, config, run / "fit/best.osaval03", run / "development")
             else:
                 from .evaluator_arena import run_arena
 
@@ -3245,12 +3292,13 @@ def main():
             "stop",
             "status",
             "diagnose",
+            "rehearsal",
             "work",
             "stage",
         ),
     )
     parser.add_argument("path")
-    parser.add_argument("stage", nargs="?", choices=STAGES)
+    parser.add_argument("stage", nargs="?", choices=ALL_STAGES)
     parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--pause-after-new-games", type=int, default=None)
     parser.add_argument("--pause-after-arena-games", type=int, default=None)
@@ -3275,6 +3323,17 @@ def main():
             admit_existing_data=args.admit_existing_data,
             post_training_evaluation=args.post_training_evaluation,
         )
+    elif args.command == "rehearsal":
+        from .evaluator_development import rehearsal
+
+        with _lease(path):
+            config = verify(path)
+            if (
+                _state(path)["status"] != "ready_for_luna"
+                or _residual_stage_group(path) is not None
+            ):
+                raise ValueError("rehearsal requires a normally paused initial prefix")
+            result = rehearsal(ROOT, path, config)
     elif args.command == "diagnose":
         result = diagnose(path)
     elif args.command == "migrate":

@@ -192,6 +192,11 @@ def public_rows(root: Path, folder: Path, cli: Path) -> tuple[list[dict], list[d
     return rows, refs
 
 
+def build_pool(root: Path, plan: dict, output: Path) -> dict:
+    """The same R4 assembly path with a pinned external pool instead of C1 relabels."""
+    return build(root, plan, output)
+
+
 def build(root: Path, plan: dict, output: Path) -> dict:
     """Prepare once from actual pinned data; do not reassign any historical split."""
     if output.exists():
@@ -201,14 +206,26 @@ def build(root: Path, plan: dict, output: Path) -> dict:
     refs.extend(reference(root, Path(p)) for p in plan.get("provenance", []))
     old = json.loads((replay / "manifest.json").read_text())
     refs.extend(reference(root, replay / r["path"], r["sha256"]) for r in old["artifacts"])
-    incoming, public_refs = public_rows(root, root / plan["public"], root / plan["cli"])
-    refs.extend(public_refs)
-    focus = root / plan["focus"]
-    refs.append(reference(root, focus))
-    focus_data = json.loads(focus.read_text())
-    incoming.extend(focus_data["rows"])
-    for ref in focus_data["inputs"]:
-        refs.append(reference(root, Path(ref["path"]), ref["sha256"]))
+    external = bool(plan.get("shards"))
+    if external:
+        from .r4_sources import rows
+
+        incoming = []
+        for shard in plan["shards"]:
+            path = root / shard["path"]
+            refs.append(reference(root, path, shard["sha256"]))
+            incoming.extend(rows(path, shard, plan["stride"]))
+            print(json.dumps({"decoded": shard["path"], "spaced_rows": len(incoming)}), flush=True)
+        focus_data = {"policy": "no mandatory relabel; valid published root labels reused"}
+    else:
+        incoming, public_refs = public_rows(root, root / plan["public"], root / plan["cli"])
+        refs.extend(public_refs)
+        focus = root / plan["focus"]
+        refs.append(reference(root, focus))
+        focus_data = json.loads(focus.read_text())
+        incoming.extend(focus_data["rows"])
+        for ref in focus_data["inputs"]:
+            refs.append(reference(root, Path(ref["path"]), ref["sha256"]))
     guard = root / plan["split_guard"]
     refs.append(reference(root, guard))
     blocked = {
@@ -222,21 +239,24 @@ def build(root: Path, plan: dict, output: Path) -> dict:
     refs.append(reference(root, exclusions))
     blocked.update(json.loads(exclusions.read_text())["symmetry_keys"])
     owners, conflicts = {}, set()
+    retained = {s: set() for s in SPLITS}
     # Existing symmetry keys were certified by the original prepare. Their bytes
     # are pinned above. New states are checked against every old partition.
     for split in SPLITS:
         with gzip.open(replay / f"{split}-rows.jsonl.gz", "rt") as stream:
-            for line in stream:
+            for index, line in enumerate(stream):
                 row = json.loads(line)
                 key = row["symmetry_key"]
                 if key in owners:
                     raise ValueError("replay split/dedup invariant failed")
                 owners[key] = split
+                if not external or split == "train" or int(key[:8], 16) % 24 == 0:
+                    retained[split].add(index)
     existing_keys = set(owners)
     for row in incoming:
         keys = symmetry_keys(row["sfen"])
         key = row["symmetry_key"] = min(keys)
-        if row["split"] not in ("train", "validation"):
+        if row["split"] not in (SPLITS if external else ("train", "validation")):
             raise ValueError("new data cannot open or reassign heldout data")
         if keys & blocked or (key in owners and owners[key] != row["split"]):
             conflicts.add(key)
@@ -262,8 +282,12 @@ def build(root: Path, plan: dict, output: Path) -> dict:
             raise ValueError("focus relabel leaves original train family")
         used.add(key)
         new_rows[row["split"]].append(row)
+    if external:
+        # Validation is a fixed hash-selected subsample, never a model-selected prefix.
+        for split in ("validation", "development_test"):
+            new_rows[split] = sorted(new_rows[split], key=lambda r: r["symmetry_key"])[:8192]
     replaced = used & existing_keys
-    counts = dict(old["unique_positions"])
+    counts = {s: len(retained[s]) for s in SPLITS}
     counts["train"] -= len(replaced)
     for split in SPLITS:
         counts[split] += len(new_rows[split])
@@ -297,23 +321,39 @@ def build(root: Path, plan: dict, output: Path) -> dict:
                 building / f"{split}-sources.npy", mode="w+", dtype="uint8", shape=(counts[split],)
             ),
         }
+        if external:
+            for name in ("sequences", "origins"):
+                arrays[name] = np.lib.format.open_memmap(
+                    building / f"{split}-{name}.npy",
+                    mode="w+",
+                    dtype="uint32",
+                    shape=(counts[split],),
+                )
         old_arrays = {
             k: np.load(replay / f"{split}-{k}.npy", mmap_mode="r", allow_pickle=False)
             for k in arrays
-            if k != "sources"
+            if k not in ("sources", "sequences", "origins")
         }
         source_counts, group_counts, lineages = Counter(), Counter(), set()
-        index = 0
+        index, sequence_ids = 0, {}
+
+        def lineage(row, new, index, arrays=arrays, sequence_ids=sequence_ids):
+            if external:
+                key = f"{row['source']}:{row['game']}"
+                arrays["sequences"][index] = sequence_ids.setdefault(key, len(sequence_ids))
+                arrays["origins"][index] = 2 if new else 0 if row["source"] == "generated" else 1
+
         with gzip.open(building / f"{split}-rows.jsonl.gz", "wb") as destination:
             with gzip.open(replay / f"{split}-rows.jsonl.gz", "rt") as stream:
                 for source_index, line in enumerate(stream):
                     row = json.loads(line)
-                    if row["symmetry_key"] in replaced:
+                    if source_index not in retained[split] or row["symmetry_key"] in replaced:
                         continue
                     for kind, values in old_arrays.items():
                         arrays[kind][index] = values[source_index]
                     arrays["sources"][index] = 0
                     row.update(round_source=0, split=split)
+                    lineage(row, False, index)
                     destination.write(encoded(row) + b"\n")
                     source_counts["replay"] += 1
                     group_counts[row["group"]] += 1
@@ -336,6 +376,7 @@ def build(root: Path, plan: dict, output: Path) -> dict:
                 arrays["targets"][index] = np.clip(value["value"], -20000, 20000)
                 arrays["groups"][index] = GROUPS.index(row["group"])
                 arrays["sources"][index] = 1
+                lineage(row, True, index)
                 destination.write(encoded(row) + b"\n")
                 source_counts[row["source"]] += 1
                 group_counts[row["group"]] += 1
@@ -362,7 +403,21 @@ def build(root: Path, plan: dict, output: Path) -> dict:
         "source_rows": sources,
         "distributions": distributions,
         "source_families": actual,
-        "source_games": old["source_games"],
+        "source_games": old["source_games"]
+        + (
+            list(
+                {
+                    (r["game"], r["split"]): {
+                        "game": r["game"],
+                        "family": r["family"],
+                        "split": r["split"],
+                    }
+                    for r in new_rows["development_test"]
+                }.values()
+            )
+            if external
+            else []
+        ),
         "replay_manifest_sha256": digest(replay / "manifest.json"),
         "new_unique_positions": sum(len(v) for v in new_rows.values()) - len(replaced),
         "relabeled_existing_train": len(replaced),
@@ -376,6 +431,32 @@ def build(root: Path, plan: dict, output: Path) -> dict:
             "not final holdout"
         ),
     }
+    if external:
+        report.update(
+            supplied_records=sum(s["bytes"] // 40 for s in plan["shards"]),
+            spaced_candidate_examples=len(incoming),
+            origins={
+                "0": "defense_generated_apery",
+                "1": "ancestral_replay",
+                "2": "nodchip_hao_depth9",
+            },
+            ancestry="defense best1536 continuation; exact ancestral per-example exposures unknown",
+            series_limitations=(
+                "PSV has no original game ID/history; resets and first "
+                "retained state infer families, not certified independence"
+            ),
+            source_games_scope=(
+                "old sealed ledger plus new retained development games; "
+                "all new sequences live in compressed row metadata"
+            ),
+            teacher_conflicts=(
+                "existing labels retained, incoming duplicates excluded; never averaged"
+            ),
+            evaluation_subsample=(
+                "old splits retained; hash modulo24 for old "
+                "validation/development; new hash-first8192 each"
+            ),
+        )
     atomic(building / "manifest.json", encoded(report))
     building.rename(output)
     return report

@@ -10,9 +10,9 @@
   checks. Never inspect or repartition final holdout contents during routine development.
 - Generated data, models, logs and receipts belong in ignored `local/`; Cargo output belongs
   in `target/`. Never commit weights, teacher assets, secrets or machine-specific paths.
-- Keep one comparison model plus only justified test/reproduction exceptions under
-  `local/frozen/manifest.json`. Keep essential rights/partition metadata and unique sealed
-  evaluation assets. Old campaigns do not require permanent retention of every artifact.
+- Keep the allowlisted representative W256, r3, defense, C1 and C2 models with matching
+  runtime/profile/hash/provenance and necessary recovery assets. Do not publish every checkpoint.
+  Old campaigns do not require permanent retention of every intermediate artifact.
 - Before deleting, verify actual paths, symlinks/mounts, references and open files; stay inside
   the repository and record paths/reasons/approximate sizes locally. Do not use repository-wide
   `git clean -xfd`, delete `.git`, rewrite history or delete unknown user files.
@@ -58,3 +58,14 @@
   Missing optional screens do not gate independent completion. Stop at awaiting_astra_review.
   C2/C3, publication, weight distribution, public-default promotion and main integration
   still require the user's separate explicit instruction.
+
+- The explicit 2026-09-20 R4-C2 authorization supersedes the C1-only and single-production-model
+  policies. The sole current handoff is docs/status.md and configs/evaluator-main.json.
+  Astra prepares and verifies a preserved optimizer prefix; the separately user-started Luna
+  resumes it, completes the fixed round, then executes the reviewed local OSUI registration and
+  browser check without designing/changing code or requiring Astra solely for integration.
+  The legacy terminal state awaiting_astra_review means user-play waiting when development/result
+  is PASS. C3, model distribution, external previews, main integration and deployment need separate GO.
+- Public play/analysis remains book-free and uses one selected configuration throughout a game.
+  Future distribution is an explicit rights-verified representative allowlist. Display generations
+  in the order `最新←→開発初期`, not as a strength ranking. Broad OSUI analysis/UX work follows training.

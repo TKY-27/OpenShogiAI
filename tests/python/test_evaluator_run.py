@@ -72,6 +72,8 @@ def prepared(tmp_path, monkeypatch):
     config = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
     config["resources"]["maximum_retries"] = 1
     config.pop("round", None)
+    config.pop("development_integration", None)
+    config.pop("data_preparation", None)
     config["generation"].pop("prepared_dataset", None)
     config["generation"].pop("defense_campaign", None)
     config["generation"].pop("recovery_policy", None)
