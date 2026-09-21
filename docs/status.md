@@ -1,4 +1,4 @@
-# R4-C4 — 本runの実経路確認中
+# R4-C4 — ready_for_luna / 本run prefix・再開・ローカル実対局確認完了
 
 人間向け正本はこの文書、機械向け正本は `configs/evaluator-main.json`。
 2026-09-21の明示承認によりC4を構築。Astraは実装と短い本run prefixまで、
@@ -164,5 +164,64 @@ R4-C4は比較候補・未採用と表示し、表示順は正確に「最新←
 ホスト負荷を含め2–8日程度の幅を見る。新しいD12の第2候補追加分を含む本prefixで再計測する。
 学習・比較は別加算し、未測定を完了日時にしない。
 
-本run prefix、別プロセスresume、正式post-training rehearsal、ブラウザー、最終Git identityは
-実行後にこの節へ追記する。それまではreadyとは扱わない。
+本run `r4-c4-attempt-01` は正式resumeでstep4→8、停止処理の運用改訂を反映した
+追加1更新でstep9、exposures/seenとも2,304、全optimizer step9。
+新規16局は39.65秒、772観測盤面/538 scalar行/32重要root/24探索分岐。
+548教師task完了、欠測0、詰み6局、64手打切り10局（未採点）。
+prepared poolはtrain8,498 / validation17,231 / development17,085。
+既知祖先に対する新規は283 / 55 / 118。prefixで実際に学習へ入った新規88、
+再label14、再利用2,202。少量prefixは経路確認であり本強化の完了ではない。
+本生成は上の24,576–40,960局計画で継続する。
+
+step4→8→9で生成/manifest hashは不変、別PID・stdin=/dev/nullからresume。
+step9の量子化exportは
+`f1dc0192e52dac5ad8607584299888704b872aae7c85f6a62649f4bd6eabbe6f`。
+C3からの6tensor変更要素数は676,529 / 243 / 12,286 / 16 / 64 / 4。
+metadataだけの変更ではない。prefixは通常の学習履歴として残し、step0へ戻さない。
+
+正式 `rehearsal` はこの重みで30秒・先後2局を実施、1局詰み完了/1局64手未採点。
+絶対期限違反0、任意screenはnullのまま、登録・実ブラウザーへ継続した。
+強さの評価局へ算入しない。native/実Wasmで10root・300合法子、cp/WDL差0、
+成り・打ち・持駒・王移動と差分/全計算が一致。モデル/取得bytes/Worker/Wasmを照合した。
+PC1280px/小画面390pxで盤面を目視し、横overflowなし。先後、3分/10分、標準/高品質、
+停止/再開/投了/再対局、棋譜・診断保存、対局中モデル切替禁止、console error0を確認。
+取得20–26ms、module/compile約1–3ms、重み初期化145–148ms、合計167–175ms。
+確認した検索は379–1,376ms、準備と実探索を分離して記録。
+これはこのMacのChromeでの値であり、実モバイル機の熱/電池/性能は未測定。
+
+一時C4 descriptorは検証後に元の未登録状態へ戻した。現行代表モデルは保護した。
+最終C4はLunaが選抜した後に正式登録され、上のURLで選んで対局できる。
+本番公開・既定昇格ではない。ブラウザー再確認だけの追加Astraセッションは不要。
+証拠: `local/runs/r4-c4/attempt-01/post-training-rehearsal/result.json`、
+同 `registration/browser/browser.json` とPC/mobile PNG、`registration/rollback.json`。
+
+注入試験では正常early stop/全世代不採用でもG03まで新しいtaskを投入、
+採用時はactorを更新して最大G05、任意screen/null最終確認でも登録へ進むことを確認。
+これらの比較結果はtmp fixtureであり、本runの棋力証拠・学習データに混ぜていない。
+教師worker終了の累積上限、bit-exact resume、資源待ちとpause、改竄export拒否、
+登録失敗時の旧descriptor復元を回帰確認した。
+全体 `make check` PASS（Python1,183件＋Rust・lint・依存/権利/来歴・native/Wasm再生成）。
+その後追加したC4停止修正を含む関連27件もPASS。
+OSUI `npm run check` はローカル2モデルallowlist指定でPASS、240 tests。
+公開allowlistは未決定のまま保持した。CIは両PRとも未設定でありCI合格とは報告しない。
+
+封印code: `992273bf731ba79da46f1a50f6145cf5b06d45df`。
+run SHA256: `ff4a77338ebb180cf73f7d0dcb248bcc313e12888e76d5c346c47e27dc74edd2`。
+UI code: `cab4895`。停止処理だけの運用修正code: `eeaceb5`。
+正式運用改訂 `9566ea3e008ba7a279ab4639754beb10e9d67c9c1310d4ef01aa11c9544d1602` は
+旧一世代queueの書出しをC4 pauseで呼ばない修正。元seal・学習条件・失敗予算は変更しない。
+Lunaは通常resumeだけでこの改訂を検証・適用する。
+最新checkpoint SHA256:
+`446a4995893d0eaf44b43cff2f25bad3f564ec37894589addb5e9f1437b0a3ce`。
+`pause` 実行後のstateはready_for_luna / requested_pause、残留owned process0・強制signal0。
+
+準備時の空きは約315GiB、本runは約0.5GB。20GiBの保存余裕を維持する。
+学習の大規模throughputはまだ未校正で、更新上限と実績を分ける。
+固定Arenaの時計上限合計は3–5世代＋最終比較で約40–52時間（起動等は別）。
+生成の2–8日という小標本外挿に、学習と固定比較が加わる。完了日時の保証ではない。
+Macのsleep中は計算が進まない。永続状態から再開できるが、Codex会話自体の無期限継続や
+存在しないバックグラウンド監視は約束しない。Lunaは実supervisor/lease/成果を確認する。
+
+次のLunaは既済prefix・ブラウザーrehearsal・全履歴監査をやり直さず、上のresumeから開始。
+正常完了後に同じ依頼を受けてもC4を再生成しない。結果をレビューし、必要な局所修正と
+解析/OSUI改善だけを行い、ユーザー対局と公開GOを待つ。
