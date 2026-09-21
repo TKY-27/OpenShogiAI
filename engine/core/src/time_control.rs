@@ -416,6 +416,7 @@ const fn deadline_after_margin(allocated_ms: u64, requested_margin_ms: u64) -> u
 pub(crate) struct AdaptiveTimeBudget {
     previous: Option<SearchInfo>,
     previous_iteration_ms: f64,
+    previous_growth: f64,
     stable_iterations: u8,
     target_ms: Option<f64>,
 }
@@ -467,10 +468,14 @@ impl AdaptiveTimeBudget {
         } else {
             2.0
         };
+        // Odd/even depths can alternate cheap and expensive iterations. The last
+        // ratio alone underestimates the next expensive depth after a cheap one.
+        let predicted_growth = growth.max(self.previous_growth);
         let stop = elapsed_ms >= target
             || (info.depth >= 2
                 && elapsed_ms >= target * 0.15
-                && elapsed_ms + iteration_ms * growth >= target);
+                && elapsed_ms + iteration_ms * predicted_growth >= target);
+        self.previous_growth = growth;
         self.previous_iteration_ms = iteration_ms;
         self.previous = Some(info.clone());
         stop
@@ -607,6 +612,25 @@ mod tests {
         assert!(!budget.observe(&iteration(2, 300, -400), plan));
         assert_eq!(budget.target_ms(), Some(7_000.0));
         assert_eq!(plan.hard_limit, Some(Duration::from_secs(7)));
+    }
+
+    #[test]
+    fn alternating_depth_cost_does_not_spend_another_expensive_iteration() {
+        let plan = TimeManager::default()
+            .plan(Side::Black, clock_request(600_000), 64)
+            .unwrap();
+        let mut budget = AdaptiveTimeBudget::default();
+        for (depth, elapsed, score) in [
+            (1, 1, 49),
+            (2, 2, 61),
+            (3, 11, 52),
+            (4, 36, 41),
+            (5, 298, 45),
+        ] {
+            assert!(!budget.observe(&iteration(depth, elapsed, score), plan));
+        }
+        assert!(budget.observe(&iteration(6, 1_098, 48), plan));
+        assert_eq!(budget.target_ms(), Some(3_600.0));
     }
 
     proptest! {

@@ -34,6 +34,11 @@ def exposure_summary(data: dict, counts: torch.Tensor) -> dict:
     result["groups"] = {
         str(group): distribution(values[data["groups"] == group]) for group in range(4)
     }
+    if "novelty" in data:
+        result["novelty"] = {
+            name: distribution(values[data["novelty"] == code])
+            for code, name in enumerate(("reused", "relabeled", "new_to_known_ancestry"))
+        }
     return result
 
 
@@ -54,11 +59,26 @@ def coverage_order(data: dict, counts: torch.Tensor, config: dict, generator) ->
     sequences = data["sequences"]
     totals = np.bincount(sequences, weights=values).astype(np.int64)
     picked = []
-    for source, fraction in enumerate(config["source_fractions"]):
+    origin_fractions = policy.get("origin_fractions")
+    strata = (
+        [(int(origin), fraction) for origin, fraction in origin_fractions.items()]
+        if origin_fractions
+        else list(enumerate(config["source_fractions"]))
+    )
+    for source, fraction in strata:
         for group, group_fraction in (
-            enumerate(config["sampling_fractions"]) if source == 0 else [(None, 1.0)]
+            enumerate(config["sampling_fractions"])
+            if source == 0 or origin_fractions
+            else [(None, 1.0)]
         ):
-            mask = (data["sources"] == source) & (values < policy["maximum_per_example"][source])
+            if origin_fractions:
+                limits = np.asarray(policy["maximum_per_example"])[data["sources"]]
+                origins = data["origins"]
+                mask = ((origins < 4) if source == 0 else (origins == source)) & (values < limits)
+            else:
+                mask = (data["sources"] == source) & (
+                    values < policy["maximum_per_example"][source]
+                )
             if group is not None:
                 mask &= data["groups"] == group
             members = np.flatnonzero(mask)

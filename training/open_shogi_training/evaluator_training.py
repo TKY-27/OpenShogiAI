@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import gc
 import hashlib
 import io
@@ -50,12 +51,22 @@ def allocation_failure(error: BaseException) -> bool:
 def _accumulate(parameters: list, data: dict, indexes, microbatch_size: int) -> float:
     """Select rows before evaluation; normalize each sum by the effective batch size."""
     total = 0.0
+    contributions = {}
+    pair_total, pair_count = 0.0, 0
     if not len(indexes):
         raise ValueError("empty optimizer batch")
     for start in range(0, len(indexes), microbatch_size):
         features, lengths, y = batch(data, indexes[start : start + microbatch_size])
         predicted = forward(parameters, features, lengths)
-        loss = functional.smooth_l1_loss(predicted / 600, y / 600, reduction="sum")
+        losses = functional.smooth_l1_loss(predicted / 600, y / 600, reduction="none")
+        loss = losses.sum()
+        if data.get("track_origin_loss"):
+            origins = data["origins"][indexes[start : start + microbatch_size]]
+            for origin in np.unique(origins):
+                mask = origins == origin
+                value = contributions.setdefault(str(origin), {"sum": 0.0, "examples": 0})
+                value["sum"] += float(losses.detach()[torch.from_numpy(mask)].sum())
+                value["examples"] += int(mask.sum())
         if not torch.isfinite(loss):
             raise FloatingPointError("nonfinite training loss")
         (loss / len(indexes)).backward()
@@ -70,6 +81,13 @@ def _accumulate(parameters: list, data: dict, indexes, microbatch_size: int) -> 
             if not torch.isfinite(loss):
                 raise FloatingPointError("nonfinite candidate ordering loss")
             (data["pair_weight"] * loss / len(pairs)).backward()
+            pair_total += float(loss.detach())
+            pair_count += len(chosen)
+    data["batch_loss_contributions"] = {
+        "scalar": contributions,
+        "pair_sum": pair_total,
+        "pairs": pair_count,
+    }
     return total
 
 
@@ -166,7 +184,7 @@ def grouped_arrays(folder: Path, split: str) -> dict:
             or not np.isin(data["sources"], (0, 1)).all()
         ):
             raise ValueError("invalid source sampling membership")
-    for name in ("sequences", "origins"):
+    for name in ("sequences", "origins", "novelty"):
         path = folder / f"{split}-{name}.npy"
         if path.exists():
             data[name] = np.load(path, mmap_mode="r", allow_pickle=False)
@@ -175,6 +193,7 @@ def grouped_arrays(folder: Path, split: str) -> dict:
                 or data[name].dtype.kind not in "ui"
                 or (data[name] < 0).any()
                 or (name == "sequences" and data[name].max() >= len(data[name]))
+                or (name == "novelty" and not np.isin(data[name], (0, 1, 2)).all())
             ):
                 raise ValueError("invalid sampling lineage")
     path = folder / f"{split}-partners.npy"
@@ -403,6 +422,8 @@ def train(
     source_fractions = config.get("source_fractions")
     loader = grouped_arrays if fractions is not None else arrays
     data, validation = loader(dataset, "train"), loader(dataset, "validation")
+    data["track_origin_loss"] = config.get("track_origin_loss", False)
+    loss_contributions = {"scalar": {}, "pair_sum": 0.0, "pairs": 0}
     candidate_policy = config.get("trained_candidate")
     if config.get("pair_weight", 0):
         if "partners" not in data or "partners" not in validation:
@@ -461,6 +482,7 @@ def train(
             for parameter, value in zip(parameters, state["parameters"], strict=True):
                 parameter.copy_(value)
         train_loss_sum, train_rows = state["train_loss_sum"], state["train_rows"]
+        loss_contributions = state.get("loss_contributions", loss_contributions)
         optimizer.load_state_dict(state["optimizer"])
         generator.set_state(state["sampler_rng"])
         torch.set_rng_state(state["torch_rng"])
@@ -567,6 +589,7 @@ def train(
             "order": order,
             "train_loss_sum": train_loss_sum,
             "train_rows": train_rows,
+            "loss_contributions": loss_contributions,
             "microbatch_size": microbatch_size,
             "baseline_groups": baseline_groups,
             "patience_loss": patience_loss,
@@ -620,15 +643,15 @@ def train(
             )
         new_metrics = None
         if source_fractions:
-            new_metrics = evaluate(
-                parameters,
-                validation,
-                config["batch_size"],
-                indexes=np.flatnonzero(validation["sources"] == 1),
-            )
-            metrics["loss"] = (
-                source_fractions[0] * metrics["loss"] + source_fractions[1] * new_metrics["loss"]
-            )
+            new_indexes = np.flatnonzero(validation["sources"] == 1)
+            if len(new_indexes) or not config.get("allow_missing_validation_signals"):
+                new_metrics = evaluate(
+                    parameters, validation, config["batch_size"], indexes=new_indexes
+                )
+                metrics["loss"] = (
+                    source_fractions[0] * metrics["loss"]
+                    + source_fractions[1] * new_metrics["loss"]
+                )
         if not all(math.isfinite(v) for v in metrics.values()):
             raise FloatingPointError("nonfinite validation")
         ordering = (
@@ -636,9 +659,17 @@ def train(
             if data.get("pair_weight")
             else None
         )
-        if ordering and ordering["loss"] is None:
+        if (
+            ordering
+            and ordering["loss"] is None
+            and not config.get("allow_missing_validation_signals")
+        ):
             raise ValueError("no valid validation candidate comparisons")
-        objective = metrics["loss"] + (config["pair_weight"] * ordering["loss"] if ordering else 0)
+        objective = metrics["loss"] + (
+            config["pair_weight"] * ordering["loss"]
+            if ordering and ordering["loss"] is not None
+            else 0
+        )
         improved = (eligible or bool(candidate_policy)) and objective < (
             patience_loss if coverage else best_loss
         ) * (1 - config["minimum_relative_improvement"])
@@ -689,6 +720,7 @@ def train(
             "seen_unique_positions": int((counts > 0).sum()),
             "maximum_exposure": int(counts.max()),
             "train_loss": train_loss_sum / train_rows if train_rows else None,
+            "loss_contributions": copy.deepcopy(loss_contributions),
             "best_step": best_step,
             "best_loss": best_loss,
             "stale_intervals": stale,
@@ -726,7 +758,7 @@ def train(
     while (
         step < config["max_steps"] and epoch < config["max_epochs"] and stale < config["patience"]
     ):
-        if (folder.parent / "STOP").exists():
+        if Path(config.get("stop_path", folder.parent / "STOP")).exists():
             reason = "requested_stop"
             break
         if offset == len(order):
@@ -777,6 +809,16 @@ def train(
             step += 1
             train_loss_sum += loss_sum
             train_rows += len(indexes)
+            if data["track_origin_loss"]:
+                observed = data["batch_loss_contributions"]
+                for origin, values in observed["scalar"].items():
+                    bucket = loss_contributions["scalar"].setdefault(
+                        origin, {"sum": 0.0, "examples": 0}
+                    )
+                    for key, value in values.items():
+                        bucket[key] += value
+                loss_contributions["pair_sum"] += observed["pair_sum"]
+                loss_contributions["pairs"] += observed["pairs"]
             # Every committed optimizer update is durable before another can start.
             persist()
         except (MemoryError, RuntimeError) as error:

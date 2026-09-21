@@ -1,8 +1,8 @@
 {
   "schema": "open_shogiai_evaluator_run/v1",
-  "run_id": "r4-c3-attempt-01",
-  "output": "local/runs/r4-c3/attempt-01",
-  "seed": 20260921,
+  "run_id": "r4-c4-attempt-01",
+  "output": "local/runs/r4-c4/attempt-01",
+  "seed": 20260922,
   "generation": {
     "first_game": 0,
     "games": 90,
@@ -11,8 +11,8 @@
     "sample_stride": 2,
     "deviation_stride": 12,
     "teacher_nodes": 2000000,
-    "leaf_path": "local/runs/defense-20260912/recovery-r3/fit/best.osaval03",
-    "leaf_sha256": "8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a",
+    "leaf_path": "local/runs/r4-c3/attempt-01/fit/trained_candidate.osaval03",
+    "leaf_sha256": "839a9f93398d2c989ca823ed01d88dc1c32e706baa32d5c61b17296114b9b262",
     "teacher_config_path": "local/frozen/metadata/teacher-config.yaml",
     "teacher_binary_sha256": "8ccec09190d643f50b08a0a4b3359a6289656e99f6cf846ad8490a1dc28c3403",
     "split_guard_path": "local/frozen/metadata/split-guard.json",
@@ -219,23 +219,19 @@
         "path": "local/runs/defense-20260912/recovery-r3/data/dataset",
         "manifest_sha256": "67289ab62f78a1cb8f54af25367e27df729c7d3fc96cd6ad9bb573203a2dda42"
       }
-    },
-    "prepared_dataset": {
-      "path": "local/r4-c3-preparation/dataset",
-      "manifest_sha256": "cb755c86f7359299f7e02c4e5504d8ec8ffa776351fcbdc2d380bac4b371e17d"
     }
   },
   "training": {
     "device": "cpu",
     "threads": 4,
     "batch_size": 256,
-    "max_steps": 16384,
-    "max_epochs": 16,
-    "validation_every": 512,
+    "max_steps": 24576,
+    "max_epochs": 24,
+    "validation_every": 1024,
     "patience": 6,
     "minimum_relative_improvement": 0.002,
-    "learning_rate": 1e-05,
-    "minimum_learning_rate": 1e-06,
+    "learning_rate": 6e-06,
+    "minimum_learning_rate": 6e-07,
     "warmup_steps": 128,
     "gradient_norm_limit": 5.0,
     "sampling_fractions": [
@@ -246,26 +242,34 @@
     ],
     "maximum_replay_regression_ratio": 1.03,
     "source_fractions": [
-      0.75,
-      0.25
+      0.3,
+      0.7
     ],
     "microbatch_size": 32,
     "weight_decay": 0.01,
     "coverage_sampler": {
-      "epoch_examples": 262144,
+      "epoch_examples": 524288,
       "maximum_per_example": [
         8,
-        3
+        16
       ],
-      "maximum_per_sequence": 2048,
+      "maximum_per_sequence": 8192,
       "maximum_per_sequence_batch": 4,
       "minimum_coverage_before_patience": [
-        0.6,
-        0.3
-      ]
+        0.4,
+        0.7
+      ],
+      "origin_fractions": {
+        "0": 0.2,
+        "4": 0.5,
+        "5": 0.25,
+        "6": 0.05
+      }
     },
     "pair_weight": 0.25,
-    "trained_candidate": "best_updated_objective_v1"
+    "trained_candidate": "best_updated_objective_v1",
+    "track_origin_loss": true,
+    "allow_missing_validation_signals": true
   },
   "resources": {
     "maximum_wall_seconds": 604800,
@@ -282,7 +286,7 @@
     "paired_3minute_games": 24,
     "paired_10minute_games": 8,
     "startpos_demonstration_games": 4,
-    "criterion": "One distinct validation-selected trained_candidate versus defense best1536, common book-free controller-OFF runtime. Fixed32 stress games 24x3min+8x10min colors paired; 4 startpos demonstrations separate. No repeats until victory. Draw=.5; maxplies/invalid unscored; deadline failures adverse. Adoption recommendation requires each clock>0.5, family-cluster one-sided95% lower>0.5, each stratum>=.5, all four scalar development losses<=1.03 baseline. Optional screens missing remain unknown and never block arena/export/registration. User games required for adoption; no shodan/stable-user-win claim. No C4/publication/main integration.",
+    "criterion": "Fixed common-runtime 32 stress +4 startpos per generation actor comparison; internal admission != public adoption. Final candidate is frozen before separate C3 and defense comparisons. ponder OFF, 3min primary/10min auxiliary. Unscored stays unknown. No shodan claim without human evidence. Final confirmation: selected candidate fixed, 128 fresh C3-driven series, exclude every known training/selection position, preselect32 roots by hash, 64 games per baseline (48x3min+16x10min) plus4 separate startpos demonstrations. No reselection after these results.",
     "groups": [
       "general",
       "opening",
@@ -293,7 +297,7 @@
     "screen_probe_nodes": 100000,
     "regression_positions_path": "local/runs/defense-20260912/diagnosis/regression-roots.json",
     "regression_positions_sha256": "8a8304f2b3c71646a7ccdcf7e02177cb08886e3b5658588a0364f3559e8d5269",
-    "optional_screen": "execute",
+    "optional_screen": "retained_only",
     "minimum_stratum_score": 0.5,
     "screen_per_group": 2,
     "preferred_families": [
@@ -320,8 +324,8 @@
   "model": {
     "format": "OSAVAL03",
     "width": 256,
-    "objective": "OSAVAL03 W256 all-layer scalar cp/600 plus same-source sibling margin ordering; 50cp tolerance and capped600cp margin; no handcrafted nonterminal scores",
-    "selection": "Incumbent remains defense. Preserve guarded overall best independently. Save one best distinct post-update candidate by fixed .75 replay/.25 Hao scalar plus .25 paired ranking validation objective, without replay veto; raw minimum saving independent from .2% patience. Test exactly this one candidate; 3% replay limit remains an adoption diagnostic, never a registration gate."
+    "objective": "All-layer OSAVAL03 W256 cp/600 smooth-L1 plus direct same-teacher equal-depth child ranking, tolerance50cp margin600cp, weight0.25",
+    "selection": "Preserve incumbent, actor, guarded validation best and distinct trained candidate independently; do not rank losses across generations"
   },
   "state_machine": {
     "schema": "open_shogiai_evaluator_state/v2",
@@ -355,32 +359,36 @@
     "cwd": ".",
     "cwd_identity": "OpenShogiAI Git root; exact absolute execution_cwd saved in ignored run.json",
     "seal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run seal configs/evaluator-main.json",
-    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 </dev/null",
-    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 </dev/null",
-    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c3/attempt-01",
-    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c3/attempt-01",
-    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c3/attempt-01 </dev/null",
-    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c3/attempt-01 --pause-after-updates 4 </dev/null",
+    "start": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c4/attempt-01 </dev/null",
+    "resume": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c4/attempt-01 </dev/null",
+    "status": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run status local/runs/r4-c4/attempt-01",
+    "stop": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run stop local/runs/r4-c4/attempt-01",
+    "pause": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run pause local/runs/r4-c4/attempt-01 </dev/null",
+    "probe": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run resume local/runs/r4-c4/attempt-01 --pause-after-updates 4 </dev/null",
     "stages": [
-      "generate (verify prepared public/replay inputs)",
-      "prepare (immutable snapshot)",
-      "train (resume preserved prefix)",
-      "audit (native/Wasm, unknown scalar groups and bounded optional screens)",
-      "arena (fixed36 games)",
-      "integrate (register, serve loopback, verify actual browser both sides)",
-      "awaiting_astra_review (legacy label; user play waiting)"
+      "iterate: prefix resume -> G01..G03, conditional G04/G05 (fresh generate, reanalyse, prepare, train, audit, compare, actor decision)",
+      "freeze selection -> new independent final series -> fixed C3/defense comparisons -> verified local registration and browser",
+      "awaiting_astra_review: legacy label, user play waiting when development PASS"
     ],
-    "best": "local/runs/r4-c3/attempt-01/fit/best.osaval03",
-    "resume_checkpoint": "local/runs/r4-c3/attempt-01/fit/resume.json",
-    "state": "local/runs/r4-c3/attempt-01/state.json",
-    "logs": "local/runs/r4-c3/attempt-01/supervisor.log; local/runs/r4-c3/attempt-01/monitor.jsonl",
-    "review_result": "local/runs/r4-c3/attempt-01/candidate-review.json",
+    "best": "local/runs/r4-c4/attempt-01/selection.json (candidate and incumbent are distinct identities)",
+    "resume_checkpoint": "local/runs/r4-c4/attempt-01/fit/resume.json",
+    "state": "local/runs/r4-c4/attempt-01/state.json",
+    "logs": "local/runs/r4-c4/attempt-01/supervisor.log; local/runs/r4-c4/attempt-01/monitor.jsonl",
+    "review_result": "local/runs/r4-c4/attempt-01/c4-result.json",
     "finite_bounds": {
-      "acquisition": "No new external download; reuse pinned four Hao shards and defense/r3 labels",
-      "new_teacher": "14 authored families x 2 colors x 8 roots, plus at most 48 current-model-child roots; D12 at 2M nodes each, missing excluded locally; optional development screens finite",
-      "train_updates": 16384,
-      "epochs": 16,
-      "validation_interval": 512,
+      "new_generation_games": [
+        24576,
+        40960
+      ],
+      "plus_prefix_games": 16,
+      "plus_final_series_games": 128,
+      "max_plies": 192,
+      "strong_roots_per_game": 8,
+      "teacher": "D8/200k broad; D12/2M strong; 20s per task; 2 cumulative attempts including interruption; three worker exits then stop systemic fault",
+      "optimizer_updates_per_generation": 24576,
+      "maximum_epochs": 24,
+      "prefix_updates": 128,
+      "validation_interval": 1024,
       "patience": 6,
       "microbatch": [
         32,
@@ -391,296 +399,471 @@
         1
       ],
       "allocation_process_retries": 3,
-      "arena": "36 planned tasks; at most one retry for process failure, cumulative clocks; no success-based restart"
+      "arena": "Each generation: 32 stress + 4 startpos, 3min/10min. Final: 64 stress + 4 startpos per C3 and defense. Fixed task budget, one process retry, no score-dependent additions."
     },
     "recovery": [
       "No calendar expiry; pressure/swap diagnostic only. Real allocation failure uses microbatch reduction then finite process retries and resource wait. Stop is respected.",
       "Exact same-run resume restores optimizer, random states, sampler and update count; completed receipts and game IDs are verified and skipped.",
       "Missing optional teacher labels are unknown; valid independent scalar labels admitted; no fake zero/PASS. Mandatory integrity, split, finite output, legality and saving remain required.",
-      "Only C3; no C4, final holdout access, public promotion/distribution, main merge or deployment."
+      "C4 only. No C5, final existing holdout, public promotion/distribution, main merge or deployment."
     ],
-    "acquisition": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.r4_c3 configs/evaluator-main.json",
-    "rehearsal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run rehearsal local/runs/r4-c3/attempt-01 </dev/null",
+    "acquisition": "No new external download; pinned local teacher/eval assets and C3 replay are checked during seal. Fresh data generation is inside resume.",
+    "rehearsal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run rehearsal local/runs/r4-c4/attempt-01",
     "development_url": "http://127.0.0.1:5175/#/match",
     "source_audit": "docs/source-audits/hao.md; GCT independent hcpe3 identified but distribution conditions unresolved, zero selected",
-    "trained_candidate": "local/runs/r4-c3/attempt-01/fit/trained_candidate.osaval03"
+    "trained_candidate": "local/runs/r4-c4/attempt-01/generations/G*/fit/trained_candidate.osaval03"
   },
   "round": {
-    "id": "R4-C3",
+    "id": "R4-C4",
     "attempt": 1,
     "authorization": "explicit_user_20260921",
-    "baseline": "defense-best1536",
-    "scope": "Replay-first all-layer scalar and sibling ordering; static-rook development, defenses against silver/ranging rook/Ureshino, attack continuation; common book-free controller-OFF runtime",
+    "baseline": "C3-trained-candidate",
+    "scope": "Finite fresh selfplay, exact offline child reanalysis, scalar plus sibling ranking, automatic generations and local play",
     "optimizer": "fresh AdamW and warmup/cosine schedule for this round; exact optimizer/RNG/sampler restoration for every resume",
-    "next_round": "C4 and publication require separate explicit user direction; no automatic repeat"
+    "next_round": "No C5, publication, main integration or paid resources without separate user GO"
   },
   "development_integration": {
     "port": 5175,
-    "selection": "r4c3",
-    "registry": "local/core-prototype/r4c3.json",
+    "selection": "r4c4",
+    "registry": "local/core-prototype/r4c4.json",
     "policy": "automatic local registration after audit and fixed arena even if adoption criteria not met; exact candidate identity, no silent fallback; failed registration restores prior descriptor",
-    "allowed_mutation": "C3 descriptor and ignored run evidence only; no OSUI source changes by Luna",
+    "allowed_mutation": "C4 ignored descriptor and run evidence only; UI implementation is pinned before seal",
     "terminal_meaning": "awaiting_astra_review is retained legacy machine status; development/result.json PASS means ready for user games, no Astra restart required for integration"
   },
-  "c3_preparation": {
+  "iteration": {
+    "schema": "open_shogiai_c4_iteration/v1",
+    "minimum_generations": 3,
+    "maximum_generations": 5,
+    "games_per_generation": 8192,
+    "extension_minimum_new_labels": 100000,
     "replay": {
-      "path": "local/r4-c2-preparation/dataset",
-      "manifest_sha256": "96781b8baaaaaa4a9ea9148fa5a1cb79b3524f4536502133cb0b4b716f21c95f"
+      "path": "local/r4-c3-preparation/dataset",
+      "manifest_sha256": "cb755c86f7359299f7e02c4e5504d8ec8ffa776351fcbdc2d380bac4b371e17d"
     },
-    "focus": "local/r4-c3-preparation/focus",
-    "output": "local/r4-c3-preparation/dataset",
-    "depth": 12,
-    "nodes": 2000000,
-    "probe_nodes": 12000,
-    "roots_per_scenario": 8,
-    "scenarios": [
+    "replay_rows": 320000,
+    "past_rows": 120000,
+    "opponents": [
       {
-        "id": "mutual_silver",
-        "group": "opening",
-        "split": "train",
-        "moves": [
-          "2g2f",
-          "8c8d",
-          "2f2e",
-          "8d8e",
-          "7g7f",
-          "3c3d",
-          "3i3h",
-          "7a7b",
-          "3h2g",
-          "7b8c",
-          "2g2f",
-          "8c8d"
-        ]
+        "path": "local/runs/defense-20260912/recovery-r3/fit/best.osaval03",
+        "sha256": "8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a"
       },
       {
-        "id": "vs_fourth",
-        "group": "defense",
-        "split": "train",
-        "moves": [
-          "7g7f",
-          "3c3d",
-          "2g2f",
-          "4c4d",
-          "2f2e",
-          "8b4b",
-          "4i5h",
-          "3a3b",
-          "5i6h",
-          "5a6b",
-          "6h7h",
-          "6b7b"
-        ]
+        "path": "local/runs/r4-c3/attempt-01/fit/trained_candidate.osaval03",
+        "sha256": "839a9f93398d2c989ca823ed01d88dc1c32e706baa32d5c61b17296114b9b262"
+      }
+    ],
+    "final_baselines": {
+      "c3": {
+        "path": "local/runs/r4-c3/attempt-01/fit/trained_candidate.osaval03",
+        "sha256": "839a9f93398d2c989ca823ed01d88dc1c32e706baa32d5c61b17296114b9b262"
       },
-      {
-        "id": "vs_third",
-        "group": "opening",
-        "split": "train",
-        "moves": [
-          "7g7f",
-          "3c3d",
-          "2g2f",
-          "4c4d",
-          "2f2e",
-          "8b3b",
-          "4i5h",
-          "3a4b",
-          "5i6h",
-          "5a6b",
-          "6h7h",
-          "6b7b"
-        ]
+      "defense": {
+        "path": "local/runs/defense-20260912/recovery-r3/fit/best.osaval03",
+        "sha256": "8c1c875038b74dc475c356d50c635c2e22dcab7aaa201d7d9aea7188e668b35a"
+      }
+    },
+    "bootstrap": {
+      "games": 16,
+      "replay_rows": 8192,
+      "generation_overrides": {
+        "max_plies": 64,
+        "strong_roots_per_game": 2,
+        "reply_plies": 1
       },
+      "training_overrides": {
+        "max_steps": 128,
+        "max_epochs": 16,
+        "validation_every": 32,
+        "warmup_steps": 16
+      }
+    },
+    "generation": {
+      "nodes": 2048,
+      "max_plies": 192,
+      "sample_stride": 2,
+      "explore_stride": 8,
+      "explore_nodes": 1024,
+      "explore_tolerance_cp": 80,
+      "strong_roots_per_game": 8,
+      "reply_plies": 2,
+      "starts": [
+        {
+          "id": "edge_preparation",
+          "group": "attack_end",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "3c3d",
+            "2g2f",
+            "4c4d",
+            "1g1f",
+            "1c1d",
+            "2f2e",
+            "8b4b",
+            "1i1h",
+            "3a3b"
+          ],
+          "family": "c4-start:edge_preparation"
+        },
+        {
+          "id": "crossing_pawns",
+          "group": "general",
+          "split": "validation",
+          "moves": [
+            "2g2f",
+            "8c8d",
+            "2f2e",
+            "8d8e",
+            "2e2d",
+            "2c2d",
+            "2h2d",
+            "8e8f",
+            "8g8f",
+            "8b8f"
+          ],
+          "family": "c4-start:crossing_pawns"
+        },
+        {
+          "id": "central_tempo",
+          "group": "defense",
+          "split": "development_test",
+          "moves": [
+            "2g2f",
+            "5c5d",
+            "7g7f",
+            "3c3d",
+            "2f2e",
+            "8b5b",
+            "5g5f",
+            "5d5e",
+            "5f5e",
+            "5b5e"
+          ],
+          "family": "c4-start:central_tempo"
+        },
+        {
+          "id": "early_silver",
+          "group": "defense",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "8c8d",
+            "6i7h",
+            "8d8e",
+            "2g2f",
+            "7a7b",
+            "2f2e",
+            "7b8c",
+            "3i3h",
+            "8c8d",
+            "3h2g",
+            "8d9e"
+          ],
+          "family": "c4-start:early_silver"
+        },
+        {
+          "id": "vs_center",
+          "group": "defense",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "5c5d",
+            "2g2f",
+            "8b5b",
+            "2f2e",
+            "5d5e",
+            "6i7h",
+            "5a6b",
+            "3i4h",
+            "6b7b"
+          ],
+          "family": "c4-start:vs_center"
+        },
+        {
+          "id": "vs_fourth",
+          "group": "defense",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "3c3d",
+            "2g2f",
+            "4c4d",
+            "2f2e",
+            "8b4b",
+            "4i5h",
+            "3a3b",
+            "5i6h",
+            "5a6b",
+            "6h7h",
+            "6b7b"
+          ],
+          "family": "c4-start:vs_fourth"
+        },
+        {
+          "id": "bishop_trade",
+          "group": "general",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "3c3d",
+            "8h2b+",
+            "3a2b",
+            "2g2f",
+            "8c8d",
+            "2f2e",
+            "8d8e"
+          ],
+          "family": "c4-start:bishop_trade"
+        },
+        {
+          "id": "mutual_silver",
+          "group": "opening",
+          "split": "train",
+          "moves": [
+            "2g2f",
+            "8c8d",
+            "2f2e",
+            "8d8e",
+            "7g7f",
+            "3c3d",
+            "3i3h",
+            "7a7b",
+            "3h2g",
+            "7b8c",
+            "2g2f",
+            "8c8d"
+          ],
+          "family": "c4-start:mutual_silver"
+        },
+        {
+          "id": "vs_third",
+          "group": "opening",
+          "split": "train",
+          "moves": [
+            "7g7f",
+            "3c3d",
+            "2g2f",
+            "4c4d",
+            "2f2e",
+            "8b3b",
+            "4i5h",
+            "3a4b",
+            "5i6h",
+            "5a6b",
+            "6h7h",
+            "6b7b"
+          ],
+          "family": "c4-start:vs_third"
+        },
+        {
+          "id": "vs_ureshino",
+          "group": "opening",
+          "split": "train",
+          "moves": [
+            "2g2f",
+            "3a4b",
+            "2f2e",
+            "5c5d",
+            "7g7f",
+            "4b5c",
+            "3i4h",
+            "2b3a",
+            "5i6h",
+            "5a4b"
+          ],
+          "family": "c4-start:vs_ureshino"
+        },
+        {
+          "id": "fourth_early_push",
+          "group": "defense",
+          "split": "development_test",
+          "moves": [
+            "2g2f",
+            "3c3d",
+            "2f2e",
+            "4c4d",
+            "7g7f",
+            "8b4b",
+            "2e2d",
+            "2c2d",
+            "2h2d",
+            "4d4e"
+          ],
+          "family": "c4-start:fourth_early_push"
+        },
+        {
+          "id": "quiet_castle",
+          "group": "opening",
+          "split": "validation",
+          "moves": [
+            "7g7f",
+            "8c8d",
+            "6g6f",
+            "3c3d",
+            "7i6h",
+            "7a6b",
+            "6h6g",
+            "5a4b",
+            "5i6h",
+            "4b3b"
+          ],
+          "family": "c4-start:quiet_castle"
+        },
+        {
+          "id": "third_edge",
+          "group": "opening",
+          "split": "development_test",
+          "moves": [
+            "2g2f",
+            "3c3d",
+            "7g7f",
+            "4c4d",
+            "1g1f",
+            "8b3b",
+            "2f2e",
+            "3a4b",
+            "4i5h",
+            "1c1d",
+            "5i6h",
+            "5a6b"
+          ],
+          "family": "c4-start:third_edge"
+        },
+        {
+          "id": "ureshino_delayed",
+          "group": "opening",
+          "split": "development_test",
+          "moves": [
+            "7g7f",
+            "3a4b",
+            "2g2f",
+            "5c5d",
+            "2f2e",
+            "4b5c",
+            "6i7h",
+            "2b3a",
+            "3i3h",
+            "9c9d",
+            "3h2g",
+            "5a4b"
+          ],
+          "family": "c4-start:ureshino_delayed"
+        },
+        {
+          "id": "startpos",
+          "group": "general",
+          "split": "train",
+          "moves": [],
+          "family": "c4-start:startpos"
+        }
+      ],
+      "teacher": {
+        "broad_depth": 8,
+        "broad_nodes": 200000,
+        "strong_depth": 12,
+        "strong_nodes": 2000000,
+        "timeout_ms": 20000,
+        "maximum_worker_exits": 3
+      }
+    },
+    "accounting": {
+      "new_games_range": [
+        24576,
+        40960
+      ],
+      "generated_board_target_range": [
+        3000000,
+        6000000
+      ],
+      "valid_new_label_target_range": [
+        1500000,
+        3500000
+      ],
+      "strong_root_upper_range": [
+        196608,
+        327680
+      ],
+      "these_are_estimates_not_success_gates": true,
+      "maximum_optimizer_updates": 123008,
+      "ancestral_unknown_is_not_new": true,
+      "known_ancestral_novelty": "Novel only relative to recorded ancestor manifests and previous C4 observations; older unrecorded history remains unknown."
+    },
+    "selection": {
+      "actor_minimum_mean_clock_score": 0.55,
+      "actor_minimum_each_clock_score": 0.5,
+      "actor_minimum_cluster_lower": 0.45,
+      "scalar_regression_ratio": 1.03,
+      "two_stagnations": "halve LR and increase strong/replay sampling; keep incumbent actor; fresh seeds and trajectories continue",
+      "three_stagnations_after_minimum": "finish comparisons and registration; no infinite repeat"
+    },
+    "retention": "Keep immutable C3/defense/representatives, per-generation selected candidate and latest resume, decisions and provenance; existing checkpoint retention applies. No unknown file or outside-root cleanup.",
+    "confirmation_games": 128,
+    "confirmation_starts": [
       {
-        "id": "vs_center",
-        "group": "defense",
-        "split": "train",
-        "moves": [
-          "7g7f",
-          "5c5d",
-          "2g2f",
-          "8b5b",
-          "2f2e",
-          "5d5e",
-          "6i7h",
-          "5a6b",
-          "3i4h",
-          "6b7b"
-        ]
-      },
-      {
-        "id": "vs_ureshino",
-        "group": "opening",
-        "split": "train",
-        "moves": [
-          "2g2f",
-          "3a4b",
-          "2f2e",
-          "5c5d",
-          "7g7f",
-          "4b5c",
-          "3i4h",
-          "2b3a",
-          "5i6h",
-          "5a4b"
-        ]
-      },
-      {
-        "id": "early_silver",
-        "group": "defense",
-        "split": "train",
-        "moves": [
-          "7g7f",
-          "8c8d",
-          "6i7h",
-          "8d8e",
-          "2g2f",
-          "7a7b",
-          "2f2e",
-          "7b8c",
-          "3i3h",
-          "8c8d",
-          "3h2g",
-          "8d9e"
-        ]
-      },
-      {
-        "id": "edge_preparation",
-        "group": "attack_end",
-        "split": "train",
-        "moves": [
-          "7g7f",
-          "3c3d",
-          "2g2f",
-          "4c4d",
-          "1g1f",
-          "1c1d",
-          "2f2e",
-          "8b4b",
-          "1i1h",
-          "3a3b"
-        ]
-      },
-      {
-        "id": "bishop_trade",
+        "id": "confirmation-double-wing",
         "group": "general",
-        "split": "train",
-        "moves": [
-          "7g7f",
-          "3c3d",
-          "8h2b+",
-          "3a2b",
-          "2g2f",
-          "8c8d",
-          "2f2e",
-          "8d8e"
-        ]
-      },
-      {
-        "id": "quiet_castle",
-        "group": "opening",
-        "split": "validation",
-        "moves": [
-          "7g7f",
-          "8c8d",
-          "6g6f",
-          "3c3d",
-          "7i6h",
-          "7a6b",
-          "6h6g",
-          "5a4b",
-          "5i6h",
-          "4b3b"
-        ]
-      },
-      {
-        "id": "crossing_pawns",
-        "group": "general",
-        "split": "validation",
+        "split": "final_confirmation",
         "moves": [
           "2g2f",
           "8c8d",
           "2f2e",
           "8d8e",
-          "2e2d",
-          "2c2d",
-          "2h2d",
-          "8e8f",
-          "8g8f",
-          "8b8f"
-        ]
-      },
-      {
-        "id": "ureshino_delayed",
-        "group": "opening",
-        "split": "development_test",
-        "moves": [
-          "7g7f",
-          "3a4b",
-          "2g2f",
-          "5c5d",
-          "2f2e",
-          "4b5c",
           "6i7h",
-          "2b3a",
+          "4a3b",
           "3i3h",
-          "9c9d",
-          "3h2g",
-          "5a4b"
-        ]
+          "7a7b"
+        ],
+        "family": "c4-final:double-wing"
       },
       {
-        "id": "fourth_early_push",
-        "group": "defense",
-        "split": "development_test",
-        "moves": [
-          "2g2f",
-          "3c3d",
-          "2f2e",
-          "4c4d",
-          "7g7f",
-          "8b4b",
-          "2e2d",
-          "2c2d",
-          "2h2d",
-          "4d4e"
-        ]
-      },
-      {
-        "id": "third_edge",
+        "id": "confirmation-third-rook",
         "group": "opening",
-        "split": "development_test",
+        "split": "final_confirmation",
         "moves": [
-          "2g2f",
-          "3c3d",
           "7g7f",
-          "4c4d",
-          "1g1f",
+          "3c3d",
+          "2g2f",
           "8b3b",
           "2f2e",
           "3a4b",
-          "4i5h",
-          "1c1d",
           "5i6h",
           "5a6b"
-        ]
+        ],
+        "family": "c4-final:third-rook"
       },
       {
-        "id": "central_tempo",
+        "id": "confirmation-silver",
         "group": "defense",
-        "split": "development_test",
+        "split": "final_confirmation",
         "moves": [
           "2g2f",
-          "5c5d",
+          "8c8d",
+          "7g7f",
+          "8d8e",
+          "8h7g",
+          "7a7b",
+          "3i4h",
+          "7b8c"
+        ],
+        "family": "c4-final:silver"
+      },
+      {
+        "id": "confirmation-edge",
+        "group": "attack_end",
+        "split": "final_confirmation",
+        "moves": [
           "7g7f",
           "3c3d",
+          "2g2f",
+          "4c4d",
           "2f2e",
-          "8b5b",
-          "5g5f",
-          "5d5e",
-          "5f5e",
-          "5b5e"
-        ]
+          "8b4b",
+          "1g1f",
+          "9c9d",
+          "9g9f",
+          "3a3b"
+        ],
+        "family": "c4-final:edge"
       }
     ]
   },
@@ -691,7 +874,6 @@
         "sha256": "677e5da7b738ad84cf89b175fc5f81775ca198b173662cc701a267224c38b839",
         "url": "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/raw/7bc19a9e880ea307a52c57f57ea6c752301b25bc/README.md"
       }
-    ],
-    "reuse": "No new external download. Exact C2 shards and parser provenance inherited via pinned C2 dataset."
+    ]
   }
 }

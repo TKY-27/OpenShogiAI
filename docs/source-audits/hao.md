@@ -64,3 +64,13 @@ are not confused with search leaves. No new train/test-fitted scale is introduce
 Sibling ranking is restricted to one source/root and ignores differences at most
 50 cp; cross-teacher absolute equivalence remains a hypothesis tested by separate
 source losses. Original generating weights/history remain unknown.
+
+## C4 reuse (2026-09-21)
+
+C4 pins the completed C3 dataset manifest and keeps its input references, rather than
+reacquiring the four shards. Fresh C4 data is generated locally with recorded OSAI actors
+and the already audited, hash-bound offline Apery binary/evaluation assets. D8 broad and
+D12 strong labels use direct root/child side-to-move scores; incomplete/bounded/mate claims
+are not converted to scalar targets. Historical source IDs and inferred Hao sequences
+remain visible in sampling/exposure accounting. No GCT, dlshogi or other new download is
+admitted by adding this section. Source conditions and the separate publication GO remain.

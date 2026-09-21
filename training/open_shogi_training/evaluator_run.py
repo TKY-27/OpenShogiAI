@@ -35,11 +35,13 @@ PAUSED_EXIT = 75
 RESOURCE_EXIT = 76
 SCHEMA = "open_shogiai_evaluator_run/v1"
 STAGES = ("generate", "prepare", "train", "audit", "arena")
-ALL_STAGES = (*STAGES, "integrate")
+ALL_STAGES = (*STAGES, "integrate", "iterate")
 
 
 def _stages(config):
-    return ALL_STAGES if config.get("development_integration") else STAGES
+    if config.get("iteration"):
+        return ("iterate",)
+    return (*STAGES, "integrate") if config.get("development_integration") else STAGES
 
 
 STATES = {
@@ -182,9 +184,14 @@ def _validate_config(config: dict) -> None:
             ("R4-C1", "explicit_user_20260918"),
             ("R4-C2", "explicit_user_20260920"),
             ("R4-C3", "explicit_user_20260921"),
+            ("R4-C4", "explicit_user_20260921"),
         }:
             raise ValueError("unapproved learning round")
-        ref = generation["prepared_dataset"]
+        ref = (
+            config["iteration"]["replay"]
+            if config.get("iteration")
+            else generation["prepared_dataset"]
+        )
         _hash(ref["manifest_sha256"])
         inside(ref["path"])
         if (
@@ -327,7 +334,7 @@ def _validate_config(config: dict) -> None:
 
         if training.get("sampling_fractions") != (
             [0.20, 0.40, 0.20, 0.20]
-            if config.get("round", {}).get("id") == "R4-C3"
+            if config.get("round", {}).get("id") in {"R4-C3", "R4-C4"}
             else [0.25, 0.30, 0.20, 0.25]
             if "round" in config
             else [0.3, 0.2, 0.3, 0.2]
@@ -366,6 +373,10 @@ def _validate_config(config: dict) -> None:
         or any(not isinstance(sfen, str) or not 1 <= len(sfen) <= 512 for sfen in exclusions)
     ):
         raise ValueError("invalid development regression exclusions")
+    if config.get("iteration"):
+        from .r4_c4 import validate
+
+        validate(config)
 
 
 def _code_identity() -> dict:
@@ -599,6 +610,10 @@ def _state(run: Path) -> dict:
     ):
         raise ValueError("run state belongs to another contract")
     if value["status"] == "awaiting_astra_review":
+        if config.get("iteration"):
+            _reference(run / "c4-result.json", value["result_sha256"])
+            _verify_completion(run, "iterate", config)
+            return value
         review = _json(run / "candidate-review.json")
         _reference(run / "candidate-review.json", value["review_sha256"])
         for key, path in (
@@ -686,6 +701,17 @@ def seal(config_path: Path) -> dict:
             inputs[f"prepared_{i}"] = _reference(source / ref["path"], ref["sha256"])
     for i, ref in enumerate(config.get("data_preparation", {}).get("license_evidence", [])):
         inputs[f"source_rights_{i}"] = _reference(inside(ref["path"]), ref["sha256"])
+    if config.get("iteration"):
+        from .r4_data import verify_dataset
+
+        policy = config["iteration"]
+        dataset = inside(policy["replay"]["path"])
+        manifest = verify_dataset(ROOT, dataset, policy["replay"]["manifest_sha256"])
+        inputs["c4_replay_manifest"] = _reference(dataset / "manifest.json")
+        for i, ref in enumerate(manifest["artifacts"]):
+            inputs[f"c4_replay_{i}"] = _reference(dataset / ref["path"], ref["sha256"])
+        for i, ref in enumerate([*policy["opponents"], *policy["final_baselines"].values()]):
+            inputs[f"c4_model_{i}"] = _reference(inside(ref["path"]), ref["sha256"])
     sources = {name: _reference(inside(path)) for name, path in RUNTIME_SOURCES.items()}
     campaign = generation.get("defense_campaign")
     if campaign:
@@ -863,6 +889,11 @@ def _save_state(run: Path, state: dict) -> None:
 def _resume_snapshot(run: Path, config: dict) -> dict:
     """Read durable shards and cursors under the lease; never repair data in place."""
     from .evaluator_data import Replay
+
+    if config.get("iteration"):
+        from .r4_c4 import snapshot
+
+        return snapshot(ROOT, run)
 
     data = run / "data"
     if config["generation"].get("prepared_dataset"):
@@ -1702,6 +1733,8 @@ def status(run: Path) -> dict:
     if (run / "fit" / "training.json").exists():
         summary = _json(run / "fit" / "training.json")
         value.update(training_status=summary["status"], best_sha256=summary["best_sha256"])
+    if (run / "iteration-progress.json").exists():
+        value["iteration"] = _json(run / "iteration-progress.json")
     return value
 
 
@@ -2304,6 +2337,7 @@ def _progress_signature(run: Path, stage: str) -> tuple:
         "audit": run,
         "arena": run / "arena",
         "integrate": run / "development",
+        "iterate": run,
     }[stage]
     ignored = {
         "state.json",
@@ -2349,6 +2383,10 @@ def _progress_signature(run: Path, stage: str) -> tuple:
 
 
 def _dataset(run: Path, config: dict) -> dict:
+    if config.get("iteration"):
+        from .r4_data import verify_dataset
+
+        return verify_dataset(ROOT, run / "data/dataset")
     if config["generation"].get("prepared_dataset"):
         from .r4_data import verify_dataset
 
@@ -2555,6 +2593,23 @@ def _arena_complete(result: dict, expected_games: int = 40) -> None:
 
 
 def _completion_artifacts(run: Path, stage: str) -> list[dict]:
+    if stage == "iterate":
+        from .r4_c4 import verify_results
+
+        verify_results(ROOT, run)
+        return [
+            _reference(p)
+            for p in [
+                run / "c4-result.json",
+                run / "selection.json",
+                *sorted((run / "generations").glob("G*/decision.json")),
+                run / "development/result.json",
+                run / "development/browser/browser.json",
+                run / "development/model-audit.json",
+                *sorted((run / "final").glob("*/arena.json")),
+                *sorted((run / "final").glob("*/plan.json")),
+            ]
+        ]
     paths = {
         "generate": [
             run / "data" / "generation.json",
@@ -2691,7 +2746,7 @@ def _run_stage(
                 ),
                 *(
                     ["--pause-after-updates", str(state["probe_updates"])]
-                    if stage == "train" and state.get("probe_updates") is not None
+                    if stage in {"train", "iterate"} and state.get("probe_updates") is not None
                     else []
                 ),
                 *(
@@ -2871,6 +2926,20 @@ def _run_stage(
 
 
 def _allocation_task(run: Path, stage: str) -> str:
+    if stage == "iterate":
+        progress = (
+            _json(run / "iteration-progress.json")
+            if (run / "iteration-progress.json").exists()
+            else {}
+        )
+        generation = progress.get("active_generation", "prefix")
+        folder = run if generation == "prefix" else run / "generations" / generation
+        ref = (
+            _json(folder / "fit/resume.json")
+            if (folder / "fit/resume.json").exists()
+            else {"step": 0}
+        )
+        return f"iterate:{generation}:{ref['step']}"
     resume = _json(run / "fit/resume.json") if (run / "fit/resume.json").exists() else {"step": 0}
     return f"{stage}:{resume['step']}"
 
@@ -3058,8 +3127,8 @@ def work(
                         break
                     if (
                         pause_after_updates is not None
-                        and stage == "train"
-                        and not (run / "train-complete.json").exists()
+                        and stage in {"train", "iterate"}
+                        and not (run / f"{stage}-complete.json").exists()
                     ):
                         state.update(status="ready_for_luna", reason="training_prefix_complete")
                         break
@@ -3074,7 +3143,11 @@ def work(
                 if state["status"] != "running":
                     break
             else:
-                if config["generation"].get("defense_campaign"):
+                if config.get("iteration"):
+                    state.update(
+                        meets_frozen_criteria=False, result_sha256=digest(run / "c4-result.json")
+                    )
+                elif config["generation"].get("defense_campaign"):
                     review = _candidate_review(run)
                     state.update(
                         review_sha256=digest(run / "candidate-review.json"),
@@ -3205,7 +3278,14 @@ def stage_run(
                 _verify_completion(run, previous, config)
         _register_stage_group(run, stage)
         generation = config["generation"]
-        if stage == "generate" and generation.get("prepared_dataset"):
+        if stage == "iterate":
+            from .r4_c4 import execute
+
+            result = execute(ROOT, run, config, stop_after=pause_after_updates)
+            if result["status"] == "paused_for_resume_check":
+                verify(run)
+                return result
+        elif stage == "generate" and generation.get("prepared_dataset"):
             from .r4_data import verify_dataset
 
             ref = generation["prepared_dataset"]

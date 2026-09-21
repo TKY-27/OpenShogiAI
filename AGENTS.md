@@ -80,3 +80,14 @@
   C2 identical weights/runtime are a defense alias in UI; retain its experiment/checkpoints.
   C4, public preview/distribution/default promotion, main integration and paid resources
   require another explicit GO. Local development and reviewed work-branch commit/push are authorized.
+
+- The explicit 2026-09-21 R4-C4 authorization supersedes the C3-only restriction.
+  Astra prepares and verifies one finite 3–5-generation plan and a preserved real-data
+  optimizer prefix, then normally pauses at ready_for_luna. The separately user-started
+  Luna Max/max executes the unchanged plan through final fixed comparisons and reviewed
+  local OSUI registration/browser QA. Internal actor admission never means public adoption.
+  C3 trained_candidate and defense best1536 are immutable controls; a real distinct C4 update
+  must survive even when validation best is step0 or all actor updates are rejected.
+  Generation counts, elapsed work and model names do not establish strength or shodan rank.
+  C5, distribution, public previews/default promotion, main integration and paid resources
+  still require separate GO. Work-branch commits/push and both local repositories are authorized.

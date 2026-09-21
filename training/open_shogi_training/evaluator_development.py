@@ -72,7 +72,7 @@ def register(
         )
     _audit_report(run, config, report=report, model=model)
     selection = policy.get("selection", "r4c2")
-    if selection not in {"r4c2", "r4c3"}:
+    if selection not in {"r4c2", "r4c3", "r4c4"}:
         raise ValueError("unreviewed registration target")
     descriptor = inside(f"local/core-prototype/{selection}.json", exists=False)
     previous = descriptor.read_bytes() if descriptor.exists() else None

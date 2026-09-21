@@ -28,7 +28,7 @@ required_provenance = {
 expected_bindings = {
     "open_shogi_wasm.d.ts": "8b899de7246585f5c7ccafe0b5b2dde012eec0af12a8032d5d4e5741be9cf063",
     "open_shogi_wasm.js": "8d36745850bb91e90f93436a9c40d833686cca6c1232ab2c7c9346a59e109023",
-    "open_shogi_wasm_bg.wasm": "6ad83e2a0631021e08206e505432d940852e94ad46acac6a7b781af1a5de22e6",
+    "open_shogi_wasm_bg.wasm": "4e68daf2b9fb2505b25755242b9c9fd2c82f26724cff156f4a61c06b7330ca8a",
     "open_shogi_wasm_bg.wasm.d.ts": "efb20b72f02808e77a8baed92fc80fa2f3e1c9b8ce0709f2cd49ed7259933068",
 }
 failures: list[str] = []

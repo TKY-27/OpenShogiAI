@@ -163,10 +163,17 @@ def _plan(root: Path, config: dict) -> dict:
         else _starts(dataset, config["seed"])
     )
     assets["development_test_rows"] = _reference(root, dataset / rows["path"], rows["sha256"])
+    c4_starts = config.get("c4_confirmation_starts")
+    if c4_starts:
+        ref = _reference(root, c4_starts["path"], c4_starts["sha256"])
+        starts = json.loads((root / ref["path"]).read_text())["starts"]
+        if len(starts) != 32 or len({min(symmetry_keys(s["sfen"])) for s in starts}) != 32:
+            raise ValueError("C4 final confirmation requires 32 distinct reserved roots")
+        assets["c4_confirmation_starts"] = ref
     assets["probe_driver"] = _reference(root, "scripts/compare_core_prototype.py")
     games = []
     for pair, start in enumerate(starts):
-        remaining = 180_000 if pair < 12 else 600_000
+        remaining = 180_000 if pair < (24 if c4_starts else 12) else 600_000
         for candidate_side in ("black", "white"):
             games.append(
                 {
@@ -208,7 +215,7 @@ def _plan(root: Path, config: dict) -> dict:
         "startup": "model preparation before game clock starts; measured separately",
         "root_history": "same restored SFEN; repetition history starts at that root",
         "criteria": {
-            "evaluation_games": 32,
+            "evaluation_games": len(starts) * 2,
             **(
                 {"minimum_stratum_score": config["minimum_stratum_score"]}
                 if "minimum_stratum_score" in config
@@ -347,7 +354,11 @@ def _read_receipt(root: Path, path: Path, plan_sha: str) -> dict:
 
 
 def _stopping(output: Path) -> bool:
-    return (output / "STOP").exists() or (output.parent / "STOP").exists()
+    return (
+        (output / "STOP").exists()
+        or (output.parent / "STOP").exists()
+        or any((p / "run.json").is_file() and (p / "STOP").exists() for p in output.parents)
+    )
 
 
 def _play_game(
@@ -597,8 +608,9 @@ def _play_game(
 
 def _summary(plan: dict, games: list[dict], attempts: list[dict]) -> dict:
     scored = [g for g in games if g["group"] == "evaluation"]
-    complete = len(scored) == 32 and all(g["status"] == "completed" for g in scored)
-    planned = 32 + plan["criteria"]["demonstration_games"]
+    expected = plan["criteria"]["evaluation_games"]
+    complete = len(scored) == expected and all(g["status"] == "completed" for g in scored)
+    planned = expected + plan["criteria"]["demonstration_games"]
     all_complete = len(games) == planned and all(g["status"] == "completed" for g in games)
     adverse = [
         a
@@ -779,7 +791,7 @@ def run_arena(
         "status": status,
         "plan_sha256": plan_sha,
         "planned_games": len(plan["games"]),
-        "evaluation_games": 32,
+        "evaluation_games": plan["criteria"]["evaluation_games"],
         "demonstration_games": plan["criteria"]["demonstration_games"],
         "games": games,
         "attempts": attempts,

@@ -75,6 +75,7 @@ def prepared(tmp_path, monkeypatch):
     config.pop("development_integration", None)
     config.pop("data_preparation", None)
     config.pop("c3_preparation", None)
+    config.pop("iteration", None)
     config["training"].pop("trained_candidate", None)
     config["training"].pop("pair_weight", None)
     config["generation"].pop("prepared_dataset", None)
@@ -659,7 +660,7 @@ def test_defense_contract_rejects_legacy_state_and_terminal_transitions(prepared
     _, run, _, _, _ = prepared
     config = runner._json(run / "run.json")
     reviewed = json.loads((PROJECT / "configs/evaluator-main.json").read_text())
-    reviewed["generation"]["prepared_dataset"]["path"] = str(run.relative_to(runner.ROOT))
+    reviewed["iteration"]["replay"]["path"] = str(run.relative_to(runner.ROOT))
     reviewed["state_machine"]["transitions"]["awaiting_astra_review"] = ["running"]
     with pytest.raises(ValueError, match="transitions"):
         runner._validate_config(reviewed)
