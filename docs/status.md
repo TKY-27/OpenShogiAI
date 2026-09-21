@@ -1,4 +1,4 @@
-# R4-C4 — G01 USI復旧検証中 / 同じrun・保存進捗を継続
+# R4-C4 — ready_for_luna / G01 USI復旧・2回の正式再開確認済み
 
 人間向け正本はこの文書、機械向け正本は `configs/evaluator-main.json`。
 2026-09-21の明示承認によりC4を構築。Astraは実装と短い本run prefixまで、
@@ -43,7 +43,39 @@ C4呼出し側が特殊応答を有効にせず、終局した子局面の応答
 正式承認は記録済み失敗state・task・証拠をhashで束縛し、`approve-operations --recover-c4-teacher` から作る。
 Lunaの通常resumeが承認済みcode/policyを検証して遷移し、元needs_astraと旧attemptを履歴に保持する。
 別のneeds_astraを一律解除せず、state手編集や新sealは行わない。
-正式2回起動とpauseの計測結果はこの節へ追記する。
+正式承認済みcodeは `7205eb7`、運用revisionは
+`c7d2d37a19b443bcc63559fc124c844c6bbf0c1ee89bf68fd77fb57fc09faa7a`。
+旧運用revisionをsupersedesとして参照し、run/sealを変更していない。
+
+| 正式起動（stdin=/dev/null） | supervisor / stage PID | G01確定局 | 確定scalar行 | accepted教師task |
+|---|---|---:|---:|---:|
+| attempt6 | 71861 / 71885 | 162→165 | 14,022→14,271 | 14,571→14,790 |
+| attempt7 | 72511 / 72539 | 165→167 | 14,271→14,421 | 14,790→14,908 |
+
+元task `1a032a5a…` は同じkeyの第2attemptで実際に `bestmove resign` を受信し、
+`application=branch / validation=native_checkmate / status=terminal` として確定。
+通常手・cp/PVラベルは追加していない。初回のinterrupted attemptと旧needs_astra履歴も残る。
+その後に正常な別trajectoryを確定し、2回目も第1回pauseのgame165/35手cursorから継続した。
+増分399行は**確定shardのscalar行数**で、旧未完了cursor由来の行を含む。新規unique局面数ではない。
+
+各起動で2回のsupervisor計測を確認し、task/cursorの増加と実教師CPUを記録。
+起動CLI終了後のsupervisorはPPID1、stdinは `/dev/null`、stdout/stderrは
+`supervisor.log`、stageは `iterate-0.log`。旧セッションの標準ハンドルに依存していない。
+両pauseでstage終了・owned process回収・lease解放まで確認し、強制signalは0。
+一時通信異常のworker終了→handshake→再試行→局所保留／後続正常出力は、小型の実pipe注入試験で確認。
+本runへ偽応答を注入していない。本runで確認した障害処理は元resignの正常受理であり、
+将来数日間の全障害やMac sleep/OS終了を越える連続稼働を実測したとはしない。
+
+**現在はattempt7 / ready_for_luna / requested_pause**。G01確定167局・14,421行、
+prefix16局と合わせ183局。未完了game167は11手・8行で保存、running task0、
+supervisor/stage/教師/lease残留0。既存162 receipt、元run/seal、prefix step128のresumeは不変。
+新規5receiptのshard hash・ラベルtask依存・重複なし・勝敗target不使用とSQLite integrityを確認した。
+
+検証: `make check` PASS（Python1,233＋Rust・lint・依存/権利/来歴・native/Wasm）。
+最終stop後の曖昧な通信経路を閉じる修正を含むUSI/C4/resume関連209件もPASS。
+G01全量、後続世代・本学習・固定比較・最終OSUI登録は今回未実施。Lunaが以下の通常resumeを実行する。
+証拠は ignored `local/r4-c4-recovery/` の `cycle-1.json`、`cycle-2.json`、
+`final-status.json`、`final-integrity.json`、およびrunの `teacher-recovery/` と `attempts/`。
 
 ## 引き継ぐ実体と診断
 
@@ -193,7 +225,7 @@ R4-C4は比較候補・未採用と表示し、表示順は正確に「最新←
 解析モードの大規模改修は本学習後。最終 `awaiting_astra_review` は互換ラベルであり、
 `development/result.json` PASSならユーザー対局待ち。統合だけのAstra再起動は不要。
 
-## 計測・検証証拠
+## 初回準備時の計測・検証証拠（履歴。現在値は冒頭）
 
 短い本runの準備測定: 192手上限の2局で219観測盤面、214有効scalar行、16重要root、
 14.74秒。教師部分はD8 110task/1.80秒、D12 106task/1.16秒、残りは生成/再生/保存等。
@@ -247,12 +279,12 @@ OSUI `npm run check` はローカル2モデルallowlist指定でPASS、240 tests
 封印code: `992273bf731ba79da46f1a50f6145cf5b06d45df`。
 run SHA256: `ff4a77338ebb180cf73f7d0dcb248bcc313e12888e76d5c346c47e27dc74edd2`。
 UI code: `cab4895`。運用修正code: `47e6aa2`（停止修正 `eeaceb5` を含む）。
-最新の正式運用改訂 `7f767b16e071f31a4bc523273c2a82298c54b4ed9299fac7f4008a48d4d1976f` は
+初回準備時の最終運用改訂 `7f767b16e071f31a4bc523273c2a82298c54b4ed9299fac7f4008a48d4d1976f` は
 旧一世代queueの書出しをC4 pauseで呼ばず、statusに実世代/完了局数を表示する修正。
 正式resumeのattempt4で適用し、stage起動前のpauseによりstep9を保持した。
 元seal・学習条件・失敗予算は変更しない。
 Lunaは通常resumeだけでこの改訂を検証・適用する。
-最新checkpoint SHA256:
+初回準備時のcheckpoint SHA256:
 `446a4995893d0eaf44b43cff2f25bad3f564ec37894589addb5e9f1437b0a3ce`。
 `pause` 実行後のstateはready_for_luna / requested_pause、残留owned process0・強制signal0。
 
