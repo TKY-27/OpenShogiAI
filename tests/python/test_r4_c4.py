@@ -249,3 +249,26 @@ def test_pause_keeps_c4_ledgers_without_legacy_queue_export(tmp_path, monkeypatc
     result = evaluator_run.pause(tmp_path)
     assert result["status"] == "ready_for_luna" and result["reason"] == "requested_pause"
     assert result["generation"]["tasks"]["G01"]["accepted"] == 9
+
+
+def test_status_reports_c4_committed_games_and_active_generation(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    from open_shogi_training import evaluator_run
+
+    monkeypatch.setattr(evaluator_run, "ROOT", tmp_path)
+    monkeypatch.setattr(evaluator_run, "_state", lambda r: {"status": "ready_for_luna"})
+    monkeypatch.setattr(evaluator_run, "_residual_stage_group", lambda r: None)
+    monkeypatch.setattr(evaluator_run, "_lease", lambda r: nullcontext())
+    atomic(tmp_path / "state.json", b"{}")
+    atomic(tmp_path / "run.json", encoded({"iteration": {"schema": "fixture"}}))
+    atomic(tmp_path / "data/trajectories/progress.json", encoded({"games": 16}))
+    atomic(tmp_path / "data/generation-progress.json", encoded({"games": 16}))
+    assert evaluator_run.status(tmp_path)["generation"]["games"] == 16
+    atomic(tmp_path / "iteration-progress.json", encoded({"active_generation": "G01"}))
+    atomic(tmp_path / "generations/G01/data/trajectories/progress.json", encoded({"games": 17}))
+    atomic(tmp_path / "fit/progress.json", encoded({"step": 128}))
+    atomic(tmp_path / "generations/G01/fit/progress.json", encoded({"step": 42}))
+    result = evaluator_run.status(tmp_path)
+    assert result["completed_trajectories"] == 33 and result["training"]["step"] == 42
+    assert not result["lease_held"] and not result["process_alive"]

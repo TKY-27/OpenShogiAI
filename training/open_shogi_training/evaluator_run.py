@@ -1724,17 +1724,36 @@ def status(run: Path) -> dict:
         value["generation"]["games"] = value["completed_trajectories"]
     valid_files = list((run / "data" / "games").glob("*.receipt.json"))
     value["last_valid_output_at"] = max((p.stat().st_mtime for p in valid_files), default=None)
-    if (run / "fit" / "progress.json").exists():
-        value["training"] = _json(run / "fit" / "progress.json")
-    if (run / "data" / "dataset" / "manifest.json").exists():
-        value["unique_positions"] = _json(run / "data" / "dataset" / "manifest.json")[
+    active = run
+    if _json(run / "run.json").get("iteration"):
+        if (run / "iteration-progress.json").exists():
+            progress = _json(run / "iteration-progress.json")
+            value["iteration"] = progress
+            generation = progress.get("active_generation") or (
+                f"G{progress['completed_generations']:02d}"
+            )
+            if not re.fullmatch(r"G0[1-5]", generation):
+                raise ValueError("invalid C4 progress generation")
+            active = run / "generations" / generation
+        progress_files = [
+            p / "data/trajectories/progress.json"
+            for p in [run, *sorted((run / "generations").glob("G*"))]
+            if (p / "data/trajectories/progress.json").exists()
+        ]
+        value["completed_trajectories"] = sum(_json(p)["games"] for p in progress_files)
+        value.setdefault("generation", {})["games"] = value["completed_trajectories"]
+        value["last_valid_output_at"] = max(
+            (p.stat().st_mtime for p in progress_files), default=None
+        )
+    if (active / "fit" / "progress.json").exists():
+        value["training"] = _json(active / "fit" / "progress.json")
+    if (active / "data" / "dataset" / "manifest.json").exists():
+        value["unique_positions"] = _json(active / "data" / "dataset" / "manifest.json")[
             "unique_positions"
         ]
-    if (run / "fit" / "training.json").exists():
-        summary = _json(run / "fit" / "training.json")
+    if (active / "fit" / "training.json").exists():
+        summary = _json(active / "fit" / "training.json")
         value.update(training_status=summary["status"], best_sha256=summary["best_sha256"])
-    if (run / "iteration-progress.json").exists():
-        value["iteration"] = _json(run / "iteration-progress.json")
     return value
 
 
