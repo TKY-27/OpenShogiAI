@@ -201,15 +201,17 @@ PC1280px/小画面390pxで盤面を目視し、横overflowなし。先後、3分
 教師worker終了の累積上限、bit-exact resume、資源待ちとpause、改竄export拒否、
 登録失敗時の旧descriptor復元を回帰確認した。
 全体 `make check` PASS（Python1,183件＋Rust・lint・依存/権利/来歴・native/Wasm再生成）。
-その後追加したC4停止修正を含む関連27件もPASS。
+その後のC4停止/資源修正の関連27件、世代status修正を含む関連73件もPASS。
 OSUI `npm run check` はローカル2モデルallowlist指定でPASS、240 tests。
 公開allowlistは未決定のまま保持した。CIは両PRとも未設定でありCI合格とは報告しない。
 
 封印code: `992273bf731ba79da46f1a50f6145cf5b06d45df`。
 run SHA256: `ff4a77338ebb180cf73f7d0dcb248bcc313e12888e76d5c346c47e27dc74edd2`。
-UI code: `cab4895`。停止処理だけの運用修正code: `eeaceb5`。
-正式運用改訂 `9566ea3e008ba7a279ab4639754beb10e9d67c9c1310d4ef01aa11c9544d1602` は
-旧一世代queueの書出しをC4 pauseで呼ばない修正。元seal・学習条件・失敗予算は変更しない。
+UI code: `cab4895`。運用修正code: `47e6aa2`（停止修正 `eeaceb5` を含む）。
+最新の正式運用改訂 `7f767b16e071f31a4bc523273c2a82298c54b4ed9299fac7f4008a48d4d1976f` は
+旧一世代queueの書出しをC4 pauseで呼ばず、statusに実世代/完了局数を表示する修正。
+正式resumeのattempt4で適用し、stage起動前のpauseによりstep9を保持した。
+元seal・学習条件・失敗予算は変更しない。
 Lunaは通常resumeだけでこの改訂を検証・適用する。
 最新checkpoint SHA256:
 `446a4995893d0eaf44b43cff2f25bad3f564ec37894589addb5e9f1437b0a3ce`。
