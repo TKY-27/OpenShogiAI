@@ -10,8 +10,10 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import wraps
 from itertools import pairwise
 from pathlib import Path
 from typing import BinaryIO, Final, Literal
@@ -60,6 +62,7 @@ class USIError(RuntimeError):
         self.stderr_tail = stderr_tail
         self.stdout_tail = ""
         self.bestmove_line: str | None = None
+        self.diagnostics: dict = {}
 
 
 class USITimeoutError(USIError):
@@ -68,6 +71,12 @@ class USITimeoutError(USIError):
 
 class USIProcessError(USIError):
     category = "process"
+
+
+class USIIntegrityError(USIProcessError):
+    """Pinned teacher/runtime identity is not safe to reuse or locally defer."""
+
+    category = "integrity"
 
 
 class USIResourceError(USIProcessError):
@@ -80,6 +89,18 @@ class _USIRssIdentityUnavailableError(USIResourceError):
 
 class USIProtocolError(USIError):
     category = "protocol"
+
+
+class USINormalMoveUnavailableError(USIError):
+    """A valid terminal response cannot supply a legacy normal-move label."""
+
+    category = "normal_move_unavailable"
+
+
+class USIConcurrentRequestError(USIError):
+    """Caller bug: one channel must have only one owner."""
+
+    category = "concurrent_request"
 
 
 class USIIncompleteDepthError(USIProtocolError):
@@ -153,6 +174,8 @@ class USITerminalResult:
     outcome: Literal["win", "resign"]
     raw_bestmove: str
     elapsed_ms: int
+    candidates: tuple[USICandidate, ...] = ()
+    missing_signal: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +196,7 @@ class _StdoutReader:
         self._stream = stream
         self._max_line_bytes = max_line_bytes
         self._queue: queue.Queue[str | object] = queue.Queue(max_queue_lines)
+        self._raw_tail = b""
         self._error: str | None = None
         self._error_lock = threading.Lock()
         self._eof = threading.Event()
@@ -200,10 +224,16 @@ class _StdoutReader:
     def join(self, timeout: float) -> None:
         self._thread.join(timeout)
 
+    def raw_tail(self) -> str:
+        with self._error_lock:
+            return repr(self._raw_tail)
+
     def _run(self) -> None:
         try:
             while True:
                 raw = self._stream.readline(self._max_line_bytes + 1)
+                with self._error_lock:
+                    self._raw_tail = (self._raw_tail + raw)[-8192:]
                 if not raw:
                     self._eof.set()
                     self._offer(_EOF)
@@ -396,6 +426,19 @@ class _RssMonitor:
                 os.kill(process_id, signal.SIGKILL)
 
 
+def _exclusive(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        if not self._request_lock.acquire(blocking=False):
+            raise USIConcurrentRequestError("concurrent request on one teacher channel")
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._request_lock.release()
+
+    return guarded
+
+
 class USIEngine:
     """One persistent USI process with strict protocol and process-group cleanup."""
 
@@ -415,6 +458,11 @@ class USIEngine:
             raise ValueError("allow_terminal_outcomes must be boolean")
         self._isolate_process_group = isolate_process_group
         self._allow_terminal_outcomes = allow_terminal_outcomes
+        self._request_lock = threading.RLock()
+        self._commands = deque(maxlen=32)
+        self._request_sequence = 0
+        self._process_generation = 0
+        self._last_diagnostics = {}
         self._search_stdout_tail = b""
         self._search_bestmove_line: str | None = None
         self.config = config
@@ -443,10 +491,22 @@ class USIEngine:
         return "" if self._stderr is None else self._stderr.text()
 
     @property
-    def search_diagnostics(self) -> dict[str, str | None]:
+    def search_diagnostics(self) -> dict:
+        if self._process is None and self._last_diagnostics:
+            return self._last_diagnostics
         return {
+            "pid": self.pid,
+            "process_identity": self._process_start_identity,
+            "process_generation": self._process_generation,
+            "request_sequence": self._request_sequence,
+            "commands": list(self._commands),
             "bestmove_line": self._search_bestmove_line,
+            "bestmove_repr": repr(self._search_bestmove_line),
             "stdout_tail": self._search_stdout_tail.decode("utf-8", errors="replace"),
+            "stdout_bytes_repr": self._stdout.raw_tail() if self._stdout else "b''",
+            "stderr_tail": self.stderr_tail,
+            "returncode": self._process.poll() if self._process else None,
+            "at": time.time(),
         }
 
     def __enter__(self) -> USIEngine:
@@ -456,13 +516,14 @@ class USIEngine:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    @_exclusive
     def start(self) -> USIIdentity:
         if self._process is not None:
             if self._process.poll() is None and self.identity is not None:
                 return self.identity
             self.close()
         if not self.cwd.is_dir() or self.cwd.is_symlink():
-            raise USIProcessError(f"teacher cwd is not a non-symlink directory: {self.cwd}")
+            raise USIIntegrityError(f"teacher cwd is not a non-symlink directory: {self.cwd}")
         runtime: RuntimeTreeSnapshot | None = None
         try:
             runtime = RuntimeTreeSnapshot.create(
@@ -484,7 +545,7 @@ class USIEngine:
         except (ExecutableSnapshotError, RuntimeTreeSnapshotError) as error:
             if runtime is not None:
                 runtime.close()
-            raise USIProcessError(f"cannot pin teacher runtime: {error}") from error
+            raise USIIntegrityError(f"cannot pin teacher runtime: {error}") from error
         command = [str(self.executable), *self.config.arguments]
         try:
             process = subprocess.Popen(
@@ -527,10 +588,12 @@ class USIEngine:
             runtime.unseal()
             snapshot.close()
             runtime.close()
-            raise USIProcessError(
+            raise USIIntegrityError(
                 f"teacher runtime identity drifted during process creation: {error}"
             ) from error
         self._process = process
+        self._process_generation += 1
+        self._commands.clear()
         self._process_group = process.pid
         self._process_start_identity = process_start_identity
         self._snapshot = snapshot
@@ -571,12 +634,33 @@ class USIEngine:
             self.close()
             raise
 
+    @_exclusive
     def new_game(self) -> None:
         self._ensure_started()
         self._send("usinewgame")
         self._ready()
 
-    def analyze(
+    @_exclusive
+    def analyze(self, sfen: str, **kwargs) -> USISearchResult | USITerminalResult:
+        self._request_sequence += 1
+        self._last_diagnostics = {}
+        self._search_stdout_tail = b""
+        self._search_bestmove_line = None
+        try:
+            return self._analyze(sfen, **kwargs)
+        except USIError as error:
+            if isinstance(error, USITimeoutError):
+                self._send_stop_after_timeout()
+            error.diagnostics = self.search_diagnostics
+            error.stdout_tail = error.diagnostics["stdout_tail"]
+            error.bestmove_line = error.diagnostics["bestmove_line"]
+            error.stderr_tail = error.stderr_tail or self.stderr_tail
+            self._last_diagnostics = error.diagnostics
+            if not isinstance(error, USIIncompleteDepthError):
+                self.close()  # Close old pipes even if stop's terminal reply was lost.
+            raise
+
+    def _analyze(
         self,
         sfen: str,
         *,
@@ -629,63 +713,53 @@ class USIEngine:
         deadline = started + self.config.timeouts.search_ms / 1_000
         candidates: dict[int, USICandidate] = {}
         lines = 0
-        try:
-            while True:
-                line = self._readline(deadline, "search")
-                self._search_stdout_tail = (
-                    self._search_stdout_tail + line.encode("utf-8") + b"\n"
-                )[-8192:]
-                if line.startswith("bestmove "):
-                    self._search_bestmove_line = line
-                lines += 1
-                if lines > self.config.protocol_limits.max_search_lines:
-                    raise self._protocol_error("teacher search exceeded the output-line bound")
-                if line.startswith("info "):
-                    parsed = parse_info_line(
-                        line,
-                        expected_multipv=self.config.multipv,
-                        include_bounded=depth is not None,
+        while True:
+            line = self._readline(deadline, "search")
+            self._search_stdout_tail = (self._search_stdout_tail + line.encode("utf-8") + b"\n")[
+                -8192:
+            ]
+            if line == "bestmove" or line.startswith("bestmove "):
+                self._search_bestmove_line = line
+            lines += 1
+            if lines > self.config.protocol_limits.max_search_lines:
+                raise self._protocol_error("teacher search exceeded the output-line bound")
+            if line.startswith("info "):
+                parsed = parse_info_line(
+                    line,
+                    expected_multipv=self.config.multipv,
+                    include_bounded=depth is not None,
+                )
+                if parsed is not None:
+                    if parsed.bound is not None:
+                        candidates.pop(parsed.multipv, None)
+                    else:
+                        candidates[parsed.multipv] = parsed
+                continue
+            if line == "bestmove" or line.startswith("bestmove "):
+                elapsed_ms = max(0, round((time.monotonic() - started) * 1_000))
+                result = _finish_search(
+                    line,
+                    candidates,
+                    expected_multipv=self.config.multipv,
+                    elapsed_ms=elapsed_ms,
+                    allow_terminal_outcomes=self._allow_terminal_outcomes,
+                    expected_candidates=expected_candidates,
+                )
+                if isinstance(result, USITerminalResult) and not self._allow_terminal_outcomes:
+                    raise USINormalMoveUnavailableError(
+                        f"valid bestmove {result.outcome}; caller requires a normal-move label"
                     )
-                    if parsed is not None:
-                        if parsed.bound is not None:
-                            candidates.pop(parsed.multipv, None)
-                        else:
-                            candidates[parsed.multipv] = parsed
-                    continue
-                if line.startswith("bestmove "):
-                    elapsed_ms = max(0, round((time.monotonic() - started) * 1_000))
-                    result = _finish_search(
-                        line,
-                        candidates,
-                        expected_multipv=self.config.multipv,
-                        elapsed_ms=elapsed_ms,
-                        allow_terminal_outcomes=self._allow_terminal_outcomes,
-                        expected_candidates=expected_candidates,
-                    )
-                    if depth is not None and isinstance(result, USISearchResult):
+                if depth is not None:
+                    if isinstance(result, USISearchResult):
                         _validate_completed_depth(result, depth, requested_nodes)
-                    self._assert_executable_metadata_unchanged()
-                    return result
-                raise self._protocol_error(f"unexpected search output: {line!r}")
-        except USITimeoutError as error:
-            self._send_stop_after_timeout()
-            error.stdout_tail = self.search_diagnostics["stdout_tail"]
-            error.bestmove_line = self._search_bestmove_line
-            self.close()  # Never let delayed output become the next task's reply.
-            raise
-        except USIProcessError as error:
-            error.stdout_tail = self.search_diagnostics["stdout_tail"]
-            error.bestmove_line = self._search_bestmove_line
-            self.close()
-            raise
-        except USIProtocolError as error:
-            error.stdout_tail = self.search_diagnostics["stdout_tail"]
-            error.bestmove_line = self._search_bestmove_line
-            if not error.stderr_tail:
-                error.stderr_tail = self.stderr_tail
-            if not isinstance(error, USIIncompleteDepthError):
-                self.close()
-            raise
+                    elif result.candidates:
+                        try:
+                            _validate_completed_depth(result, depth, requested_nodes)
+                        except USIProtocolError as error:
+                            result = replace(result, candidates=(), missing_signal=str(error))
+                self._assert_executable_metadata_unchanged()
+                return result
+            raise self._protocol_error(f"unexpected search output: {line!r}")
 
     def analyze_with_retry(
         self, sfen: str, *, nodes: int | None = None, depth: int | None = None
@@ -727,18 +801,25 @@ class USIEngine:
             stderr_tail=tail,
         ) from last_error
 
+    @_exclusive
     def stop(self) -> None:
         if self._process is None or self._process.poll() is not None:
             return
-        self._send("stop")
-        deadline = time.monotonic() + self.config.timeouts.stop_ms / 1_000
-        while True:
-            line = self._readline(deadline, "stop")
-            if line.startswith("bestmove "):
-                return
-            if not line.startswith("info "):
-                raise self._protocol_error(f"unexpected stop output: {line!r}")
+        try:
+            self._send("stop")
+            deadline = time.monotonic() + self.config.timeouts.stop_ms / 1_000
+            while True:
+                line = self._readline(deadline, "stop")
+                if line.startswith("bestmove "):
+                    return
+                if not line.startswith("info "):
+                    raise self._protocol_error(f"unexpected stop output: {line!r}")
 
+        except USIError:
+            self.close()
+            raise
+
+    @_exclusive
     def close(self) -> None:
         process = self._process
         stdout = self._stdout
@@ -788,6 +869,10 @@ class USIEngine:
                 process.kill()
                 process.wait(timeout=1.0)
         finally:
+            if not self._last_diagnostics:
+                self._last_diagnostics = self.search_diagnostics
+            self._last_diagnostics["returncode"] = process.returncode
+            self._last_diagnostics["stderr_tail"] = self.stderr_tail
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     with contextlib.suppress(OSError):
@@ -881,6 +966,7 @@ class USIEngine:
             raise USIProcessError(
                 f"teacher exited with status {return_code}", stderr_tail=self.stderr_tail
             )
+        self._commands.append({"at": time.time(), "command": line})
         try:
             process.stdin.write(line.encode("utf-8") + b"\n")
             process.stdin.flush()
@@ -922,6 +1008,7 @@ class USIEngine:
             raise
         self._check_rss_monitor()
         if not line:
+            self._search_stdout_tail = (self._search_stdout_tail + b"\n")[-8192:]
             raise self._protocol_error("teacher emitted an empty stdout line")
         return line
 
@@ -946,25 +1033,25 @@ class USIEngine:
         snapshot = self._snapshot
         runtime = self._runtime_snapshot
         if snapshot is None or runtime is None:
-            raise USIProcessError("teacher runtime snapshot is unavailable")
+            raise USIIntegrityError("teacher runtime snapshot is unavailable")
         try:
             snapshot.assert_snapshot_unchanged()
             snapshot.assert_source_unchanged()
             runtime.assert_unchanged()
         except (ExecutableSnapshotError, RuntimeTreeSnapshotError) as error:
-            raise USIProcessError(f"teacher runtime identity drifted: {error}") from error
+            raise USIIntegrityError(f"teacher runtime identity drifted: {error}") from error
 
     def _assert_executable_metadata_unchanged(self) -> None:
         snapshot = self._snapshot
         runtime = self._runtime_snapshot
         if snapshot is None or runtime is None:
-            raise USIProcessError("teacher runtime snapshot is unavailable")
+            raise USIIntegrityError("teacher runtime snapshot is unavailable")
         try:
             snapshot.assert_snapshot_metadata_unchanged()
             snapshot.assert_source_metadata_unchanged()
             runtime.assert_unchanged()
         except (ExecutableSnapshotError, RuntimeTreeSnapshotError) as error:
-            raise USIProcessError(f"teacher runtime identity drifted: {error}") from error
+            raise USIIntegrityError(f"teacher runtime identity drifted: {error}") from error
 
 
 def parse_info_line(
@@ -1116,11 +1203,22 @@ def _finish_search(
     if len(tokens) not in {2, 4} or tokens[0] != "bestmove":
         raise USIProtocolError("malformed bestmove line")
     bestmove = tokens[1]
-    if allow_terminal_outcomes and bestmove in {"win", "resign"}:
+    if bestmove in {"win", "resign"}:
         if len(tokens) != 2:
             raise USIProtocolError("special bestmove must have exactly two tokens")
+        required = expected_candidates or expected_multipv
+        ordered = tuple(candidates[k] for k in sorted(candidates))
+        complete = (
+            set(candidates) == set(range(1, required + 1))
+            and all(c.bound is None for c in ordered)
+            and len({c.pv[0] for c in ordered}) == len(ordered)
+        )
         return USITerminalResult(
-            outcome=bestmove, raw_bestmove=bestmove_line, elapsed_ms=elapsed_ms
+            outcome=bestmove,
+            raw_bestmove=bestmove_line,
+            elapsed_ms=elapsed_ms,
+            candidates=ordered if complete else (),
+            missing_signal=None if complete else "no complete unbounded MultiPV set",
         )
     if _USI_MOVE_RE.fullmatch(bestmove) is None:
         raise USIProtocolError("teacher bestmove is not a normal USI move")

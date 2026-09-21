@@ -17,7 +17,10 @@ from open_shogi_training.labeling.usi import USIIncompleteDepthError, USIProcess
 
 
 def test_teacher_missing_exit_and_interruption_are_finite(tmp_path, monkeypatch):
-    config = SimpleNamespace(binary_sha256="a" * 64)
+    config = SimpleNamespace(
+        binary_sha256="a" * 64,
+        timeouts=SimpleNamespace(startup_ms=1, ready_ms=1, search_ms=1, stop_ms=1, quit_ms=1),
+    )
     teacher = data.Teacher.__new__(data.Teacher)
     teacher.root, teacher.config = tmp_path, config
     teacher.policy = dict(
@@ -28,8 +31,11 @@ def test_teacher_missing_exit_and_interruption_are_finite(tmp_path, monkeypatch)
     starts = []
 
     class Engine:
-        def __init__(self, *args):
-            pass
+        pid = None
+
+        def __init__(self, *args, **kwargs):
+            assert kwargs["allow_terminal_outcomes"]
+            self.search_diagnostics = {}
 
         def start(self):
             starts.append(1)
@@ -46,16 +52,15 @@ def test_teacher_missing_exit_and_interruption_are_finite(tmp_path, monkeypatch)
     assert value is None
     assert teacher.ledger.get(key)["status"] == "deferred"
     teacher.observe("fixture", {"game": 0})
-    assert len(teacher.ledger.get(key)["attempts"]) == 1
+    assert len(teacher.ledger.get(key)["attempts"]) == 2
     failure = USIProcessError
-    for game in range(1, 4):
-        assert teacher.observe("fixture", {"game": game})[1] is None
+    assert teacher.observe("fixture", {"game": 1})[1] is None
     with pytest.raises(RuntimeError, match="systemic"):
-        teacher.observe("fixture", {"game": 4})
+        teacher.observe("fixture", {"game": 2})
     assert teacher.ledger.db.execute("SELECT value FROM counters").fetchone()[0] == 4
     teacher.ledger.close()
     teacher.ledger = Ledger(tmp_path)
-    assert teacher.observe("fixture", {"game": 4})[1]["status"] == "missing"
+    assert teacher.observe("fixture", {"game": 2})[1]["status"] == "missing"
     assert teacher.ledger.db.execute("SELECT value FROM counters").fetchone()[0] == 4
     teacher.ledger.close()
 

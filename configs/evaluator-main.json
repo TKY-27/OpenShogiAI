@@ -411,7 +411,16 @@
     "rehearsal": "PYTHONPATH=training uv run --frozen python -m open_shogi_training.evaluator_run rehearsal local/runs/r4-c4/attempt-01",
     "development_url": "http://127.0.0.1:5175/#/match",
     "source_audit": "docs/source-audits/hao.md; GCT independent hcpe3 identified but distribution conditions unresolved, zero selected",
-    "trained_candidate": "local/runs/r4-c4/attempt-01/generations/G*/fit/trained_candidate.osaval03"
+    "trained_candidate": "local/runs/r4-c4/attempt-01/generations/G*/fit/trained_candidate.osaval03",
+    "teacher_recovery": {
+      "revision": "c4-usi-recovery-v1",
+      "classification": "Normal moves require exact-depth, unbounded legal PVs. resign/win are typed role-local claims; CSA 28/27 is checked natively. Unknown/partial/EOF is never a move or draw.",
+      "retry": "Two cumulative attempts per task including interruptions; fresh worker and pipes after transport/protocol faults. Remaining second slot is the bounded reanalysis queue, not a completion gate.",
+      "systemic": "Preserve the sealed maximum_worker_exits=3; four consecutive failed independent requests also stop the affected path. Normal terminal claims and incomplete-depth labels do not count as outages.",
+      "supervision": "resume detaches one exclusive-lease supervisor with DEVNULL stdin and owned file logs. Every 15s: accepted/deferred task publication, trajectory cursor, receipt output, optimizer resume, live teacher identity/CPU and active-task budget. Logs and heartbeats are not progress.",
+      "approval": "One-time Astra approve-operations --recover-c4-teacher <ignored real-request evidence.json>; subsequent Luna uses the unchanged resume/status/pause commands.",
+      "limits": "No new run/seal, no changed teacher/depth/nodes/learning/adoption/workload. No final-outcome targets from diagnostic branches or incomplete games."
+    }
   },
   "round": {
     "id": "R4-C4",

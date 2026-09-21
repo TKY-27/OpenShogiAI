@@ -7,6 +7,7 @@ import hashlib
 import json
 import random
 import sqlite3
+import subprocess
 import time
 from collections import Counter
 from dataclasses import replace
@@ -15,14 +16,26 @@ from pathlib import Path
 import numpy as np
 
 from .defense_scenarios import R3Probe, rotate_move, rotate_sfen
-from .evaluator_data import MAX_FEATURES, START, Replay, atomic, digest, encoded, symmetry_keys
+from .evaluator_data import (
+    MAX_FEATURES,
+    START,
+    Replay,
+    _validated_teacher_terminal,
+    atomic,
+    digest,
+    encoded,
+    symmetry_keys,
+)
 from .evaluator_data import teacher_config as make_teacher_config
 from .evaluator_ledger import DeferredTaskError, Ledger
 from .evaluator_training import GROUPS
+from .labeling.process_identity import read_process_identity
 from .labeling.usi import (
     USIEngine,
-    USIIncompleteDepthError,
+    USIIntegrityError,
     USIProcessError,
+    USIProtocolError,
+    USIResourceError,
     USITerminalResult,
     USITimeoutError,
 )
@@ -64,9 +77,12 @@ class Teacher:
             self.engine.close()
             self.engine = None
 
-    def observe(self, sfen, identity, *, strong=False):
+    def observe(
+        self, sfen, identity, *, strong=False, state=None, history=None, initial=None, role="label"
+    ):
         depth = self.policy["strong_depth" if strong else "broad_depth"]
         nodes = self.policy["strong_nodes" if strong else "broad_nodes"]
+        # Keep the sealed key: context is evidence, not a new task or retry budget.
         identity = {
             **identity,
             "sfen": sfen,
@@ -78,91 +94,206 @@ class Teacher:
         key, task = self.ledger.task(identity)
         if task["status"] in ("accepted", "deferred"):
             return key, task["result"]
-        exits = dict(self.ledger.db.execute("SELECT name,value FROM counters"))
-        if exits.get("worker_exits", 0) > self.policy["maximum_worker_exits"]:
-            raise RuntimeError("systemic teacher worker failures; preserved task ledger")
-        # A crashed attempt is already charged. No retry layer beneath this ledger.
-        try:
-            self.ledger.begin(key, nodes, maximum=2)
-        except DeferredTaskError:
-            return key, None
-        began = time.monotonic()
-        try:
-            if self.engine is None:
-                self.engine = USIEngine(self.config, self.root)
-                self.engine.start()
-            result = self.engine.analyze(
-                sfen, nodes=nodes, depth=depth, expected_candidates=1, auto_start=False
-            )
-            if isinstance(result, USITerminalResult):
-                value = {"status": "terminal_claim_masked", "outcome": result.outcome}
-            else:
-                candidate = result.primary
-                if candidate.depth != depth or candidate.bound:
-                    raise ValueError("accepted teacher label is incomplete or bounded")
-                value = {
-                    "status": "complete",
-                    "candidate": candidate.as_dict(),
-                    "elapsed_ms": result.elapsed_ms,
-                    "identity": identity,
-                }
-            self.ledger.finish(
-                key, "accepted", result=value, evidence={"elapsed_s": time.monotonic() - began}
-            )
-            return key, value
-        except (USIIncompleteDepthError, USITimeoutError) as error:
-            self.ledger.finish(
-                key,
-                "deferred",
-                result={"status": "missing", "reason": type(error).__name__},
-                evidence={"elapsed_s": time.monotonic() - began},
-            )
-            if isinstance(error, USITimeoutError):
-                self.close()
-            return key, None
-        except USIProcessError as error:
-            self.close()
-            if any(
-                token in (str(error) + error.stderr_tail).lower()
-                for token in ("std::bad_alloc", "cannot allocate memory", "out of memory")
-            ):
-                from .evaluator_training import TrainingResourceWaitError
-
+        if role not in {"player", "label", "branch"}:
+            raise ValueError("unknown C4 teacher role")
+        if state is not None and state["sfen"] != sfen:
+            raise ValueError("teacher request/native state mismatch")
+        self._health()
+        while True:
+            # Reanalysis gets the remaining sealed second slot immediately. No queue
+            # draining gate, new attempt, or restart can mint another slot.
+            try:
+                self.ledger.begin(key, nodes, maximum=2)
+            except DeferredTaskError:
+                return key, None
+            began = time.monotonic()
+            context = {
+                "role": role,
+                "history": history,
+                "initial_sfen": initial,
+                "history_on_wire": False,
+                "native_terminal": state.get("terminal") if state else None,
+            }
+            try:
+                if self.engine is None:
+                    self.engine = USIEngine(self.config, self.root, allow_terminal_outcomes=True)
+                    self.engine.start()
+                    database = Path(self.ledger.db.execute("PRAGMA database_list").fetchone()[2])
+                    atomic(
+                        database.with_name("teacher-worker.json"),
+                        encoded(
+                            {
+                                "pid": self.engine.pid,
+                                "process_identity": read_process_identity(self.engine.pid),
+                                "started_at": time.time(),
+                                "task_budget_seconds": (
+                                    self.config.timeouts.startup_ms
+                                    + self.config.timeouts.ready_ms
+                                    + self.config.timeouts.search_ms
+                                    + self.config.timeouts.stop_ms
+                                    + self.config.timeouts.quit_ms
+                                )
+                                / 1000,
+                            }
+                        ),
+                    )
+                result = self.engine.analyze(
+                    sfen, nodes=nodes, depth=depth, expected_candidates=1, auto_start=False
+                )
+                value = {"identity": identity, "elapsed_ms": result.elapsed_ms}
+                candidates = result.candidates
+                if isinstance(result, USITerminalResult):
+                    value.update(terminal_signal(result, state, role))
+                else:
+                    value["status"] = "complete"
+                if candidates:
+                    candidate = candidates[0]
+                    if candidate.depth != depth or candidate.bound or candidate.nodes >= nodes:
+                        raise ValueError("accepted teacher label is incomplete or bounded")
+                    if state is not None and candidate.pv[0] not in {
+                        c["move"] for c in state["successors"]
+                    }:
+                        raise USIProtocolError("teacher PV head is illegal for requested position")
+                    value["candidate"] = candidate.as_dict()
                 self.ledger.finish(
                     key,
-                    "pending",
+                    "accepted",
+                    result=value,
                     evidence={
+                        "outcome": "accepted",
                         "elapsed_s": time.monotonic() - began,
-                        "outcome": "allocation_failure",
+                        "role": role,
+                        **(
+                            {"context": context, "diagnostics": self.engine.search_diagnostics}
+                            if isinstance(result, USITerminalResult)
+                            else {}
+                        ),
                     },
                 )
-                raise TrainingResourceWaitError(
-                    "teacher allocation failed; bounded resume"
-                ) from error
-            with self.ledger.db:
-                self.ledger.db.execute("INSERT OR IGNORE INTO counters VALUES('worker_exits',0)")
-                self.ledger.db.execute(
-                    "UPDATE counters SET value=value+1 WHERE name='worker_exits'"
+                return key, value
+            except (USIResourceError, USIIntegrityError):
+                # RSS/runtime identity problems are not transient protocol errors.
+                raise
+            except (USIProtocolError, USITimeoutError, USIProcessError) as error:
+                diagnostics = getattr(error, "diagnostics", {}) or getattr(
+                    self.engine, "search_diagnostics", {}
                 )
-                exits = self.ledger.db.execute(
-                    "SELECT value FROM counters WHERE name='worker_exits'"
-                ).fetchone()[0]
-            self.ledger.finish(
-                key,
-                "deferred",
-                result={"status": "missing", "reason": type(error).__name__},
-                evidence={"elapsed_s": time.monotonic() - began},
+                self.close()
+                evidence = {
+                    "outcome": type(error).__name__,
+                    "error": str(error),
+                    "elapsed_s": time.monotonic() - began,
+                    "context": context,
+                    "diagnostics": diagnostics,
+                    "stdout_tail": error.stdout_tail,
+                    "stderr_tail": error.stderr_tail,
+                    "bestmove_line": error.bestmove_line,
+                }
+                if isinstance(error, USIProcessError) and any(
+                    token in (str(error) + error.stderr_tail).lower()
+                    for token in ("std::bad_alloc", "cannot allocate memory", "out of memory")
+                ):
+                    from .evaluator_training import TrainingResourceWaitError
+
+                    self.ledger.finish(
+                        key, "pending", evidence={**evidence, "outcome": "allocation_failure"}
+                    )
+                    raise TrainingResourceWaitError(
+                        "teacher allocation failed; bounded resume"
+                    ) from error
+                attempts = len(self.ledger.get(key)["attempts"])
+                self.ledger.finish(
+                    key,
+                    "pending" if attempts < 2 else "deferred",
+                    result={"status": "missing", "reason": type(error).__name__, "role": role},
+                    evidence=evidence,
+                )
+                if isinstance(error, USIProcessError):
+                    self.ledger.increment("worker_exits")
+                self._health()
+                if attempts >= 2:
+                    return key, None
+
+    def _health(self):
+        faults = dict(self.ledger.db.execute("SELECT name,value FROM counters"))
+        if faults.get("worker_exits", 0) > self.policy["maximum_worker_exits"]:
+            # The same difficult task cannot consume more than its two slots.
+            raise RuntimeError("systemic teacher worker failures; preserved task ledger")
+        recent = list(
+            self.ledger.db.execute(
+                "SELECT identity,status,attempts FROM tasks "
+                "WHERE status IN ('accepted','deferred') "
+                "ORDER BY updated DESC LIMIT 4"
             )
-            if exits > self.policy["maximum_worker_exits"]:
-                raise RuntimeError(
-                    "systemic teacher worker failures; preserved task ledger"
-                ) from error
-            return key, None
+        )
+        if (
+            len(recent) == 4
+            and all(
+                status == "deferred"
+                and json.loads(attempts)[-1].get("outcome")
+                in {"USIProtocolError", "USITimeoutError", "USIProcessError"}
+                for _, status, attempts in recent
+            )
+            and len({json.loads(identity)["sfen"] for identity, _, _ in recent}) > 1
+        ):
+            raise RuntimeError("systemic teacher output failure across independent tasks")
+
+
+def terminal_signal(result, state, role):
+    """A diagnostic claim never becomes the trajectory's outcome."""
+    value = {
+        "status": "terminal",
+        "outcome": result.outcome,
+        "application": "game" if role == "player" else role,
+        "raw_bestmove": result.raw_bestmove,
+        "missing_signal": result.missing_signal,
+    }
+    if state is None:
+        value["validation"] = "unverified_native_state"
+    elif result.outcome == "resign":
+        value["validation"] = (
+            "native_checkmate"
+            if "Checkmate" in state["terminal"]
+            else "native_no_legal_moves"
+            if state.get("teacher_resign_eligible")
+            else "teacher_resignation_not_mate_proof"
+        )
+    else:
+        declaration = state.get("teacher_declaration")
+        if not declaration or declaration.get("rule") != "csa_28_27":
+            value["validation"] = "unverified_rule"
+        else:
+            try:
+                _validated_teacher_terminal(result, state, int(state["sfen"].split()[-1]) - 1)
+                value["validation"] = "native_csa_28_27"
+            except ValueError:
+                value["validation"] = "invalid_declaration"
+    return value
+
+
+def player_outcome(label, state):
+    if not label or label.get("status") != "terminal" or label.get("application") != "game":
+        return None
+    validation = label["validation"]
+    if validation.startswith("unverified"):
+        return None
+    if state["terminal"] != "None":
+        return state["terminal"]
+    side = "Black" if state["sfen"].split()[1] == "b" else "White"
+    other = "White" if side == "Black" else "Black"
+    reason = (
+        "Declaration"
+        if validation == "native_csa_28_27"
+        else ("InvalidDeclaration" if validation == "invalid_declaration" else "Resignation")
+    )
+    return f"Teacher{reason} {{ winner: {side if reason == 'Declaration' else other} }}"
 
 
 def scalar(label):
     return bool(
-        label and label.get("status") == "complete" and label["candidate"]["score"]["kind"] == "cp"
+        label
+        and label.get("status") in {"complete", "terminal"}
+        and label.get("candidate", {}).get("score", {}).get("kind") == "cp"
     )
 
 
@@ -277,9 +408,10 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                 state = replay.ask(movement=movement, successors=True)
             if saved.get("current_sfen", state["sfen"]) != state["sfen"]:
                 raise ValueError("C4 trajectory cursor does not replay exactly")
+            outcome = None
             for ply in range(len(saved["moves"]), policy["max_plies"]):
                 stopped(run)
-                if state["terminal"] != "None":
+                if state["terminal"] != "None" or saved.get("outcome"):
                     break
                 moves = saved["moves"]
                 current = (
@@ -292,7 +424,14 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                 sample = (ply - len(prefix)) % policy["sample_stride"] == 0
                 teacher_turn = game_id % 4 == 3 and ply % 2 != game_id % 2
                 key, label = (
-                    teacher.observe(state["sfen"], {**base, "ply": ply, "kind": "broad"})
+                    teacher.observe(
+                        state["sfen"],
+                        {**base, "ply": ply, "kind": "broad"},
+                        state=state,
+                        initial=initial,
+                        history=moves,
+                        role="player" if teacher_turn else "label",
+                    )
                     if sample or teacher_turn
                     else (None, None)
                 )
@@ -301,6 +440,12 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                     saved["rows"].append(local)
                 if teacher_turn and label and label.get("status") == "complete":
                     choice = label["candidate"]["pv"][0]
+                outcome = player_outcome(label, state) if teacher_turn else None
+                if outcome:
+                    saved["teacher_terminal"] = {"task": key, "signal": label, "ply": ply}
+                    saved["outcome"] = outcome
+                    ledger.checkpoint(game_id, saved)
+                    break
                 rng = random.Random(seed * 4099 + ply)
                 explored = False
                 # Root alpha-beta scores nominate moves only. Equal-budget child
@@ -348,7 +493,12 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                     and (disagreement or swing or random_stratum)
                 ):
                     strong_key, strong = teacher.observe(
-                        state["sfen"], {**base, "ply": ply, "kind": "strong_root"}, strong=True
+                        state["sfen"],
+                        {**base, "ply": ply, "kind": "strong_root"},
+                        strong=True,
+                        state=state,
+                        initial=initial,
+                        history=moves,
                     )
                     local = row(base, state, strong, strong_key, strong=True) if strong else None
                     if local:
@@ -374,7 +524,12 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                             child["sfen"],
                             {**base, "ply": ply, "kind": "child", "move": alternative},
                             strong=True,
+                            state=child,
+                            initial=initial,
+                            history=[*moves, alternative],
+                            role="branch",
                         )
+                        branch_moves = [*moves, alternative]
                         local = row(
                             base,
                             child,
@@ -396,6 +551,7 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                             ):
                                 break
                             reply = child_label["candidate"]["pv"][0]
+                            branch_moves.append(reply)
                             child = replay.ask(movement=reply, successors=True)
                             if child["terminal"] != "None":
                                 break
@@ -409,6 +565,10 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                                     "continuation": continuation,
                                 },
                                 strong=True,
+                                state=child,
+                                initial=initial,
+                                history=branch_moves,
+                                role="branch",
                             )
                             local = row(base, child, child_label, child_key, strong=True)
                             if local:
@@ -445,7 +605,11 @@ def generate(root: Path, run: Path, folder: Path, config: dict, actor: dict, spe
                 saved["previous_cp"] = predicted["score"]
                 saved["current_sfen"] = state["sfen"]
                 ledger.checkpoint(game_id, saved)
-            outcome = state["terminal"] if state["terminal"] != "None" else "max_plies_unscored"
+            outcome = (
+                saved.get("outcome")
+                or outcome
+                or (state["terminal"] if state["terminal"] != "None" else "max_plies_unscored")
+            )
             content = {
                 **base,
                 **saved,
@@ -754,4 +918,112 @@ def build(root: Path, run: Path, folder: Path, config: dict, spec: dict, generat
     }
     atomic(staging / "manifest.json", encoded(report))
     staging.rename(output)
+    return report
+
+
+def progress(run, *, details=False):
+    """Only durable work is progress; retries, logs and PID heartbeats are not."""
+    active = run
+    if (run / "iteration-progress.json").exists():
+        generation = read(run / "iteration-progress.json").get("active_generation")
+        if generation:
+            if generation not in {f"G{i:02d}" for i in range(1, 6)}:
+                raise ValueError("invalid C4 generation")
+            active = run / "generations" / generation
+    folder = active / "data/trajectories"
+    if (run / "selection.json").exists() and (run / "confirmation/trajectories").exists():
+        folder = run / "confirmation/trajectories"
+    report = {"generation": active.name, "output": str(folder), "tasks": {}, "active_task": None}
+    signature = []
+    dbpath = folder / "tasks.sqlite3"
+    if dbpath.exists():
+        with sqlite3.connect(f"file:{dbpath}?mode=ro", uri=True, timeout=3) as db:
+            report["tasks"] = dict(db.execute("SELECT status,count(*) FROM tasks GROUP BY status"))
+            report["last_valid_output_at"] = db.execute(
+                "SELECT max(updated) FROM tasks WHERE status='accepted'"
+            ).fetchone()[0]
+            completed = db.execute(
+                "SELECT count(*),max(updated) FROM tasks WHERE status IN ('accepted','deferred')"
+            ).fetchone()
+            signature.append(completed)
+            current = db.execute(
+                "SELECT id,identity,attempts FROM tasks WHERE status='running' "
+                "ORDER BY updated DESC LIMIT 1"
+            ).fetchone()
+            if current:
+                task, attempts = json.loads(current[1]), json.loads(current[2])
+                report["active_task"] = {
+                    "id": current[0],
+                    "game": task["game"],
+                    "kind": task.get("kind"),
+                    "group": task.get("group"),
+                    "ply": task.get("ply"),
+                    "attempts": len(attempts),
+                    "started_at": attempts[-1]["started"],
+                }
+            cursor = db.execute(
+                "SELECT game,payload FROM checkpoints ORDER BY game DESC LIMIT 1"
+            ).fetchone()
+            if cursor:
+                saved = json.loads(cursor[1])
+                report["cursor"] = {
+                    "game": cursor[0],
+                    "plies": len(saved["moves"]),
+                    "rows": len(saved["rows"]),
+                }
+                signature.append((cursor[0], len(saved["moves"]), len(saved["rows"])))
+            # Small cross-tab, including normal terminal claims separately from faults.
+            if details:
+                report["signals"] = [
+                    list(row)
+                    for row in db.execute(
+                        "SELECT json_extract(identity,'$.kind'),json_extract(identity,'$.group'),"
+                        "CASE WHEN json_extract(identity,'$.ply')<32 THEN 'early' "
+                        "WHEN json_extract(identity,'$.ply')<96 THEN 'middle' ELSE 'late' END,"
+                        "status,json_extract(result,'$.validation'),count(*) "
+                        "FROM tasks GROUP BY 1,2,3,4,5"
+                    )
+                ]
+    worker = folder / "teacher-worker.json"
+    if worker.exists():
+        report["teacher"] = read(worker)
+        report["teacher"]["alive"] = bool(report["teacher"].get("process_identity")) and (
+            read_process_identity(report["teacher"]["pid"]) == report["teacher"]["process_identity"]
+        )
+        if report["teacher"]["alive"]:
+            sample = subprocess.run(
+                ["ps", "-p", str(report["teacher"]["pid"]), "-o", "time="],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=3,
+            )
+            report["teacher"]["cpu_time"] = (
+                sample.stdout.strip() if sample.returncode == 0 else None
+            )
+    # These are committed results/updates, not generic file mtimes. Fixed comparisons
+    # publish per-ply progress, so a legitimate ten-minute search retains its old budget.
+    for parent in [run, *sorted((run / "generations").glob("G*"))]:
+        for name in (
+            "data/trajectories/progress.json",
+            "data/trajectories/result.json",
+            "data/dataset/manifest.json",
+            "fit/resume.json",
+            "decision.json",
+            "arena/progress.json",
+            "arena/arena.json",
+            "c4-result.json",
+        ):
+            path = parent / name
+            if path.exists():
+                signature.append((str(path.relative_to(run)), digest(path)))
+    for path in [
+        *(run / "final").glob("*/progress.json"),
+        *(run / "confirmation/trajectories").glob("progress.json"),
+    ]:
+        signature.append((str(path.relative_to(run)), digest(path)))
+    report["signature"] = hashlib.sha256(encoded(signature)).hexdigest()
+    report["optimizer"] = (
+        read(active / "fit/resume.json") if (active / "fit/resume.json").exists() else None
+    )
     return report

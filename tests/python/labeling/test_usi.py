@@ -680,9 +680,11 @@ def test_special_terminal_reply_is_typed_only_with_explicit_opt_in(tmp_path, out
             result = engine.analyze_with_retry("state b - 1")
             assert isinstance(result, usi_module.USITerminalResult)
             assert result.outcome == outcome and result.raw_bestmove == line
-            assert not hasattr(result, "candidates")
+            assert result.candidates == ()
         else:
-            with pytest.raises(USIProtocolError, match="not a normal USI move") as caught:
+            with pytest.raises(
+                usi_module.USINormalMoveUnavailableError, match="valid bestmove"
+            ) as caught:
                 engine.analyze_with_retry("state b - 1")
             assert caught.value.bestmove_line == line
             assert caught.value.stdout_tail == line + "\n"

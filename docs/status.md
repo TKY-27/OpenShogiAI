@@ -1,10 +1,49 @@
-# R4-C4 — ready_for_luna / 本run prefix・再開・ローカル実対局確認完了
+# R4-C4 — G01 USI復旧検証中 / 同じrun・保存進捗を継続
 
 人間向け正本はこの文書、機械向け正本は `configs/evaluator-main.json`。
 2026-09-21の明示承認によりC4を構築。Astraは実装と短い本run prefixまで、
 長時間の生成・学習・比較はユーザーが別途開くLuna Max/maxが同じrunを継続する。
 内部世代ごとの再承認・設計変更は不要。C5、公開、外部preview、重み配布、
 公開既定昇格、main統合、有料資源契約は別GO。初段到達・ユーザーへの安定勝ちは未確認。
+
+## G01のUSI復旧（2026-09-21）
+
+対象は同じ `local/runs/r4-c4/attempt-01`。旧C2/防御runへ戻さない。
+Luna attempt5はprefix学習をstep128まで完了し、G01の162局・14,022 scalar行を確定。
+未完了game162の100手cursor・93行と、accepted14,571 task／running1 taskが残った。
+停止は候補 `R*5a` を試した**別分岐の子局面解析**で、対局者の着手要求ではなかった。
+
+元失敗時のstdoutは未保存。同一SFEN・同一D12/2M・MultiPV1・Threads1・同一教師設定を
+再送すると、`'bestmove resign'`（wireは `b'bestmove resign\n'`）と元の例外を再現した。
+保存100手＋候補手をnativeで再生すると後手詰み・合法手0。info/PV/評価は返らなかった。
+[Apery v2.0.0の実装](https://github.com/HiraokaTakuya/apery_rust/blob/a570784542f7e50fb39a24129f02d1b14819eec1/src/thread.rs)
+も合法手0でresignを返す。
+[USI仕様](https://shogidokoro2.stars.ne.jp/usi.html)ではresign/winは正常な終端応答。
+C4呼出し側が特殊応答を有効にせず、終局した子局面の応答を通常手限定パーサーへ渡したことが原因。
+元失敗当時の生stdoutを回収したという意味ではない。
+
+運用版 `c4-usi-recovery-v1` は次を行う。元seal・実験条件・既存receipt・task keyを保持する。
+
+- 通常手とponderを分離し、要求SFENと合法PVを照合。resignは詰みの証拠と混同しない。
+  winはnative CSA 28/27を照合。対局者だけが本対局の終局へ作用し、診断/子分岐は対象解析だけに記録。
+  正当な投了/宣言は異常率0。未検証宣言は保留、不正宣言の対局採点は反則負けを維持する。
+- 特殊応答に付随するinfoは独立に完全depth・node上限・unbounded・合法PVを満たす場合だけ保持。
+  無いcp/詰み手数/勝率を作らない。対局勝敗は従来どおりscalar学習の教師にしない。
+- 単一workerの同時要求を拒否。要求連番・プロセス世代・要求列・8KiB生応答末尾・stderr・終了状態を記録。
+  timeout/未知応答/EOFでは旧pipeを閉じ、同じ設定の新workerで残りattemptを実行。
+  各task累積2attemptは中断も含む。残り1枠をその場の再解析に使い、枯渇時は局所deferredで後続を進める。
+- worker終了の累積3件上限は維持。別々の局面で4task連続の通信/未知応答障害もsystemic停止。
+  正常特殊応答や単なる深さ未達はこの異常率に含めない。保存・runtime改竄・入力不整合は停止する。
+- 既存のdetached supervisorが実行期間を通して15秒間隔で監視。単一leaseをstageも継承し二重起動を拒否。
+  task完了・確定出力時刻・保存cursor・optimizer resume・実teacher PID/identity/CPUを読む。
+  ログ更新・heartbeat・retry更新だけでは正常進捗にしない。教師処理中はhandshake/search/stop/quit予算＋60秒、
+  その他工程は既存の停滞枠を使用。USI内のtimeout/retryが先に局所回復する。
+
+再現証拠は ignored `local/r4-c4-recovery/original-request-replay.json`。
+正式承認は記録済み失敗state・task・証拠をhashで束縛し、`approve-operations --recover-c4-teacher` から作る。
+Lunaの通常resumeが承認済みcode/policyを検証して遷移し、元needs_astraと旧attemptを履歴に保持する。
+別のneeds_astraを一律解除せず、state手編集や新sealは行わない。
+正式2回起動とpauseの計測結果はこの節へ追記する。
 
 ## 引き継ぐ実体と診断
 

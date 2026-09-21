@@ -266,6 +266,10 @@ def transition(incumbent, actor, candidate, arena, groups, stagnation):
 
 def snapshot(root, run):
     """Read checkpoint and immutable task receipts without replaying completed work."""
+    from .defense_scenarios import rotate_sfen
+    from .evaluator_data import START, Replay
+    from .r4_c4_data import generation_config
+
     result = {"games": 0, "rows": 0, "files": {}, "pending": {}, "tasks": {}, "counters": {}}
     for folder in [run, *sorted((run / "generations").glob("G*"))]:
         trajectories = folder / "data/trajectories"
@@ -288,6 +292,29 @@ def snapshot(root, run):
                         raise ValueError("C4 task identity mismatch")
                     if len(json.loads(attempts)) > 2:
                         raise ValueError("C4 task retry budget exceeded")
+                for game, payload in db.execute("SELECT game,payload FROM checkpoints"):
+                    if (trajectories / f"game-{game:06d}.json.receipt.json").exists():
+                        continue
+                    saved = json.loads(payload)
+                    plan = read(trajectories / "plan.json")
+                    generation = generation_config(read(run / "run.json"), plan["actor"])
+                    replay = Replay(root, generation)
+                    try:
+                        starts = plan["policy"]["starts"]
+                        initial = rotate_sfen(START) if (game // len(starts)) % 2 else START
+                        state = replay.ask(reset=initial, successors=True)
+                        for move in saved["moves"]:
+                            state = replay.ask(movement=move, successors=True)
+                        if state["sfen"] != saved["current_sfen"]:
+                            raise ValueError("C4 saved cursor cannot replay")
+                    finally:
+                        replay.close()
+                    result["pending"][f"{folder.name}:{game}"] = {
+                        "sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                        "sfen": state["sfen"],
+                        "plies": len(saved["moves"]),
+                        "rows": len(saved["rows"]),
+                    }
                 result["counters"][str(folder.relative_to(run))] = dict(
                     db.execute("SELECT name,value FROM counters")
                 )

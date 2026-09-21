@@ -106,6 +106,20 @@ OPERATIONAL_FILES = {
     "training/open_shogi_training/evaluator_development.py",
     "configs/evaluator-main.json",
 }
+C4_TEACHER_POLICY = {
+    "revision": "c4-usi-recovery-v1",
+    "authorization": "explicit_user_c4_protocol_recovery_20260921",
+    "attempts": "two cumulative slots per sealed task, including interrupted requests",
+    "terminals": "typed claims; native CSA 28/27; role-local signals; no invented targets",
+    "monitor": "one detached leased supervisor; durable task/cursor/optimizer progress",
+}
+C4_TEACHER_FILES = OPERATIONAL_FILES | {
+    "training/open_shogi_training/labeling/usi.py",
+    "training/open_shogi_training/evaluator_ledger.py",
+    "training/open_shogi_training/r4_c4_data.py",
+    "training/open_shogi_training/r4_c4.py",
+    "scripts/check_provenance.sh",
+}
 POST_TRAINING_FILES = ADMISSION_FILES | {
     "training/open_shogi_training/defense_evaluation.py",
     "training/open_shogi_training/evaluator_arena.py",
@@ -437,7 +451,9 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         or revision.get("original_code_commit") != config["code"]["commit"]
         or not set(revision["files"])
         <= (
-            POST_TRAINING_FILES
+            C4_TEACHER_FILES
+            if "c4_teacher" in revision
+            else POST_TRAINING_FILES
             if "post_training" in revision
             else ADMISSION_FILES
             if "dataset_admission" in revision
@@ -447,6 +463,22 @@ def _operation_code(run: Path, config: dict, revision: dict | None) -> dict:
         or not re.fullmatch(r"[a-f0-9]{40}", revision["commit"])
     ):
         raise ValueError("invalid operational code revision")
+    if "c4_teacher" in revision:
+        review = revision["c4_teacher"]
+        if (
+            config.get("round", {}).get("id") != "R4-C4"
+            or review.get("policy") != C4_TEACHER_POLICY
+        ):
+            raise ValueError("unrecognized C4 teacher recovery")
+        for ref in review["evidence"].values():
+            _reference(inside(ref["path"]), ref["sha256"])
+        previous = revision.get("supersedes")
+        if previous:
+            path = inside(previous["path"])
+            if path.parent != run / "operations":
+                raise ValueError("previous C4 operation outside run")
+            _reference(path, previous["sha256"])
+        config["_c4_teacher_recovery"] = review
     if "dataset_admission" in revision:
         if (
             revision.get("admission_policy") != ADMISSION_POLICY
@@ -1261,7 +1293,94 @@ def _reviewed_post_training_failure(run: Path, current: dict, review: dict | Non
     )
 
 
-def _resume_idle_state(run: Path, *, post_training: dict | None = None) -> dict:
+def _review_c4_teacher(run: Path, reproduction: Path) -> dict:
+    """Review this recorded G01 failure; never blanket-clear needs_astra."""
+    current, config = _state(run), _json(run / "run.json")
+    log = run / f"iterate-{current.get('retries', {}).get('iterate', 0)}.log"
+    tail = log.read_bytes()[-8192:]
+    if (
+        config.get("round", {}).get("id") != "R4-C4"
+        or current.get("status") != "needs_astra"
+        or current.get("stage") != "iterate"
+        or current.get("reason") != "stage_exit_1"
+        or current.get("errors")
+        or current.get("cleanup", {}).get("remaining_processes") != {}
+        or current.get("cleanup", {}).get("inventory_errors")
+        or not tail.rstrip().endswith(
+            b"USIProtocolError: teacher bestmove is not a normal USI move"
+        )
+        or b"r4_c4_data.py" not in tail
+        or _json(run / "attempts" / f"{current['execution_attempt']:06d}-result.json") != current
+    ):
+        raise ValueError("C4 review requires the recorded clean G01 protocol failure")
+    for pid, identity in (("pid", "process_identity"), ("stage_pid", "stage_identity")):
+        if current.get(identity) and read_process_identity(current.get(pid)) == current[identity]:
+            raise ValueError("live process prevents C4 review")
+    if _residual_stage_group(run) is not None:
+        raise ValueError("residual stage group prevents C4 review")
+    proof = _json(reproduction)
+    if (
+        proof["run_sha256"] != digest(run / "run.json")
+        or proof["seal_sha256"] != digest(run / "seal.json")
+        or proof["state"] != current
+        or proof["error"]["bestmove_line"] not in {"bestmove resign", "bestmove win"}
+    ):
+        raise ValueError("C4 real teacher reproduction does not bind this failure")
+    folder = run / "generations/G01/data/trajectories"
+    with sqlite3.connect(f"file:{folder / 'tasks.sqlite3'}?mode=ro", uri=True) as db:
+        failed = db.execute(
+            "SELECT id,identity,attempts FROM tasks WHERE status='running'"
+        ).fetchall()
+        if (
+            len(failed) != 1
+            or failed[0][0] != proof["task_id"]
+            or (
+                json.loads(failed[0][1]) != proof["identity"]
+                or json.loads(failed[0][2]) != proof["original_attempts"]
+            )
+        ):
+            raise ValueError("C4 failed request identity/attempts changed")
+    snapshot = _resume_snapshot(run, config)
+    evidence = run / "teacher-recovery"
+    evidence.mkdir(exist_ok=True)
+    refs = {}
+    for name, data in (
+        ("state.json", encoded(current)),
+        ("failure.log", tail),
+        ("reproduction.json", reproduction.read_bytes()),
+        ("snapshot.json", encoded(snapshot)),
+    ):
+        path = evidence / name
+        if path.exists() and path.read_bytes() != data:
+            raise ValueError("C4 recovery evidence changed")
+        atomic(path, data)
+        refs[name] = _reference(path)
+    return {
+        "policy": C4_TEACHER_POLICY,
+        "evidence": refs,
+        "original_state_sha256": hashlib.sha256(encoded(current)).hexdigest(),
+        "task_id": proof["task_id"],
+    }
+
+
+def _reviewed_c4_teacher_failure(run, current, review=None):
+    if review is None and (run / "approved-operation.json").exists():
+        ref = _json(run / "approved-operation.json")
+        path = inside(ref["path"])
+        if path.parent != run / "operations":
+            raise ValueError("approved operation outside run")
+        _reference(path, ref["sha256"])
+        review = _json(path).get("c4_teacher")
+    return bool(
+        review
+        and review.get("policy") == C4_TEACHER_POLICY
+        and review.get("original_state_sha256") == hashlib.sha256(encoded(current)).hexdigest()
+    )
+
+
+def _resume_idle_state(
+    run: Path, *, post_training: dict | None = None, c4_teacher: dict | None = None
+) -> dict:
     current = _state(run)
     pending = current["status"] == "running" and current.get("reason") == "startup_pending"
     if pending:
@@ -1279,6 +1398,7 @@ def _resume_idle_state(run: Path, *, post_training: dict | None = None) -> dict:
         _startup_recoverable(run, current)
         or _reviewed_generation_failure(run, current)
         or _reviewed_post_training_failure(run, current, post_training)
+        or _reviewed_c4_teacher_failure(run, current, c4_teacher)
     ):
         raise ValueError("failure is outside startup recovery; Astra review required")
     if current["status"] == "running" and current.get("errors"):
@@ -1300,6 +1420,7 @@ def _approve_operations(
     abolish_calendar_limit: bool = False,
     admit_existing_data: bool = False,
     post_training_evaluation: bool = False,
+    recover_c4_teacher: Path | None = None,
 ) -> dict:
     """Astra's explicit one-time code review; resume never approves a new hash."""
     with _lease(run):
@@ -1315,7 +1436,10 @@ def _approve_operations(
         post_training = previous.get("post_training")
         if post_training_evaluation and post_training is None:
             post_training = _review_post_training(run)
-        _resume_idle_state(run, post_training=post_training)
+        c4_teacher = previous.get("c4_teacher")
+        if recover_c4_teacher is not None:
+            c4_teacher = _review_c4_teacher(run, recover_c4_teacher)
+        _resume_idle_state(run, post_training=post_training, c4_teacher=c4_teacher)
         config, code = _json(run / "run.json"), _code_identity()
         added = set(code["files"]) - set(config["code"]["files"])
         if set(config["code"]["files"]) - set(code["files"]) or (
@@ -1334,6 +1458,8 @@ def _approve_operations(
             "commit": code["commit"],
             "files": changed,
         }
+        if c4_teacher:
+            revision.update(c4_teacher=c4_teacher, supersedes=previous_ref)
         if config.get("round", {}).get("id") == "R4-C3":
             from .evaluator_development import ui_identity
 
@@ -1745,6 +1871,10 @@ def status(run: Path) -> dict:
         value["last_valid_output_at"] = max(
             (p.stat().st_mtime for p in progress_files), default=None
         )
+    if _json(run / "run.json").get("iteration"):
+        from .r4_c4_data import progress as c4_progress
+
+        value["work"] = c4_progress(run, details=True)
     if (active / "fit" / "progress.json").exists():
         value["training"] = _json(active / "fit" / "progress.json")
     if (active / "data" / "dataset" / "manifest.json").exists():
@@ -2352,6 +2482,10 @@ def _resource_admission(run: Path, config: dict, state: dict) -> dict:
 
 
 def _progress_signature(run: Path, stage: str) -> tuple:
+    if stage == "iterate":
+        from .r4_c4_data import progress
+
+        return (progress(run)["signature"],)
     folder = {
         "generate": run / "data" / "games",
         "prepare": run / "data" / "dataset",
@@ -2791,7 +2925,14 @@ def _run_stage(
             if (run / "STOP").exists():
                 failure = "requested_stop"
                 break
-            current = _progress_signature(run, stage)
+            c4_progress = None
+            if stage == "iterate":
+                from .r4_c4_data import progress
+
+                c4_progress = progress(run)
+            current = (
+                (c4_progress["signature"],) if c4_progress else _progress_signature(run, stage)
+            )
             if current != signature:
                 signature, last_progress = current, time.monotonic()
             rss, owned = _sample_owned(process, owned)
@@ -2848,6 +2989,7 @@ def _run_stage(
                 "free_bytes": free,
                 "swap_bytes": swap,
                 "progress": signature,
+                **({"work": c4_progress} if c4_progress else {}),
                 **(
                     {"resource_sample": sample, "condition": condition, "strikes": strikes}
                     if sample
@@ -2870,10 +3012,16 @@ def _run_stage(
                 failure = "space_limit"
             elif swap - state["initial_swap_bytes"] > limits["maximum_swap_growth_gib"] * 1024**3:
                 failure = "swap_limit"
+            stalled_seconds = limits["stalled_seconds"]
+            if c4_progress and c4_progress["active_task"]:
+                # Full handshake/search/stop/quit allowance, plus two monitor samples.
+                stalled_seconds = (
+                    c4_progress.get("teacher", {}).get("task_budget_seconds", 160) + 60
+                )
             if (
                 not failure
                 and "_dataset_admission" not in config
-                and time.monotonic() - last_progress > limits["stalled_seconds"]
+                and time.monotonic() - last_progress > stalled_seconds
             ):
                 failure = "no_actual_progress"
             if failure:
@@ -3496,6 +3644,7 @@ def main():
     parser.add_argument("--abolish-calendar-limit", action="store_true")
     parser.add_argument("--admit-existing-data", action="store_true")
     parser.add_argument("--post-training-evaluation", action="store_true")
+    parser.add_argument("--recover-c4-teacher", type=Path)
     args = parser.parse_args()
     path = inside(args.path)
     if args.abolish_calendar_limit and args.command != "approve-operations":
@@ -3504,6 +3653,8 @@ def main():
         parser.error("--admit-existing-data is only valid with approve-operations")
     if args.post_training_evaluation and args.command != "approve-operations":
         parser.error("--post-training-evaluation is only valid with approve-operations")
+    if args.recover_c4_teacher and args.command != "approve-operations":
+        parser.error("--recover-c4-teacher is only valid with approve-operations")
     if args.command == "seal":
         result = seal(path)
     elif args.command == "approve-operations":
@@ -3512,6 +3663,7 @@ def main():
             abolish_calendar_limit=args.abolish_calendar_limit,
             admit_existing_data=args.admit_existing_data,
             post_training_evaluation=args.post_training_evaluation,
+            recover_c4_teacher=inside(args.recover_c4_teacher) if args.recover_c4_teacher else None,
         )
     elif args.command == "rehearsal":
         from .evaluator_development import rehearsal

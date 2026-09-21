@@ -30,6 +30,7 @@ class Ledger:
         CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, identity TEXT NOT NULL,
           status TEXT NOT NULL, attempts TEXT NOT NULL, result TEXT, updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS tasks_updated ON tasks(updated);
+        CREATE INDEX IF NOT EXISTS tasks_status_updated ON tasks(status,updated);
         CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS checkpoints(game INTEGER PRIMARY KEY, payload TEXT NOT NULL);
         """)
@@ -207,12 +208,12 @@ def unpack_result(value):
     from .labeling.usi import USICandidate, USIScore, USISearchResult, USITerminalResult
 
     data = value["value"]
-    if value["type"] == "USITerminalResult":
-        return USITerminalResult(**data)
     candidates = tuple(
         USICandidate(**{**c, "score": USIScore(**c["score"]), "pv": tuple(c["pv"])})
-        for c in data["candidates"]
+        for c in data.get("candidates", ())
     )
+    if value["type"] == "USITerminalResult":
+        return USITerminalResult(**{**data, "candidates": candidates})
     return USISearchResult(**{**data, "candidates": candidates})
 
 
