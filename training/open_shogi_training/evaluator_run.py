@@ -2106,7 +2106,10 @@ def pause(run: Path) -> dict:
 
                     config = verify(run)
                     snapshot = _resume_snapshot(run, config)
-                    if not (run / "generate-complete.json").exists():
+                    if (
+                        not config.get("iteration")
+                        and not (run / "generate-complete.json").exists()
+                    ):
                         export_queue(run / "data")
                     progress = {k: snapshot[k] for k in ("games", "rows", "tasks")}
                     atomic(

@@ -222,3 +222,30 @@ def test_strong_analysis_reserves_contact_and_late_game_budget():
     assert [data.strong_budget(p, 8) for p in (10, 48, 120)] == [(0, 2), (1, 4), (2, 2)]
     assert [data.strong_budget(p, 2)[1] for p in (10, 48, 120)] == [1, 1, 0]
     assert all(data.strong_budget(p, 0)[1] == 0 for p in (10, 48, 120))
+
+
+def test_pause_keeps_c4_ledgers_without_legacy_queue_export(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    from open_shogi_training import evaluator_ledger, evaluator_run
+
+    state = {"status": "ready_for_luna"}
+    monkeypatch.setattr(evaluator_run, "stop", lambda r: atomic(r / "STOP", b"pause"))
+    monkeypatch.setattr(evaluator_run, "_lease", lambda *a: nullcontext())
+    monkeypatch.setattr(evaluator_run, "_state", lambda *a: state)
+    monkeypatch.setattr(evaluator_run, "_residual_stage_group", lambda *a: None)
+    monkeypatch.setattr(evaluator_run, "verify", lambda *a: {"iteration": {"schema": "fixture"}})
+    monkeypatch.setattr(
+        evaluator_run,
+        "_resume_snapshot",
+        lambda *a: {"games": 3, "rows": 17, "tasks": {"G01": {"accepted": 9}}},
+    )
+    monkeypatch.setattr(evaluator_run, "_save_state", lambda *a: None)
+
+    def forbidden(*args):
+        raise AssertionError("C4 has per-generation ledgers, no legacy generation.json")
+
+    monkeypatch.setattr(evaluator_ledger, "export_queue", forbidden)
+    result = evaluator_run.pause(tmp_path)
+    assert result["status"] == "ready_for_luna" and result["reason"] == "requested_pause"
+    assert result["generation"]["tasks"]["G01"]["accepted"] == 9
