@@ -14,7 +14,7 @@ export UV_CACHE_DIR CARGO_INCREMENTAL
 
 help:
 	@echo "OpenShogiAI: make check | build | test | format | lint | pure-build | frozen-smoke"
-	@echo "See docs/development.md and docs/status.md. Historical campaigns are closed."
+	@echo "See docs/development.md. Historical campaigns are closed."
 
 bootstrap:
 	./scripts/bootstrap_macos.sh

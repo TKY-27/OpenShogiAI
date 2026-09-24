@@ -103,7 +103,8 @@ than claiming byte equality with the original data. Do not automatically rerun o
 
 ## Approved evaluator execution
 
-[Status](status.md) is the human handoff; [evaluator-main.json](../configs/evaluator-main.json)
+`local/handoff/` holds the compact run handoff (not tracked);
+[evaluator-main.json](../configs/evaluator-main.json)
 is the one current machine-readable plan. The sealed executable copy is
 `local/runs/defense-20260912/recovery-r3/run.json`, with `seal.json` and `state.json` alongside.
 Do not infer a run name from old r3 directories. From this Git root:

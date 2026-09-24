@@ -1227,7 +1227,7 @@ def validate_frozen_variant(variant: str) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 __all__ = [

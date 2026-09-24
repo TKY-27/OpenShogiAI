@@ -15,7 +15,7 @@ bind format, hash and provenance. `metadata/` contains compact training/teacher/
 records. The historical training corpus had 115,993 labeled rows (107,763 train / 8,230 validation),
 with 4,131 mate-only rows masked. These are row counts, not claims of unique new positions;
 training exposures and lineage are separately recorded. No optimizer or restart checkpoint is retained.
-Historical results and current limitations are in [status](../status.md).
+Historical results and current limitations live in the ignored local run records.
 
 ```sh
 make pure-build
@@ -32,7 +32,7 @@ The no-legal-moves runtime-proof defect is fixed and covered by small native/pur
 regression fixtures. The obsolete hard4 weight and historical executable were removed;
 its original request, failure identity and compact diagnosis remain in ignored local storage.
 The useful model copies are the old hard2 comparator and r3 best, each with format/hash/lineage.
-See [status](../status.md) for the active run and its required restart assets.
+The retired active-run handoff lives in ignored `local/handoff/`.
 
 ## Supported formats
 

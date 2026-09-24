@@ -434,9 +434,7 @@ def _validate_statistical_gates(raw: object) -> None:
 
 
 def _verify_hash_manifest(root: Path) -> None:
-    raise Phase10ValidationError(
-        "Closed campaign: see docs/status.md; historical freeze is retired"
-    )
+    raise Phase10ValidationError("Closed campaign; historical freeze is retired")
 
 
 def _parse_hash_lines(text: str) -> dict[str, str]:
@@ -554,7 +552,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":

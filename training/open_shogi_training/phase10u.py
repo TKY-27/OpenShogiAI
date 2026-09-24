@@ -24,7 +24,7 @@ IMPLEMENTATION = (
 
 
 def validate(root: Path, *, local: bool = False) -> dict[str, Any]:
-    raise ValueError("Closed campaign: see docs/status.md; historical freeze is retired")
+    raise ValueError("Closed campaign; historical freeze is retired")
 
 
 def campaign() -> dict[str, Any]:
@@ -276,7 +276,7 @@ def decision(receipt: dict[str, Any], *, now: datetime) -> dict[str, Any]:
 
 
 def main() -> None:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":

@@ -775,7 +775,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":

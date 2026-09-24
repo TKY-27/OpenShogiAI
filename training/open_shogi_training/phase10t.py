@@ -89,7 +89,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def validate(root: Path, *, local: bool = False) -> dict[str, Any]:
-    raise ValueError("Closed campaign: see docs/status.md; historical freeze is retired")
+    raise ValueError("Closed campaign; historical freeze is retired")
 
 
 def arena_statistics(
@@ -229,7 +229,7 @@ def progression(receipt: dict[str, Any], arena: dict[str, Any]) -> dict[str, Any
 
 
 def main() -> None:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":

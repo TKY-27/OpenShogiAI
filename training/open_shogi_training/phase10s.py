@@ -161,9 +161,7 @@ def _validate_ladder(value: Mapping[str, Any]) -> None:
 def validate_phase10s(
     root: Path, *, verify_local_evidence: bool = True, require_branch: bool = False
 ) -> dict[str, Any]:
-    raise Phase10SValidationError(
-        "Closed campaign: see docs/status.md; historical freeze is retired"
-    )
+    raise Phase10SValidationError("Closed campaign; historical freeze is retired")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -177,7 +175,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":

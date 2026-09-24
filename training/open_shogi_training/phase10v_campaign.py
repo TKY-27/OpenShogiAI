@@ -552,7 +552,7 @@ def research_objective_met(scores: list[ArenaScore]) -> bool:
 
 
 def main() -> None:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":

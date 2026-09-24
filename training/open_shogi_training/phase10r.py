@@ -716,9 +716,7 @@ def memory_estimates(root: Path) -> dict[str, Any]:
 
 
 def verify_frozen_hashes(root: Path, *, phase10t_runtime_successors: bool = False) -> None:
-    raise Phase10RValidationError(
-        "Closed campaign: see docs/status.md; historical freeze is retired"
-    )
+    raise Phase10RValidationError("Closed campaign; historical freeze is retired")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -732,7 +730,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    raise SystemExit("Closed campaign: see docs/status.md; use current development commands")
+    raise SystemExit("Closed campaign; use current development commands")
 
 
 if __name__ == "__main__":
