@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -250,6 +251,129 @@ def test_campaign_completed_checkpoint_keeps_stream_cursor(
     checkpoint = _load_checkpoint(Path(result["checkpoint"]))
     assert checkpoint["completed"] is True
     assert checkpoint["stream_index"] == 1
+
+
+def _bounded_config(max_steps: int) -> TrainingConfig:
+    return TrainingConfig(
+        variant_id=VARIANT_PAIR,
+        seed=123,
+        requested_device="cpu",
+        max_steps=max_steps,
+        batch_size=2,
+        checkpoint_interval_steps=1,
+        minimum_free_bytes=0,
+        enforce_disk=False,
+    )
+
+
+def test_checkpoint_receipt_matches_saved_digest(tmp_path: Path) -> None:
+    run_bounded_training(
+        [_example(index) for index in range(4)],
+        output_dir=tmp_path / "run",
+        manifest_sha256=MANIFEST_SHA,
+        config=_bounded_config(1),
+    )
+
+    for name in ("last.pt", "best.pt"):
+        receipt = tmp_path / "run" / f"{name}.sha256"
+        assert receipt.is_file()
+        assert not receipt.is_symlink()
+        content = receipt.read_text(encoding="ascii")
+        assert content.endswith("\n")
+        digest = content[: -len("\n")]
+        assert len(digest) == 64
+        assert digest == digest.lower()
+        assert set(digest) <= set("0123456789abcdef")
+        assert digest == hashlib.sha256((tmp_path / "run" / name).read_bytes()).hexdigest()
+
+
+def test_resume_refuses_tampered_checkpoint_before_torch_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    examples = [_example(index) for index in range(4)]
+    first = run_bounded_training(
+        examples,
+        output_dir=tmp_path / "first",
+        manifest_sha256=MANIFEST_SHA,
+        config=_bounded_config(2),
+    )
+    checkpoint = Path(first["checkpoint"])
+
+    def forbidden_load(*args: object, **kwargs: object) -> object:
+        raise AssertionError("torch.load must not run before the digest receipt verifies")
+
+    monkeypatch.setattr(torch, "load", forbidden_load)
+    with checkpoint.open("ab") as handle:
+        handle.write(b"tampered")
+    with pytest.raises(Phase10RTrainingError, match="digest mismatches its receipt"):
+        run_bounded_training(
+            examples,
+            output_dir=tmp_path / "resumed-tampered",
+            manifest_sha256=MANIFEST_SHA,
+            config=_bounded_config(4),
+            resume_from=checkpoint,
+        )
+    (tmp_path / "first" / "last.pt.sha256").unlink()
+    with pytest.raises(Phase10RTrainingError, match="digest receipt is missing"):
+        run_bounded_training(
+            examples,
+            output_dir=tmp_path / "resumed-unreceipted",
+            manifest_sha256=MANIFEST_SHA,
+            config=_bounded_config(4),
+            resume_from=checkpoint,
+        )
+
+
+def test_campaign_checkpoint_receipt_gates_resume_before_torch_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = Phase10RModel(VARIANT_PAIR, seed=123)
+    optimizer, scheduler = campaign._new_optimizer(model)
+    checkpoint = tmp_path / "stage" / "last.pt"
+    campaign._save_checkpoint(
+        checkpoint,
+        model,
+        optimizer,
+        scheduler,
+        manifest_sha256=MANIFEST_SHA,
+        stage_id=campaign.STAGE_ONE,
+        variant_id=model.variant_id,
+        step=3,
+        cursor=7,
+        metrics={"loss_sum": 1.5, "active_examples": 4},
+        completed=False,
+    )
+
+    def resumed_state() -> dict[str, object]:
+        fresh = Phase10RModel(VARIANT_PAIR, seed=123)
+        fresh_optimizer, fresh_scheduler = campaign._new_optimizer(fresh)
+        return campaign._load_checkpoint(
+            checkpoint,
+            fresh,
+            fresh_optimizer,
+            fresh_scheduler,
+            manifest_sha256=MANIFEST_SHA,
+            stage_id=campaign.STAGE_ONE,
+            variant_id=model.variant_id,
+            expected_rows=100,
+        )
+
+    state = resumed_state()
+    assert state["step"] == 3
+    assert state["cursor"] == 7
+    assert state["completed"] is False
+
+    def forbidden_load(*args: object, **kwargs: object) -> object:
+        raise AssertionError("torch.load must not run before the digest receipt verifies")
+
+    monkeypatch.setattr(torch, "load", forbidden_load)
+    with checkpoint.open("ab") as handle:
+        handle.write(b"tampered")
+    with pytest.raises(campaign.Phase10RCampaignError, match="digest mismatches its receipt"):
+        resumed_state()
+    (tmp_path / "stage" / "last.pt.sha256").unlink()
+    with pytest.raises(campaign.Phase10RCampaignError, match="digest receipt is missing"):
+        resumed_state()
 
 
 def test_primary_float_and_int8_exports_parse_without_overwrite(tmp_path: Path) -> None:

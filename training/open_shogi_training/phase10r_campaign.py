@@ -290,6 +290,51 @@ def _checkpoint_payload(
     }
 
 
+# Checkpoint payloads embed the numpy MT19937 RNG state.  Pickling that ndarray
+# requires exactly these four numpy globals (verified by round-trip; dropping any
+# one of them fails), so the weights_only unpickler stays restricted to them.
+_CHECKPOINT_SAFE_GLOBALS: Final = (
+    np._core.multiarray._reconstruct,
+    np.ndarray,
+    np.dtype,
+    np.dtypes.UInt32DType,
+)
+
+
+def _checkpoint_receipt_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.sha256")
+
+
+def _write_checkpoint_receipt(path: Path) -> None:
+    digest = _sha256_file(path)
+    receipt = _checkpoint_receipt_path(path)
+    temporary = receipt.with_name(f".{receipt.name}.{os.getpid()}.partial")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(f"{digest}\n".encode("ascii"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, receipt)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        raise _failure(f"cannot publish checkpoint digest receipt: {receipt}", error) from error
+
+
+def _verify_checkpoint_receipt(path: Path) -> None:
+    """Refuse to deserialize a checkpoint whose save-time digest receipt is absent/stale."""
+
+    receipt = _checkpoint_receipt_path(path)
+    if receipt.is_symlink() or not receipt.is_file():
+        raise Phase10RCampaignError(f"checkpoint digest receipt is missing: {receipt}")
+    try:
+        declared = receipt.read_text(encoding="ascii").strip()
+        actual = _sha256_file(path)
+    except (OSError, ValueError, Phase10RExecutionError) as error:
+        raise _failure(f"checkpoint digest receipt is unreadable: {receipt}", error) from error
+    if declared != actual:
+        raise Phase10RCampaignError(f"checkpoint digest mismatches its receipt: {path}")
+
+
 def _save_checkpoint(
     path: Path,
     model: Phase10RModel,
@@ -327,6 +372,7 @@ def _save_checkpoint(
     except (OSError, RuntimeError) as error:
         temporary.unlink(missing_ok=True)
         raise _failure(f"cannot publish checkpoint: {path}", error) from error
+    _write_checkpoint_receipt(path)
 
 
 def _move_optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
@@ -349,8 +395,10 @@ def _load_checkpoint(
 ) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise Phase10RCampaignError(f"checkpoint is not a regular file: {path}")
+    _verify_checkpoint_receipt(path)
     try:
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        with torch.serialization.safe_globals(_CHECKPOINT_SAFE_GLOBALS):
+            payload = torch.load(path, map_location="cpu", weights_only=True)
         if not isinstance(payload, dict):
             raise Phase10RCampaignError("checkpoint payload is not an object")
         for key, expected in (
@@ -1164,7 +1212,9 @@ def evaluate_scale(
         # receipt.  Training-device selection remains recorded separately.
         model = Phase10RModel(variant, seed=TRAINING_SEED).to("cpu")
         try:
-            payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            _verify_checkpoint_receipt(checkpoint)
+            with torch.serialization.safe_globals(_CHECKPOINT_SAFE_GLOBALS):
+                payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
             if (
                 not isinstance(payload, dict)
                 or payload.get("schema") != CHECKPOINT_SCHEMA

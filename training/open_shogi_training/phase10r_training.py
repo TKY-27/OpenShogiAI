@@ -629,6 +629,7 @@ def _atomic_torch_save(path: Path, payload: Mapping[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+    _write_checkpoint_receipt(path)
 
 
 def _checkpoint_payload(
@@ -660,6 +661,61 @@ def _checkpoint_payload(
     }
 
 
+# Checkpoint payloads embed the numpy MT19937 RNG state.  Pickling that ndarray
+# requires exactly these four numpy globals (verified by round-trip; dropping any
+# one of them fails), so the weights_only unpickler stays restricted to them.
+_CHECKPOINT_SAFE_GLOBALS: Final = (
+    np._core.multiarray._reconstruct,
+    np.ndarray,
+    np.dtype,
+    np.dtypes.UInt32DType,
+)
+
+
+def _checkpoint_receipt_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.sha256")
+
+
+def _digest_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_checkpoint_receipt(path: Path) -> None:
+    receipt = _checkpoint_receipt_path(path)
+    temporary = receipt.with_name(f".{receipt.name}.{os.getpid()}.partial")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(f"{_digest_file(path)}\n".encode("ascii"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, receipt)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        raise Phase10RTrainingError(
+            f"cannot publish checkpoint digest receipt: {receipt}"
+        ) from error
+
+
+def _verify_checkpoint_receipt(path: Path) -> None:
+    """Refuse to deserialize a checkpoint whose save-time digest receipt is absent/stale."""
+
+    receipt = _checkpoint_receipt_path(path)
+    if receipt.is_symlink() or not receipt.is_file():
+        raise Phase10RTrainingError(f"checkpoint digest receipt is missing: {receipt}")
+    try:
+        declared = receipt.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise Phase10RTrainingError(
+            f"checkpoint digest receipt is unreadable: {receipt}"
+        ) from error
+    if declared != _digest_file(path):
+        raise Phase10RTrainingError(f"checkpoint digest mismatches its receipt: {path}")
+
+
 def _load_checkpoint(
     path: Path,
     *,
@@ -671,8 +727,10 @@ def _load_checkpoint(
 ) -> tuple[int, list[int], int, dict[str, float]]:
     if not path.is_file() or path.is_symlink():
         raise Phase10RTrainingError("resume checkpoint must be a regular non-symlink file")
+    _verify_checkpoint_receipt(path)
     try:
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        with torch.serialization.safe_globals(_CHECKPOINT_SAFE_GLOBALS):
+            payload = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as error:
         raise Phase10RTrainingError("resume checkpoint cannot be decoded") from error
     if not isinstance(payload, dict) or payload.get("schema") != CHECKPOINT_SCHEMA:

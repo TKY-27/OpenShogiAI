@@ -1,12 +1,14 @@
 """C2 sampling/resume, small improvements, and independently decoded public bytes."""
 
 import json
+import urllib.request
 from collections import Counter
 
 import numpy as np
 import pytest
 import torch
 from open_shogi_training import evaluator_training as training
+from open_shogi_training import r4_sources
 from open_shogi_training.evaluator_sampling import coverage_order, exposure_summary
 from open_shogi_training.r4_sources import packed_move, unpack_position
 
@@ -237,3 +239,65 @@ def test_every_c2_stage_has_progress_monitoring(tmp_path):
 
     for stage in ALL_STAGES:
         assert isinstance(_progress_signature(tmp_path, stage), tuple)
+
+
+ORIGIN_URL = "https://huggingface.co/datasets/nodchip/shogi_hao_depth9/resolve/main/shard.bin"
+
+
+def _redirect(handler, newurl, hops=0):
+    request = urllib.request.Request(ORIGIN_URL)
+    request.reviewed_redirect_hops = hops
+    return handler.redirect_request(request, None, 302, "Found", {}, newurl)
+
+
+def test_redirect_handler_validates_every_intermediate_hop():
+    assert any(
+        isinstance(handler, r4_sources._ReviewedHostRedirectHandler)
+        for handler in r4_sources._OPENER.handlers
+    )
+    handler = r4_sources._ReviewedHostRedirectHandler()
+    followed = _redirect(handler, "https://cdn-lfs.huggingface.co/repo/shard.bin")
+    assert followed.full_url == "https://cdn-lfs.huggingface.co/repo/shard.bin"
+    assert followed.get_method() == "GET"
+    assert followed.reviewed_redirect_hops == 1
+    for newurl in (
+        "https://cdn-lfs.huggingface.co/repo/shard.bin",
+        "https://cas-bridge.xethub.hf.co/repo/shard.bin",
+    ):
+        assert _redirect(handler, newurl).full_url == newurl
+    for newurl in (
+        "http://huggingface.co/repo/shard.bin",
+        "https://evil.example.com/repo/shard.bin",
+        "https://xhuggingface.co/repo/shard.bin",
+        "https://huggingface.co.evil.com/repo/shard.bin",
+        "https://hf.co.evil.com/repo/shard.bin",
+        "https://hf.co/repo/shard.bin",
+        "https://huggingface.co./repo/shard.bin",
+        "https://user:pass@huggingface.co/repo/shard.bin",
+    ):
+        with pytest.raises(ValueError):
+            _redirect(handler, newurl)
+
+
+def test_redirect_handler_enforces_strict_hop_limit():
+    handler = r4_sources._ReviewedHostRedirectHandler()
+    request = urllib.request.Request(ORIGIN_URL)
+    for hops in range(1, handler.maximum_hops + 1):
+        request = handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "https://cas-bridge.xethub.hf.co/repo/shard.bin",
+        )
+        assert request.reviewed_redirect_hops == hops
+    with pytest.raises(ValueError, match="hop limit"):
+        handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "https://cas-bridge.xethub.hf.co/repo/shard.bin",
+        )

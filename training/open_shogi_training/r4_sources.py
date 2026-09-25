@@ -126,6 +126,38 @@ def packed_move(move: int) -> str:
     return square(origin) + square(destination) + ("+" if move & 32768 else "")
 
 
+class _ReviewedHostRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Validate every redirect hop against the reviewed dataset hosts before following it."""
+
+    maximum_hops = 4
+
+    @staticmethod
+    def _reviewed_host(host: str) -> bool:
+        # Kept identical to the final-response host check so no hop is accepted
+        # that the response would then reject after the payload was streamed.
+        return host == "huggingface.co" or host.endswith((".huggingface.co", ".hf.co"))
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlsplit(newurl)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not self._reviewed_host(host):
+            raise ValueError("source redirect left the reviewed dataset hosts")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("source redirect target carries credentials")
+        hops = getattr(req, "reviewed_redirect_hops", 0) + 1
+        if hops > self.maximum_hops:
+            raise ValueError("source redirect exceeded the hop limit")
+        req.reviewed_redirect_hops = hops
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        # urllib does not carry handler-specific request attributes across hops;
+        # propagate the counter so the limit covers the whole redirect chain.
+        redirected.reviewed_redirect_hops = hops
+        return redirected
+
+
+_OPENER = urllib.request.build_opener(_ReviewedHostRedirectHandler)
+
+
 def acquire(root: Path, plan: dict) -> list[Path]:
     from .r4_data import reference
 
@@ -149,16 +181,13 @@ def acquire(root: Path, plan: dict) -> list[Path]:
             raise ValueError("linked source staging file")
         for attempt in range(2):
             try:
-                with urllib.request.urlopen(url, timeout=60) as response, part.open("wb") as f:
-                    # urlopen follows redirects; the payload hash still pins the
-                    # bytes, but the final hop must stay on the reviewed dataset
-                    # hosts (huggingface.co and its LFS/Xet CDN domains).
+                with _OPENER.open(url, timeout=60) as response, part.open("wb") as f:
+                    # The redirect handler validates every hop against the reviewed
+                    # dataset hosts before it is followed, and the payload hash
+                    # still pins the bytes of the final response.
                     final = urllib.parse.urlsplit(response.geturl())
-                    host = final.hostname or ""
-                    if final.scheme != "https" or not (
-                        host == "huggingface.co"
-                        or host.endswith(".huggingface.co")
-                        or host.endswith(".hf.co")
+                    if final.scheme != "https" or not _ReviewedHostRedirectHandler._reviewed_host(
+                        (final.hostname or "").lower()
                     ):
                         raise ValueError("source redirect left the reviewed dataset hosts")
                     if response.status != 200:
