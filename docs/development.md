@@ -130,11 +130,15 @@ branch changes while running, paid compute, promotion, main merge or public weig
 A requested stop preserves source receipts, best export and two coherent resume checkpoints;
 optimizer, RNG, sampler order/offset and exposures restore together. Only the contract's bounded
 recovery is automatic.
-The phase10r campaign and bounded-training modules publish a `<name>.pt.sha256` digest receipt
-beside every checkpoint they write. Their resume and evaluation loads verify the file bytes against
-that receipt before deserialization and load with `weights_only=True` under a pinned numpy
-allowlist; a checkpoint without a matching receipt is refused rather than trusted. Sibling
-training tools outside those two modules keep their existing loaders. Code file hashes permit status/results-only documentation commits.
+The phase10r campaign, bounded-training, teacher-binding and phase10s modules publish a
+`<name>.pt.sha256` digest receipt beside every checkpoint they write. Their loads verify the file
+bytes against that receipt — or, for parent checkpoints, against the reviewed control manifest —
+before deserialization, and load with `weights_only=True` under a pinned numpy allowlist from a
+single in-memory read; a checkpoint without a verifiable digest is refused rather than trusted.
+Other training tools keep their existing loaders. A legacy checkpoint whose exact digest
+is recorded in a trusted summary or manifest can be migrated with
+`python -m open_shogi_training.checkpoint_safety CHECKPOINT.pt EXPECTED_SHA256`, which verifies the
+bytes, runs the limited loader, and issues the receipt without touching the original file. Code file hashes permit status/results-only documentation commits.
 
 All play is book-free. Training may use offline scenarios and the existing hash-pinned
 [Apery 2.0.0](https://github.com/HiraokaTakuya/apery_rust/releases/tag/v2.0.0) teacher.

@@ -193,6 +193,16 @@ def test_production_training_calls_raw_evidence_verifier_before_reading(monkeypa
         raise ValueError("raw teacher evidence does not bind this dataset")
 
     monkeypatch.setattr(phase10v_data, "verify_training_inputs", reject, raising=False)
+    # The 80 GiB production floor is an environmental guard, not the subject
+    # here; neutralize it so the assertion below holds on small disks too.
+    from open_shogi_training import phase10v_model
+
+    monkeypatch.setattr(
+        phase10v_model,
+        "_ensure_free_space",
+        lambda path: None,
+        raising=False,
+    )
     with pytest.raises(ValueError, match="raw teacher evidence"):
         train_supervised(
             tmp_path / "nonexistent-train",

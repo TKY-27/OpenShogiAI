@@ -637,16 +637,28 @@ def _run_analyze_max_plies(root: Path, argv: Sequence[str]) -> dict[str, Any]:
 
 
 def _load_checkpoint_model(root: Path, checkpoint: Mapping[str, Any]) -> tuple[Any, dict[str, Any]]:
-    import torch
 
+    from open_shogi_training.checkpoint_safety import (
+        CheckpointSafetyError,
+        deserialize,
+        read_verified_bytes,
+    )
     from open_shogi_training.phase10r_model import VARIANT_PAIR
     from open_shogi_training.phase10r_training import Phase10RModel
 
     path = root / str(checkpoint["path"])
     _ensure_regular(path, expected_sha256=str(checkpoint["sha256"]))
+    # The preserved receipt vouches for a digest; read the file once and
+    # deserialize exactly those verified bytes.
+    payload_bytes = read_verified_bytes(
+        path,
+        str(checkpoint["sha256"]),
+        error=Phase10SRunError,
+        mismatch_message="preserved checkpoint hash mismatch",
+    )
     try:
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-    except Exception as error:  # pragma: no cover - backend error text is receipt evidence
+        payload = deserialize(payload_bytes, error=CheckpointSafetyError)
+    except CheckpointSafetyError as error:
         raise Phase10SRunError(f"cannot load preserved checkpoint: {path}") from error
     if not isinstance(payload, dict) or payload.get("variant_id") != VARIANT_PAIR:
         raise Phase10SRunError(f"preserved checkpoint is not the frozen pair variant: {path}")

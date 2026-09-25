@@ -26,6 +26,13 @@ from typing import Any, Final
 import numpy as np
 import torch
 
+from open_shogi_training.checkpoint_safety import (
+    CheckpointSafetyError,
+    deserialize,
+    read_verified_bytes,
+    verify_receipt,
+    write_receipt,
+)
 from open_shogi_training.phase10r import _load_yaml
 from open_shogi_training.phase10r_campaign import (
     _candidate_parity,
@@ -826,6 +833,7 @@ def _atomic_torch_save(path: Path, payload: Mapping[str, Any]) -> None:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
         raise Phase10RTeacherBindingError(f"cannot save resumable checkpoint: {path}") from error
+    write_receipt(path, error=Phase10RTeacherBindingError)
 
 
 def _move_optimizer_state(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
@@ -880,15 +888,22 @@ def _load_parent(
     artifact_ref = selected["stage2_artifact"]
     checkpoint = _regular_path(root, checkpoint_ref["path"], f"{variant} parent checkpoint")
     artifact = _regular_path(root, artifact_ref["path"], f"{variant} parent artifact")
-    parent_checkpoint_sha256 = _sha256_file(checkpoint)
-    if parent_checkpoint_sha256 != checkpoint_ref["sha256"]:
-        raise Phase10RTeacherBindingError(f"{variant} parent checkpoint hash changed")
+    # The reviewed control manifest vouches for the parent checkpoint; read the
+    # file once and deserialize exactly those verified bytes so a later swap of
+    # the path cannot change what torch unpickles.
+    parent_checkpoint_bytes = read_verified_bytes(
+        checkpoint,
+        checkpoint_ref["sha256"],
+        error=Phase10RTeacherBindingError,
+        mismatch_message=f"{variant} parent checkpoint hash changed",
+    )
+    parent_checkpoint_sha256 = checkpoint_ref["sha256"]
     parent_artifact_sha256 = _sha256_file(artifact)
     if parent_artifact_sha256 != artifact_ref["sha256"]:
         raise Phase10RTeacherBindingError(f"{variant} parent artifact hash changed")
     try:
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    except (OSError, RuntimeError, ValueError, EOFError) as error:
+        payload = deserialize(parent_checkpoint_bytes, error=CheckpointSafetyError)
+    except CheckpointSafetyError as error:
         raise Phase10RTeacherBindingError(
             f"{variant} parent checkpoint cannot be loaded"
         ) from error
@@ -936,9 +951,19 @@ def _load_stage3_final(
     parent_checkpoint_sha256: str,
     identity_sha256: str,
 ) -> Mapping[str, Any]:
+    # Stage-3 checkpoints are written through _atomic_torch_save, which
+    # publishes a digest receipt; verify it and deserialize exactly those
+    # verified bytes.
+    declared = verify_receipt(path, error=Phase10RTeacherBindingError)
+    payload_bytes = read_verified_bytes(
+        path,
+        declared,
+        error=Phase10RTeacherBindingError,
+        mismatch_message="stage-3 checkpoint digest mismatches its receipt",
+    )
     try:
-        value = torch.load(path, map_location="cpu", weights_only=True)
-    except (OSError, RuntimeError, TypeError, ValueError, EOFError) as error:
+        value = deserialize(payload_bytes, error=CheckpointSafetyError)
+    except CheckpointSafetyError as error:
         raise Phase10RTeacherBindingError("stage-3 checkpoint cannot be decoded") from error
     if (
         not isinstance(value, Mapping)
@@ -1035,9 +1060,18 @@ def _run_stage3(
         "stream_rows_consumed": 0,
     }
     if progress_path.exists():
+        # The resumable progress file carries its own save-time receipt; read
+        # and verify the same bytes that are then deserialized.
+        declared = verify_receipt(progress_path, error=Phase10RTeacherBindingError)
+        progress_bytes = read_verified_bytes(
+            progress_path,
+            declared,
+            error=Phase10RTeacherBindingError,
+            mismatch_message="stage-3 progress digest mismatches its receipt",
+        )
         try:
-            progress = torch.load(progress_path, map_location="cpu", weights_only=False)
-        except (OSError, RuntimeError, TypeError, ValueError, EOFError) as error:
+            progress = deserialize(progress_bytes, error=CheckpointSafetyError)
+        except CheckpointSafetyError as error:
             raise Phase10RTeacherBindingError("stage-3 progress cannot be decoded") from error
         required = {
             "schema",
@@ -1663,6 +1697,7 @@ def _source_held_out_gates(
     control: Mapping[str, Any],
     variant: str,
     parent_checkpoint: Path,
+    parent_checkpoint_sha256: str,
     stage3_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     preparation_path = preparation_manifest_path(root, SCALE)
@@ -1671,11 +1706,17 @@ def _source_held_out_gates(
     expected_rows = preparation["files"]["base-source_held_out.jsonl"]["rows"]
     parent_model = Phase10RModel(variant, seed=STAGE3_SEED)
     child_model = Phase10RModel(variant, seed=STAGE3_SEED)
+    parent_bytes = read_verified_bytes(
+        parent_checkpoint,
+        parent_checkpoint_sha256,
+        error=Phase10RTeacherBindingError,
+        mismatch_message=f"{variant} parent checkpoint hash changed",
+    )
     try:
-        parent_payload = torch.load(parent_checkpoint, map_location="cpu", weights_only=False)
+        parent_payload = deserialize(parent_bytes, error=Phase10RTeacherBindingError)
         parent_model.load_state_dict(parent_payload["model_state"], strict=True)
         child_model.load_state_dict(stage3_payload["model_state"], strict=True)
-    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+    except (CheckpointSafetyError, OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         raise Phase10RTeacherBindingError("source-held-out model loading failed") from error
     data_root = _data_root(root)
     parent_metrics = _evaluate_file(
@@ -1951,7 +1992,9 @@ def calibrate_teacher(
         identity_sha256=control["teacher_binding_identity"]["identity_sha256"],
     )
     parity, parity_path = _parity(root, variant, artifact["path"])
-    source_gates = _source_held_out_gates(root, control, variant, parent_checkpoint, stage3_payload)
+    source_gates = _source_held_out_gates(
+        root, control, variant, parent_checkpoint, parent_checkpoint_sha256, stage3_payload
+    )
     tactical = _tactical_gate(root, parent_artifact, artifact["path"])
     if tactical["new_tactical_failures"] != 0:
         raise Phase10RTeacherBindingError("zero-new-tactical-failures gate failed")

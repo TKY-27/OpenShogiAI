@@ -24,6 +24,13 @@ from typing import Any, Final
 import numpy as np
 import torch
 
+from open_shogi_training.checkpoint_safety import (
+    CheckpointSafetyError,
+    deserialize,
+    read_verified_bytes,
+    verify_receipt,
+    write_receipt,
+)
 from open_shogi_training.phase10r import _load_yaml
 from open_shogi_training.phase10r_execution import (
     Phase10RExecutionError,
@@ -290,49 +297,25 @@ def _checkpoint_payload(
     }
 
 
-# Checkpoint payloads embed the numpy MT19937 RNG state.  Pickling that ndarray
-# requires exactly these four numpy globals (verified by round-trip; dropping any
-# one of them fails), so the weights_only unpickler stays restricted to them.
-_CHECKPOINT_SAFE_GLOBALS: Final = (
-    np._core.multiarray._reconstruct,
-    np.ndarray,
-    np.dtype,
-    np.dtypes.UInt32DType,
-)
+def _load_verified_checkpoint(path: Path) -> Any:
+    """Verify the save-time receipt, then deserialize exactly those bytes.
 
+    The file is read once and hashed in memory, so the bytes torch.load sees
+    are the bytes the receipt vouches for even if the path is re-pointed
+    afterwards.
+    """
 
-def _checkpoint_receipt_path(path: Path) -> Path:
-    return path.with_name(f"{path.name}.sha256")
-
-
-def _write_checkpoint_receipt(path: Path) -> None:
-    digest = _sha256_file(path)
-    receipt = _checkpoint_receipt_path(path)
-    temporary = receipt.with_name(f".{receipt.name}.{os.getpid()}.partial")
     try:
-        with temporary.open("wb") as handle:
-            handle.write(f"{digest}\n".encode("ascii"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, receipt)
-    except OSError as error:
-        temporary.unlink(missing_ok=True)
-        raise _failure(f"cannot publish checkpoint digest receipt: {receipt}", error) from error
-
-
-def _verify_checkpoint_receipt(path: Path) -> None:
-    """Refuse to deserialize a checkpoint whose save-time digest receipt is absent/stale."""
-
-    receipt = _checkpoint_receipt_path(path)
-    if receipt.is_symlink() or not receipt.is_file():
-        raise Phase10RCampaignError(f"checkpoint digest receipt is missing: {receipt}")
-    try:
-        declared = receipt.read_text(encoding="ascii").strip()
-        actual = _sha256_file(path)
-    except (OSError, ValueError, Phase10RExecutionError) as error:
-        raise _failure(f"checkpoint digest receipt is unreadable: {receipt}", error) from error
-    if declared != actual:
-        raise Phase10RCampaignError(f"checkpoint digest mismatches its receipt: {path}")
+        declared = verify_receipt(path, error=Phase10RCampaignError)
+        payload_bytes = read_verified_bytes(
+            path,
+            declared,
+            error=Phase10RCampaignError,
+            mismatch_message="checkpoint digest mismatches its receipt",
+        )
+        return deserialize(payload_bytes, error=CheckpointSafetyError)
+    except CheckpointSafetyError as error:
+        raise Phase10RCampaignError(str(error)) from error
 
 
 def _save_checkpoint(
@@ -372,7 +355,7 @@ def _save_checkpoint(
     except (OSError, RuntimeError) as error:
         temporary.unlink(missing_ok=True)
         raise _failure(f"cannot publish checkpoint: {path}", error) from error
-    _write_checkpoint_receipt(path)
+    write_receipt(path, error=lambda message: _failure(message))
 
 
 def _move_optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
@@ -395,10 +378,8 @@ def _load_checkpoint(
 ) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise Phase10RCampaignError(f"checkpoint is not a regular file: {path}")
-    _verify_checkpoint_receipt(path)
     try:
-        with torch.serialization.safe_globals(_CHECKPOINT_SAFE_GLOBALS):
-            payload = torch.load(path, map_location="cpu", weights_only=True)
+        payload = _load_verified_checkpoint(path)
         if not isinstance(payload, dict):
             raise Phase10RCampaignError("checkpoint payload is not an object")
         for key, expected in (
@@ -1212,9 +1193,7 @@ def evaluate_scale(
         # receipt.  Training-device selection remains recorded separately.
         model = Phase10RModel(variant, seed=TRAINING_SEED).to("cpu")
         try:
-            _verify_checkpoint_receipt(checkpoint)
-            with torch.serialization.safe_globals(_CHECKPOINT_SAFE_GLOBALS):
-                payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
+            payload = _load_verified_checkpoint(checkpoint)
             if (
                 not isinstance(payload, dict)
                 or payload.get("schema") != CHECKPOINT_SCHEMA
