@@ -10,6 +10,7 @@ import argparse
 import json
 import mmap
 import struct
+import urllib.parse
 import urllib.request
 from collections import Counter
 from pathlib import Path
@@ -149,6 +150,17 @@ def acquire(root: Path, plan: dict) -> list[Path]:
         for attempt in range(2):
             try:
                 with urllib.request.urlopen(url, timeout=60) as response, part.open("wb") as f:
+                    # urlopen follows redirects; the payload hash still pins the
+                    # bytes, but the final hop must stay on the reviewed dataset
+                    # hosts (huggingface.co and its LFS/Xet CDN domains).
+                    final = urllib.parse.urlsplit(response.geturl())
+                    host = final.hostname or ""
+                    if final.scheme != "https" or not (
+                        host == "huggingface.co"
+                        or host.endswith(".huggingface.co")
+                        or host.endswith(".hf.co")
+                    ):
+                        raise ValueError("source redirect left the reviewed dataset hosts")
                     if response.status != 200:
                         raise ValueError("full pinned shard required")
                     total = 0
