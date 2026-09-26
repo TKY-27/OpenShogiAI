@@ -10,10 +10,10 @@ export UV_CACHE_DIR CARGO_INCREMENTAL
 .PHONY: help bootstrap env-check deps python-sync format format-check lint rust-lint \
  python-lint test rust-test python-test build rust-build wasm-build wasm-web-generate \
  wasm-web-check boundary-check license-check provenance-check docs-check check \
- pure-build frozen-smoke phase3-validate-registry model-validate
+ pure-build pure-native-build usi-r4-package frozen-smoke phase3-validate-registry model-validate
 
 help:
-	@echo "OpenShogiAI: make check | build | test | format | lint | pure-build | frozen-smoke"
+	@echo "OpenShogiAI: make check | build | test | format | lint | pure-build | pure-native-build | usi-r4-package | frozen-smoke"
 	@echo "See docs/development.md. Historical campaigns are closed."
 
 bootstrap:
@@ -56,6 +56,10 @@ wasm-web-check:
 	WASM_BINDGEN="$(WASM_BINDGEN)" ./scripts/build_wasm_web.sh check
 pure-build:
 	CARGO_TARGET_DIR="$(PROJECT_ROOT)/target/pure" WASM_BINDGEN="$(WASM_BINDGEN)" ./scripts/build_phase10v_pure.sh
+pure-native-build:
+	CARGO_TARGET_DIR="$(PROJECT_ROOT)/target/pure" ./scripts/build_pure_native.sh
+usi-r4-package:
+	./scripts/build_usi_r4_package.sh
 frozen-smoke:
 	python3.12 scripts/check_frozen_model.py
 

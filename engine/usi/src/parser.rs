@@ -26,6 +26,32 @@ pub struct GoParameters {
     pub nodes: Option<u64>,
     pub depth: Option<u8>,
     pub infinite: bool,
+    /// A held `go ponder` request. Adapters never ponder: they keep the request
+    /// pending, start the ordinary search on `ponderhit`, and never answer the
+    /// predicted position early.
+    pub ponder: bool,
+}
+
+impl GoParameters {
+    /// Applies the clock fields carried by an `EarlyPonder` `ponderhit` line.
+    /// `ShogiHome` omits clocks from `go ponder` in that mode and sends them here.
+    pub(crate) fn apply_clock_override(&mut self, clocks: &GoParameters) {
+        if clocks.black_time_ms.is_some() {
+            self.black_time_ms = clocks.black_time_ms;
+        }
+        if clocks.white_time_ms.is_some() {
+            self.white_time_ms = clocks.white_time_ms;
+        }
+        if clocks.byoyomi_ms.is_some() {
+            self.byoyomi_ms = clocks.byoyomi_ms;
+        }
+        if clocks.black_increment_ms.is_some() {
+            self.black_increment_ms = clocks.black_increment_ms;
+        }
+        if clocks.white_increment_ms.is_some() {
+            self.white_increment_ms = clocks.white_increment_ms;
+        }
+    }
 }
 
 /// A parsed USI command with no engine-side effects.
@@ -33,14 +59,31 @@ pub struct GoParameters {
 pub enum UsiCommand {
     Usi,
     IsReady,
-    SetOption { name: String, value: Option<String> },
+    SetOption {
+        name: String,
+        value: Option<String>,
+    },
     NewGame,
-    PositionStartpos { moves: Vec<String> },
-    PositionSfen { sfen: String, moves: Vec<String> },
+    PositionStartpos {
+        moves: Vec<String>,
+    },
+    PositionSfen {
+        sfen: String,
+        moves: Vec<String>,
+    },
     Go(GoParameters),
+    /// A mate-search request. Only the parse shape is supported; adapters answer
+    /// `checkmate notimplemented` and stay usable.
+    GoMate {
+        limit_ms: Option<u64>,
+    },
+    /// `ponderhit`, optionally with the `EarlyPonder` clock options.
+    PonderHit(GoParameters),
     Stop,
     Quit,
-    GameOver { result: String },
+    GameOver {
+        result: String,
+    },
 }
 
 /// A bounded parser error suitable for a USI `info string` response.
@@ -93,7 +136,9 @@ pub fn parse_command(input: &str) -> Result<UsiCommand, UsiParseError> {
         "quit" if tokens.len() == 1 => Ok(UsiCommand::Quit),
         "setoption" => parse_setoption(&tokens),
         "position" => parse_position(&tokens),
+        "go" if tokens.get(1).copied() == Some("mate") => parse_go_mate(&tokens),
         "go" => parse_go(&tokens),
+        "ponderhit" => parse_ponderhit(&tokens),
         "gameover" => parse_gameover(&tokens),
         _ => Err(UsiParseError::new("unknown or malformed USI command")),
     }
@@ -169,6 +214,9 @@ fn parse_go(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
     let mut index = 1;
     while index < tokens.len() {
         let key = tokens[index];
+        if apply_clock_token(&mut parameters, "go", key, tokens, &mut index)? {
+            continue;
+        }
         match key {
             "infinite" => {
                 if parameters.infinite {
@@ -178,49 +226,14 @@ fn parse_go(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
                 index += 1;
             }
             "ponder" => {
-                return Err(UsiParseError::new("ponder is not supported"));
+                if parameters.ponder {
+                    return Err(UsiParseError::new("duplicate go ponder"));
+                }
+                parameters.ponder = true;
+                index += 1;
             }
-            "btime" => set_u64(
-                &mut parameters.black_time_ms,
-                tokens,
-                &mut index,
-                "btime",
-                true,
-                MAX_GO_CLOCK_MS,
-            )?,
-            "wtime" => set_u64(
-                &mut parameters.white_time_ms,
-                tokens,
-                &mut index,
-                "wtime",
-                true,
-                MAX_GO_CLOCK_MS,
-            )?,
-            "byoyomi" => set_u64(
-                &mut parameters.byoyomi_ms,
-                tokens,
-                &mut index,
-                "byoyomi",
-                true,
-                MAX_GO_BYOYOMI_MS,
-            )?,
-            "binc" => set_u64(
-                &mut parameters.black_increment_ms,
-                tokens,
-                &mut index,
-                "binc",
-                true,
-                MAX_GO_INCREMENT_MS,
-            )?,
-            "winc" => set_u64(
-                &mut parameters.white_increment_ms,
-                tokens,
-                &mut index,
-                "winc",
-                true,
-                MAX_GO_INCREMENT_MS,
-            )?,
             "movetime" => set_u64(
+                "go",
                 &mut parameters.movetime_ms,
                 tokens,
                 &mut index,
@@ -229,6 +242,7 @@ fn parse_go(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
                 MAX_GO_MOVETIME_MS,
             )?,
             "nodes" => set_u64(
+                "go",
                 &mut parameters.nodes,
                 tokens,
                 &mut index,
@@ -240,7 +254,7 @@ fn parse_go(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
                 if parameters.depth.is_some() {
                     return Err(UsiParseError::new("duplicate go depth"));
                 }
-                let raw = next_number(tokens, &mut index, "depth")?;
+                let raw = next_number("go", tokens, &mut index, "depth")?;
                 let depth = u8::try_from(raw)
                     .map_err(|_| UsiParseError::new("go depth exceeds the supported limit"))?;
                 if !(1..=MAX_GO_DEPTH).contains(&depth) {
@@ -263,7 +277,123 @@ fn parse_go(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
     Ok(UsiCommand::Go(parameters))
 }
 
+/// Parses `go mate <milliseconds | infinite>`. The engine never solves mates, but the
+/// bounded request shape must parse so the adapter can answer `checkmate notimplemented`.
+fn parse_go_mate(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
+    if tokens.len() != 3 {
+        return Err(UsiParseError::new(
+            "go mate requires `infinite` or a millisecond limit",
+        ));
+    }
+    let limit_ms = match tokens[2] {
+        "infinite" => None,
+        raw => {
+            let value = raw
+                .parse::<u64>()
+                .map_err(|_| UsiParseError::new("go mate has an invalid value"))?;
+            if value == 0 || value > MAX_GO_MOVETIME_MS {
+                return Err(UsiParseError::new(format!(
+                    "go mate must be 1..={MAX_GO_MOVETIME_MS}"
+                )));
+            }
+            Some(value)
+        }
+    };
+    Ok(UsiCommand::GoMate { limit_ms })
+}
+
+/// Parses `ponderhit`, with or without the `EarlyPonder` clock options that
+/// `ShogiHome` appends when it withheld clocks from the preceding `go ponder`.
+fn parse_ponderhit(tokens: &[&str]) -> Result<UsiCommand, UsiParseError> {
+    let mut clocks = GoParameters::default();
+    let mut index = 1;
+    while index < tokens.len() {
+        let key = tokens[index];
+        if !apply_clock_token(&mut clocks, "ponderhit", key, tokens, &mut index)? {
+            return Err(UsiParseError::new(format!(
+                "unsupported ponderhit token `{key}`"
+            )));
+        }
+    }
+    Ok(UsiCommand::PonderHit(clocks))
+}
+
+/// Consumes one `btime`/`wtime`/`byoyomi`/`binc`/`winc` field shared by `go` and
+/// `ponderhit`; returns `false` when the token belongs to another grammar.
+fn apply_clock_token(
+    parameters: &mut GoParameters,
+    scope: &str,
+    key: &str,
+    tokens: &[&str],
+    index: &mut usize,
+) -> Result<bool, UsiParseError> {
+    match key {
+        "btime" => {
+            set_u64(
+                scope,
+                &mut parameters.black_time_ms,
+                tokens,
+                index,
+                "btime",
+                true,
+                MAX_GO_CLOCK_MS,
+            )?;
+            Ok(true)
+        }
+        "wtime" => {
+            set_u64(
+                scope,
+                &mut parameters.white_time_ms,
+                tokens,
+                index,
+                "wtime",
+                true,
+                MAX_GO_CLOCK_MS,
+            )?;
+            Ok(true)
+        }
+        "byoyomi" => {
+            set_u64(
+                scope,
+                &mut parameters.byoyomi_ms,
+                tokens,
+                index,
+                "byoyomi",
+                true,
+                MAX_GO_BYOYOMI_MS,
+            )?;
+            Ok(true)
+        }
+        "binc" => {
+            set_u64(
+                scope,
+                &mut parameters.black_increment_ms,
+                tokens,
+                index,
+                "binc",
+                true,
+                MAX_GO_INCREMENT_MS,
+            )?;
+            Ok(true)
+        }
+        "winc" => {
+            set_u64(
+                scope,
+                &mut parameters.white_increment_ms,
+                tokens,
+                index,
+                "winc",
+                true,
+                MAX_GO_INCREMENT_MS,
+            )?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 fn set_u64(
+    scope: &str,
     slot: &mut Option<u64>,
     tokens: &[&str],
     index: &mut usize,
@@ -272,28 +402,35 @@ fn set_u64(
     maximum: u64,
 ) -> Result<(), UsiParseError> {
     if slot.is_some() {
-        return Err(UsiParseError::new(format!("duplicate go {name}")));
+        return Err(UsiParseError::new(format!("duplicate {scope} {name}")));
     }
-    let value = next_number(tokens, index, name)?;
+    let value = next_number(scope, tokens, index, name)?;
     if !allow_zero && value == 0 {
-        return Err(UsiParseError::new(format!("go {name} must be positive")));
+        return Err(UsiParseError::new(format!(
+            "{scope} {name} must be positive"
+        )));
     }
     if value > maximum {
         return Err(UsiParseError::new(format!(
-            "go {name} exceeds the defensive limit of {maximum}"
+            "{scope} {name} exceeds the defensive limit of {maximum}"
         )));
     }
     *slot = Some(value);
     Ok(())
 }
 
-fn next_number(tokens: &[&str], index: &mut usize, name: &str) -> Result<u64, UsiParseError> {
+fn next_number(
+    scope: &str,
+    tokens: &[&str],
+    index: &mut usize,
+    name: &str,
+) -> Result<u64, UsiParseError> {
     *index += 1;
     let value = tokens
         .get(*index)
-        .ok_or_else(|| UsiParseError::new(format!("go {name} requires a value")))?
+        .ok_or_else(|| UsiParseError::new(format!("{scope} {name} requires a value")))?
         .parse::<u64>()
-        .map_err(|_| UsiParseError::new(format!("go {name} has an invalid value")))?;
+        .map_err(|_| UsiParseError::new(format!("{scope} {name} has an invalid value")))?;
     *index += 1;
     Ok(value)
 }
@@ -345,8 +482,47 @@ mod tests {
                 nodes: Some(8),
                 depth: Some(7),
                 infinite: false,
+                ponder: false,
             })
         );
+    }
+
+    #[test]
+    fn parses_mate_ponder_and_ponderhit_requests() {
+        assert_eq!(
+            parse_command("go mate 60000").unwrap(),
+            UsiCommand::GoMate {
+                limit_ms: Some(60_000)
+            }
+        );
+        assert_eq!(
+            parse_command("go mate infinite").unwrap(),
+            UsiCommand::GoMate { limit_ms: None }
+        );
+        assert!(parse_command("go mate").is_err());
+        assert!(parse_command("go mate 0").is_err());
+        assert!(parse_command("go mate 99999999999999").is_err());
+        assert!(parse_command("go mate depth 4").is_err());
+        assert!(matches!(
+            parse_command("go ponder btime 1000 wtime 2000 binc 5 winc 5").unwrap(),
+            UsiCommand::Go(GoParameters { ponder: true, .. })
+        ));
+        assert!(parse_command("go ponder ponder").is_err());
+        assert_eq!(
+            parse_command("ponderhit").unwrap(),
+            UsiCommand::PonderHit(GoParameters::default())
+        );
+        assert_eq!(
+            parse_command("ponderhit btime 300 wtime 400 byoyomi 0").unwrap(),
+            UsiCommand::PonderHit(GoParameters {
+                black_time_ms: Some(300),
+                white_time_ms: Some(400),
+                byoyomi_ms: Some(0),
+                ..GoParameters::default()
+            })
+        );
+        assert!(parse_command("ponderhit nodes 5").is_err());
+        assert!(parse_command("ponderhit infinite").is_err());
     }
 
     #[test]

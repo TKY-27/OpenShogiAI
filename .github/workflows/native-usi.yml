@@ -1,0 +1,77 @@
+name: native-usi
+
+# One small hosted-Linux job: build the pure-only native engine, assemble the R4
+# launcher package, and drive the real binary through the ShogiHome-like protocol
+# suite. No secrets; the weights come from the pinned public Release asset.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-usi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the tested source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Record environment
+        run: |
+          {
+            echo "### native-usi environment"
+            echo '```'
+            uname -m
+            grep -E '^(PRETTY_NAME)=' /etc/os-release
+            rustup show
+            cargo --version
+            git rev-parse HEAD
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pure-feature unit and lifecycle tests
+        run: |
+          cargo test --locked -p open-shogi-usi --no-default-features --features pure-only
+          cargo test --locked -p open-shogi-cli --no-default-features --features pure-only
+
+      - name: Pure-feature lint
+        run: |
+          cargo clippy --locked -p open-shogi-usi --no-default-features --features pure-only --all-targets -- -D warnings
+          cargo clippy --locked -p open-shogi-cli --no-default-features --features pure-only --all-targets -- -D warnings
+
+      - name: Default-feature regression for the shared adapter code
+        run: |
+          cargo test --locked -p open-shogi-usi
+          cargo test --locked -p open-shogi-cli
+
+      - name: Build the R4 launch package
+        run: ./scripts/build_usi_r4_package.sh
+
+      - name: Drive the launcher through the ShogiHome-like protocol suite
+        run: python3 scripts/verify_usi_r4_native.py local/usi-r4/osai-r4-usi.sh --with-spaced-copy
+
+      - name: Record package identity
+        run: |
+          {
+            echo "### R4 package"
+            echo '```'
+            cat local/usi-r4/PACKAGE_IDENTITY.txt
+            cat local/usi-r4/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the verified package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: osai-r4-usi-linux-x86_64
+          path: local/usi-r4/
+          retention-days: 14
+          if-no-files-found: error

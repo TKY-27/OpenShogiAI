@@ -36,7 +36,6 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
         required("--model")?,
         hash,
     )?;
-    let mut engine = model.search_engine(SearchConfig::default(), hash)?;
     if command == "usi" {
         if options.keys().any(|key| {
             matches!(
@@ -48,8 +47,11 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
                 "USI search limits and history must be supplied through go and position".to_owned(),
             );
         }
+        // Readiness and the per-search engines are built inside the session; building
+        // one here would only be a duplicate transposition allocation.
         return open_shogi_usi::run_pure_stdio(&model, hash);
     }
+    let mut engine = model.search_engine(SearchConfig::default(), hash)?;
     let position = options.get("--sfen").map_or_else(
         || Ok(Position::startpos()),
         |sfen| parse_sfen(sfen).map_err(|error| error.to_string()),

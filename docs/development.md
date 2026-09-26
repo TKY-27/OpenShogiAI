@@ -8,6 +8,8 @@ Run commands from the repository root. Setup is in [README](../README.md).
 | `make test` | Rust and Python regression suites, using fixtures |
 | `make build` | Native workspace and byte-for-byte development Wasm regeneration |
 | `make pure-build` | Native and Wasm with `pure-only`, under `target/pure/` |
+| `make pure-native-build` | Native-only `pure-only` release build (no Wasm tooling) |
+| `make usi-r4-package` | Assemble the verified R4 USI launcher package under `local/usi-r4/` |
 | `make frozen-smoke` | Explicit local baseline hash/load/native/Wasm smoke; no Arena or training |
 | `make format` / `make lint` | Rustfmt, Clippy and Ruff |
 | `make phase3-validate-registry` | Validate source-rights catalog without acquisition |

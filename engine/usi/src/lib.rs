@@ -7,6 +7,8 @@ compile_error!("handcrafted and pure-only are mutually exclusive");
 #[cfg(not(any(feature = "handcrafted", feature = "pure-only")))]
 compile_error!("select exactly one build class: handcrafted or pure-only");
 
+mod clocks;
+mod lifecycle;
 mod parser;
 #[cfg(feature = "pure-only")]
 mod pure;

@@ -96,6 +96,8 @@ notes for the Gatekeeper note, or build from source as above.
 ## Documentation
 
 - [Development guide](docs/development.md) — commands, storage, validation.
+- [USI / ShogiHome play guide](docs/usi-shogihome.md) — run the published
+  OSAI R4 weights as a native USI opponent on Linux.
 - [Architecture](docs/architecture.md) and
   [interface contracts](docs/interfaces.md).
 - [Rules profile](docs/rules.md) — the shogi rules implemented.

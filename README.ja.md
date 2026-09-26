@@ -91,6 +91,8 @@ make check
 ## ドキュメント
 
 - [開発ガイド](docs/development.md) — コマンド、保存場所、検証。
+- [USI / ShogiHome 対局ガイド](docs/usi-shogihome.md)（英語）— 公開済み
+  OSAI R4 重みを Linux のネイティブ USI 対局エンジンとして登録・対局する手順。
 - [アーキテクチャ](docs/architecture.md)と[インターフェース契約](docs/interfaces.md)。
 - [ルール](docs/rules.md) — 実装している将棋ルール。
 - [モデル扱い](docs/model/handling.md)、

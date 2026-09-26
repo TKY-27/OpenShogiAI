@@ -1,20 +1,30 @@
 //! Asynchronous USI engine-session control.
 
 use std::{
-    io::{self, BufRead, Write},
-    sync::{Arc, Condvar, Mutex},
+    io::{self, BufRead},
+    sync::Arc,
     thread::{self, JoinHandle},
 };
 
 use open_shogi_core::{
-    CancellationToken, EvaluationConfig, MATE_SCORE, NeuralEvaluationMode, NeuralEvaluator,
-    NeuralQuantization, OpeningBookV2, OpeningPolicy, OpeningProfile, Osaval02Evaluator,
-    Osaval02Quantization, Position, RuntimeProfile, SearchConfig, SearchEngine, SearchInfo,
-    SearchResult, SearchTermination, TimeControl, TimeManager, is_mate_score, parse_sfen,
-    parse_usi_move, to_usi_move,
+    CancellationToken, EvaluationConfig, NeuralEvaluationMode, NeuralEvaluator, NeuralQuantization,
+    OpeningBookV2, OpeningPolicy, OpeningProfile, Osaval02Evaluator, Osaval02Quantization,
+    Position, RuntimeProfile, SearchConfig, SearchEngine, SearchResult, SearchTermination,
+    TimeManager, parse_sfen, parse_usi_move, to_usi_move,
 };
 
-use crate::{GoParameters, UsiCommand, engine_id_line, parse_command, parser::MAX_GO_DEPTH};
+pub use crate::lifecycle::ProtocolSink;
+use crate::{
+    GoParameters, UsiCommand,
+    clocks::time_control,
+    engine_id_line,
+    lifecycle::{
+        BoundedLine, CompletionGate, OutputAuthority, WriterSink, format_search_info,
+        read_bounded_line, sanitized,
+    },
+    parse_command,
+    parser::MAX_GO_DEPTH,
+};
 
 const MAX_HASH_MEGABYTES: usize = 1_024;
 const MAX_DEPTH: u8 = MAX_GO_DEPTH;
@@ -99,32 +109,6 @@ impl LoadedModel {
     }
 }
 
-/// A line-oriented output boundary. Implementations must not add logging to the USI stream.
-pub trait ProtocolSink: Send + Sync {
-    fn send(&self, line: &str);
-}
-
-struct WriterSink<W: Write + Send> {
-    writer: Mutex<W>,
-}
-
-impl<W: Write + Send> WriterSink<W> {
-    fn new(writer: W) -> Self {
-        Self {
-            writer: Mutex::new(writer),
-        }
-    }
-}
-
-impl<W: Write + Send> ProtocolSink for WriterSink<W> {
-    fn send(&self, line: &str) {
-        if let Ok(mut writer) = self.writer.lock() {
-            let _ = writeln!(writer, "{line}");
-            let _ = writer.flush();
-        }
-    }
-}
-
 /// Mutable engine options exposed through USI.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsiOptions {
@@ -171,65 +155,6 @@ struct ActiveSearch {
     handle: JoinHandle<()>,
 }
 
-#[derive(Default)]
-struct CompletionGate {
-    released: Mutex<bool>,
-    notification: Condvar,
-}
-
-impl CompletionGate {
-    fn release(&self) {
-        if let Ok(mut released) = self.released.lock() {
-            *released = true;
-            self.notification.notify_all();
-        }
-    }
-
-    fn wait(&self) -> bool {
-        let Ok(mut released) = self.released.lock() else {
-            return false;
-        };
-        while !*released {
-            let Ok(next) = self.notification.wait(released) else {
-                return false;
-            };
-            released = next;
-        }
-        true
-    }
-}
-
-#[derive(Default)]
-struct OutputAuthority {
-    generation: Mutex<u64>,
-}
-
-impl OutputAuthority {
-    fn advance(&self) -> u64 {
-        let mut generation = self
-            .generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *generation = generation
-            .checked_add(1)
-            .expect("USI output generation exhausted");
-        *generation
-    }
-
-    fn send_if_current<F>(&self, generation: u64, sink: &dyn ProtocolSink, make_line: F)
-    where
-        F: FnOnce() -> String,
-    {
-        let current = self
-            .generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *current == generation {
-            sink.send(&make_line());
-        }
-    }
-}
-
 /// One transactional USI session with at most one active worker.
 pub struct UsiSession {
     position: Position,
@@ -241,6 +166,8 @@ pub struct UsiSession {
     pending_model: Option<(ModelKind, String)>,
     opening_book: Option<Arc<OpeningBookV2>>,
     sink: Arc<dyn ProtocolSink>,
+    /// A held `go ponder` request. Invariant: set only while no search is active.
+    pending_ponder: Option<GoParameters>,
 }
 
 impl UsiSession {
@@ -256,6 +183,7 @@ impl UsiSession {
             pending_model: None,
             opening_book: None,
             sink,
+            pending_ponder: None,
         }
     }
 
@@ -294,6 +222,7 @@ impl UsiSession {
             }
             UsiCommand::NewGame => {
                 self.cancel_active(true);
+                self.pending_ponder = None;
                 self.position = Position::startpos();
             }
             UsiCommand::PositionStartpos { moves } => {
@@ -310,17 +239,48 @@ impl UsiSession {
                 }
             }
             UsiCommand::Go(parameters) => {
-                if let Err(error) = self.start_search(&parameters) {
+                if parameters.ponder {
+                    // No ponder search exists: hold the request instead of answering
+                    // the predicted position early or reinterpreting it as a search.
+                    self.cancel_active(true);
+                    self.pending_ponder = Some(parameters);
+                    self.send_error(
+                        "go ponder held without pondering; ponderhit starts the search and stop discards it (USI_Ponder must stay false)",
+                    );
+                } else if let Err(error) = self.start_search(&parameters) {
                     self.send_error(&error);
                     return false;
                 }
             }
-            UsiCommand::Stop => self.cancel_active(false),
+            UsiCommand::GoMate { .. } => self.sink.send("checkmate notimplemented"),
+            UsiCommand::PonderHit(clocks) => match self.pending_ponder.take() {
+                Some(mut pending) => {
+                    pending.apply_clock_override(&clocks);
+                    if let Err(error) = self.start_search(&pending) {
+                        self.send_error(&error);
+                        return false;
+                    }
+                }
+                None => self.send_error("ponderhit without a held go ponder"),
+            },
+            UsiCommand::Stop => {
+                if self.pending_ponder.take().is_some() {
+                    // USI requires an answer to stop; the GUI discards it in this state.
+                    self.send_error("discarded go ponder without ponderhit");
+                    self.sink.send("bestmove resign");
+                } else {
+                    self.cancel_active(false);
+                }
+            }
             UsiCommand::Quit => {
                 self.cancel_active(true);
+                self.pending_ponder = None;
                 return false;
             }
-            UsiCommand::GameOver { .. } => self.cancel_active(true),
+            UsiCommand::GameOver { .. } => {
+                self.cancel_active(true);
+                self.pending_ponder = None;
+            }
         }
         true
     }
@@ -331,6 +291,11 @@ impl UsiSession {
         self.sink.send(&format!(
             "option name USI_Hash type spin default {DEFAULT_HASH_MEGABYTES} min 1 max {MAX_HASH_MEGABYTES}"
         ));
+        // Advertise the real default so a GUI never invents USI_Ponder=true for us.
+        self.sink
+            .send("option name USI_Ponder type check default false");
+        self.sink
+            .send("option name Threads type spin default 1 min 1 max 1");
         self.sink
             .send("option name MaxDepth type spin default 8 min 1 max 64");
         self.sink.send(
@@ -370,6 +335,18 @@ impl UsiSession {
                     return Err(format!("USI_Hash must be 1..={MAX_HASH_MEGABYTES}"));
                 }
                 self.options.hash_megabytes = value;
+            }
+            "USI_Ponder" => {
+                let enabled = parse_bool_option(value, "USI_Ponder")?;
+                if enabled {
+                    return Err("pondering is not implemented; keep USI_Ponder false".to_owned());
+                }
+            }
+            "Threads" => {
+                let threads = parse_usize_option(value, "Threads")?;
+                if threads != 1 {
+                    return Err("only one search worker is supported".to_owned());
+                }
             }
             "MaxDepth" => {
                 let value = parse_u8_option(value, "MaxDepth")?;
@@ -507,6 +484,7 @@ impl UsiSession {
 
     fn set_position(&mut self, mut position: Position, moves: &[String]) -> Result<(), String> {
         self.cancel_active(true);
+        self.pending_ponder = None;
         for (index, notation) in moves.iter().enumerate() {
             let movement = parse_usi_move(notation)
                 .map_err(|error| format!("move {} is malformed: {error}", index + 1))?;
@@ -520,6 +498,7 @@ impl UsiSession {
 
     fn start_search(&mut self, parameters: &GoParameters) -> Result<(), String> {
         self.cancel_active(true);
+        self.pending_ponder = None;
         self.ensure_model_ready()?;
         if self.position.move_number() <= self.options.opening_max_plies
             && let Some(choice) = self.opening_book.as_ref().and_then(|book| {
@@ -559,10 +538,9 @@ impl UsiSession {
         let model_semantics = self.options.model_semantics;
         let runtime_profile = self.options.runtime_profile;
         let expected_model_sha256 = self.options.expected_model_sha256.clone();
-        let time_control = time_control(&self.options, parameters);
         let plan = TimeManager::default().plan_for_position(
             &position,
-            time_control,
+            time_control(parameters, self.options.safety_margin_ms),
             if parameters.infinite {
                 MAX_DEPTH
             } else {
@@ -789,17 +767,8 @@ impl UsiSession {
     }
 
     fn send_error(&self, message: &str) {
-        let sanitized = message
-            .chars()
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect::<String>();
-        self.sink.send(&format!("info string error {sanitized}"));
+        self.sink
+            .send(&format!("info string error {}", sanitized(message)));
     }
 }
 
@@ -823,6 +792,10 @@ fn complete_search(
             )
         });
     }
+    // Deliberate divergence from the pure adapter: the handcrafted profile answers
+    // a strict-inference failure with the protocol-required `resign` instead of a
+    // process-fatal error, because this session may carry a loaded neural model
+    // whose failure is recoverable at the GUI level. The pure adapter fails closed.
     let bestmove = if result.termination == SearchTermination::EvaluationError {
         "resign".to_owned()
     } else {
@@ -863,50 +836,6 @@ fn run_protocol<R: BufRead>(reader: &mut R, sink: Arc<dyn ProtocolSink>) -> io::
             BoundedLine::Eof => return Ok(()),
         }
     }
-}
-
-enum BoundedLine {
-    Line(String),
-    TooLong,
-    Eof,
-}
-
-fn read_bounded_line<R: BufRead>(reader: &mut R, maximum: usize) -> io::Result<BoundedLine> {
-    let mut bytes = Vec::with_capacity(maximum.min(4_096));
-    let mut saw_input = false;
-    let mut too_long = false;
-    loop {
-        let buffer = reader.fill_buf()?;
-        if buffer.is_empty() {
-            if !saw_input {
-                return Ok(BoundedLine::Eof);
-            }
-            return finish_bounded_line(bytes, too_long);
-        }
-        saw_input = true;
-        let newline = buffer.iter().position(|byte| *byte == b'\n');
-        let content_length = newline.unwrap_or(buffer.len());
-        if !too_long {
-            let remaining = maximum.saturating_add(1).saturating_sub(bytes.len());
-            let copy_length = content_length.min(remaining);
-            bytes.extend_from_slice(&buffer[..copy_length]);
-            too_long = copy_length < content_length || bytes.len() > maximum;
-        }
-        let consumed = newline.map_or(buffer.len(), |index| index + 1);
-        reader.consume(consumed);
-        if newline.is_some() {
-            return finish_bounded_line(bytes, too_long);
-        }
-    }
-}
-
-fn finish_bounded_line(bytes: Vec<u8>, too_long: bool) -> io::Result<BoundedLine> {
-    if too_long {
-        return Ok(BoundedLine::TooLong);
-    }
-    String::from_utf8(bytes)
-        .map(BoundedLine::Line)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 fn search_config(options: &UsiOptions) -> SearchConfig {
@@ -967,58 +896,6 @@ fn format_runtime_proof(proof: &open_shogi_core::RuntimeProofCounters) -> String
 
 fn hash_entries(megabytes: usize) -> usize {
     SearchEngine::transposition_entries_for_megabytes(megabytes).max(1)
-}
-
-fn time_control(options: &UsiOptions, parameters: &GoParameters) -> TimeControl {
-    TimeControl {
-        black_time_ms: parameters.black_time_ms,
-        white_time_ms: parameters.white_time_ms,
-        byoyomi_ms: parameters.byoyomi_ms,
-        black_increment_ms: parameters.black_increment_ms,
-        white_increment_ms: parameters.white_increment_ms,
-        movetime_ms: parameters.movetime_ms,
-        nodes: parameters.nodes,
-        depth: parameters.depth,
-        infinite: parameters.infinite,
-        casual: false,
-        safety_margin_ms: options.safety_margin_ms,
-    }
-}
-
-fn format_search_info(info: &SearchInfo) -> String {
-    let pv = info
-        .pv
-        .iter()
-        .copied()
-        .map(to_usi_move)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut line = format!(
-        "info depth {} seldepth {} nodes {} nps {} score {}",
-        info.depth,
-        info.seldepth,
-        info.nodes,
-        info.nps,
-        score_field(info.score)
-    );
-    if !pv.is_empty() {
-        line.push_str(" pv ");
-        line.push_str(&pv);
-    }
-    line
-}
-
-fn score_field(score: i32) -> String {
-    if !is_mate_score(score) {
-        return format!("cp {score}");
-    }
-    let distance = MATE_SCORE.saturating_sub(score.saturating_abs()).max(0);
-    let moves = (distance + 1) / 2;
-    if score < 0 && moves != 0 {
-        format!("mate -{moves}")
-    } else {
-        format!("mate {moves}")
-    }
 }
 
 fn evaluation_option_names() -> [&'static str; 8] {
@@ -1103,7 +980,7 @@ mod tests {
         io::Cursor,
         path::PathBuf,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicU64, Ordering},
         },
         thread,
@@ -1117,20 +994,8 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::io::Write as _;
 
-    use super::{
-        BoundedLine, ModelKind, OutputAuthority, ProtocolSink, UsiSession, format_search_info,
-        read_bounded_line, run_protocol, time_control,
-    };
-    use crate::GoParameters;
-
-    #[derive(Default)]
-    struct MemorySink(Mutex<Vec<String>>);
-
-    impl ProtocolSink for MemorySink {
-        fn send(&self, line: &str) {
-            self.0.lock().unwrap().push(line.to_owned());
-        }
-    }
+    use super::{ModelKind, UsiSession, format_search_info, run_protocol};
+    use crate::{GoParameters, clocks::time_control, lifecycle::test_support::MemorySink};
 
     static NEXT_MODEL_FILE: AtomicU64 = AtomicU64::new(0);
 
@@ -1239,11 +1104,21 @@ mod tests {
         let sink = Arc::new(MemorySink::default());
         let mut session = UsiSession::new(sink.clone());
         assert!(session.process_line("usi"));
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert!(lines.first().unwrap().starts_with("id name OpenShogiAI "));
         assert!(lines.iter().any(|line| {
             line.starts_with("option name USI_Hash type spin default 32 min 1 max 1024")
         }));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "option name USI_Ponder type check default false")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "option name Threads type spin default 1 min 1 max 1")
+        );
         assert!(
             !lines
                 .iter()
@@ -1292,9 +1167,7 @@ mod tests {
             NeuralQuantization::Float32
         );
         assert!(
-            sink.0
-                .lock()
-                .unwrap()
+            sink.lines()
                 .iter()
                 .any(|line| line.starts_with("info string model loaded neural-float "))
         );
@@ -1310,11 +1183,11 @@ mod tests {
                 .quantization(),
             NeuralQuantization::Float32
         );
-        assert!(sink.0.lock().unwrap().iter().any(|line| {
+        assert!(sink.lines().iter().any(|line| {
             line.starts_with("info string error ") && line.contains("requires Int8 weights")
         }));
         assert!(session.process_line("isready"));
-        assert_eq!(sink.0.lock().unwrap().last().unwrap(), "readyok");
+        assert_eq!(sink.lines().last().unwrap(), "readyok");
 
         let quantized = TemporaryModel::write(&model_bytes(NeuralQuantization::Int8));
         assert!(session.process_line(&format!(
@@ -1349,7 +1222,7 @@ mod tests {
         assert_eq!(session.options().model_kind, ModelKind::NeuralFloat);
         assert!(session.neural_evaluator.is_none());
         assert!(
-            sink.0.lock().unwrap().iter().any(|line| {
+            sink.lines().iter().any(|line| {
                 line.starts_with("info string error ") && line.contains("checksum")
             })
         );
@@ -1362,7 +1235,7 @@ mod tests {
             empty_session.options().model_kind,
             ModelKind::NeuralQuantized
         );
-        let lines = empty_sink.0.lock().unwrap();
+        let lines = empty_sink.lines();
         assert!(lines[0].contains("ModelPath is required"));
         assert!(!lines.iter().any(|line| line == "readyok"));
         assert!(!lines.iter().any(|line| line.starts_with("bestmove ")));
@@ -1375,9 +1248,7 @@ mod tests {
         assert!(session.process_line("setoption name RuntimeProfile value pure_learned"));
         assert!(!session.process_line("isready"));
         assert!(
-            sink.0
-                .lock()
-                .unwrap()
+            sink.lines()
                 .iter()
                 .any(|line| { line.contains("pure_learned requires an OSAVAL02 ModelKind") })
         );
@@ -1396,7 +1267,7 @@ mod tests {
             "a".repeat(64)
         )));
         assert!(!session.process_line("isready"));
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert!(
             lines
                 .iter()
@@ -1423,7 +1294,7 @@ mod tests {
         )));
         assert!(session.neural_evaluator.is_none());
         assert!(!session.process_line("isready"));
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert!(!lines.iter().any(|line| line == "readyok"));
         assert!(!lines.iter().any(|line| line.starts_with("bestmove ")));
         assert!(lines.iter().any(|line| {
@@ -1463,7 +1334,7 @@ mod tests {
         )));
         assert!(session.neural_evaluator.is_none());
         assert!(!session.process_line("isready"));
-        assert!(!sink.0.lock().unwrap().iter().any(|line| line == "readyok"));
+        assert!(!sink.lines().iter().any(|line| line == "readyok"));
     }
 
     #[test]
@@ -1479,7 +1350,7 @@ mod tests {
         assert!(session.process_line("setoption name ModelKind value neural-float"));
         fs::remove_file(&model.0).expect("remove loaded source model");
         assert!(session.process_line("isready"));
-        assert!(sink.0.lock().unwrap().iter().any(|line| line == "readyok"));
+        assert!(sink.lines().iter().any(|line| line == "readyok"));
     }
 
     #[test]
@@ -1491,9 +1362,7 @@ mod tests {
         assert!(session.active.is_none());
         assert!(
             !sink
-                .0
-                .lock()
-                .unwrap()
+                .lines()
                 .iter()
                 .any(|line| line.starts_with("bestmove "))
         );
@@ -1504,7 +1373,7 @@ mod tests {
             model.display()
         )));
         assert!(session.process_line("isready"));
-        assert!(sink.0.lock().unwrap().iter().any(|line| line == "readyok"));
+        assert!(sink.lines().iter().any(|line| line == "readyok"));
     }
 
     #[test]
@@ -1513,7 +1382,7 @@ mod tests {
         let mut input =
             Cursor::new(b"setoption name ModelKind value neural-float\nisready\nusi\n".to_vec());
         run_protocol(&mut input, sink.clone()).unwrap();
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert!(lines.iter().any(|line| {
             line.starts_with("info string error ") && line.contains("ModelPath is required")
         }));
@@ -1529,9 +1398,7 @@ mod tests {
         assert!(session.process_line("position startpos moves 7g7f 7g7f"));
         assert_eq!(to_sfen(session.position()), before);
         assert!(
-            sink.0
-                .lock()
-                .unwrap()
+            sink.lines()
                 .iter()
                 .any(|line| line.starts_with("info string error"))
         );
@@ -1560,7 +1427,7 @@ mod tests {
         assert!(session.process_line("isready"));
         assert!(session.process_line("unknown"));
         assert!(!session.process_line("quit"));
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert_eq!(lines[0], "readyok");
         assert!(lines[1].starts_with("info string error "));
         assert!(!lines[1].contains('\n'));
@@ -1594,9 +1461,7 @@ mod tests {
         assert!(session.process_line("go nodes 50 depth 2"));
         for _ in 0..100 {
             if sink
-                .0
-                .lock()
-                .unwrap()
+                .lines()
                 .iter()
                 .any(|line| line.starts_with("bestmove "))
             {
@@ -1605,7 +1470,7 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(session.process_line("stop"));
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert_eq!(
             lines
                 .iter()
@@ -1626,7 +1491,7 @@ mod tests {
             book.display()
         )));
         assert!(session.opening_book.is_none());
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert!(
             lines
                 .iter()
@@ -1643,48 +1508,30 @@ mod tests {
         assert!(session.process_line("go nodes 1000000001"));
         assert!(session.active.is_none());
         assert!(
-            sink.0
-                .lock()
-                .unwrap()
+            sink.lines()
                 .iter()
                 .any(|line| line.starts_with("info string error "))
         );
         assert!(
             !sink
-                .0
-                .lock()
-                .unwrap()
+                .lines()
                 .iter()
                 .any(|line| line.starts_with("bestmove "))
         );
     }
 
     #[test]
-    fn invalidated_output_authority_suppresses_stale_worker_output() {
-        let authority = OutputAuthority::default();
-        let sink = MemorySink::default();
-        let generation = authority.advance();
-
-        authority.send_if_current(generation, &sink, || "current".to_owned());
-        authority.advance();
-        authority.send_if_current(generation, &sink, || "stale".to_owned());
-
-        assert_eq!(*sink.0.lock().unwrap(), ["current"]);
-    }
-
-    #[test]
     fn clock_allocation_handles_byoyomi_only_and_zero_clock() {
-        let options = super::UsiOptions::default();
         let manager = open_shogi_core::TimeManager::default();
         let byoyomi = manager
             .plan(
                 open_shogi_core::Side::Black,
                 time_control(
-                    &options,
                     &GoParameters {
                         byoyomi_ms: Some(500),
                         ..GoParameters::default()
                     },
+                    super::DEFAULT_SAFETY_MARGIN_MS,
                 ),
                 8,
             )
@@ -1699,17 +1546,103 @@ mod tests {
             .plan(
                 open_shogi_core::Side::Black,
                 time_control(
-                    &options,
                     &GoParameters {
                         black_time_ms: Some(0),
                         ..GoParameters::default()
                     },
+                    super::DEFAULT_SAFETY_MARGIN_MS,
                 ),
                 8,
             )
             .unwrap();
         assert_eq!(zero_clock.allocated_hard_limit, Some(Duration::ZERO));
         assert_eq!(zero_clock.hard_limit, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn fischer_clocks_receive_the_increment_as_spendable_time() {
+        for base in [0_u64, 60_000] {
+            let plan = open_shogi_core::TimeManager::default()
+                .plan_for_position(
+                    &Position::startpos(),
+                    time_control(
+                        &GoParameters {
+                            black_time_ms: Some(base),
+                            white_time_ms: Some(base),
+                            black_increment_ms: Some(1_000),
+                            white_increment_ms: Some(1_000),
+                            ..GoParameters::default()
+                        },
+                        super::DEFAULT_SAFETY_MARGIN_MS,
+                    ),
+                    8,
+                )
+                .unwrap();
+            assert!(plan.mode == open_shogi_core::TimeControlMode::Clock);
+            assert!(
+                plan.hard_limit.unwrap_or_default() > Duration::ZERO,
+                "base {base} ms with a positive increment must leave usable time"
+            );
+            assert!(
+                plan.allocated_hard_limit.unwrap_or_default()
+                    <= Duration::from_millis(base + 1_000),
+                "the increment is credited once, never duplicated"
+            );
+        }
+    }
+
+    #[test]
+    fn ponder_negotiation_holds_go_ponder_until_ponderhit() {
+        let sink = Arc::new(MemorySink::default());
+        let mut session = UsiSession::new(sink.clone());
+        assert!(session.process_line("setoption name USI_Ponder value true"));
+        assert!(
+            sink.lines()
+                .iter()
+                .any(|line| line.contains("pondering is not implemented"))
+        );
+        assert!(session.process_line("setoption name USI_Ponder value false"));
+        assert!(session.process_line("setoption name Threads value 1"));
+        assert!(session.process_line("setoption name Threads value 8"));
+        assert!(
+            sink.lines()
+                .iter()
+                .any(|line| line.contains("only one search worker"))
+        );
+
+        assert!(session.process_line("go ponder"));
+        assert!(session.pending_ponder.is_some());
+        assert!(session.process_line("stop"));
+        assert!(session.pending_ponder.is_none());
+        assert!(session.process_line("go ponder"));
+        assert!(session.pending_ponder.is_some());
+        assert!(session.process_line("stop"));
+        assert!(session.process_line("ponderhit"));
+        assert!(
+            sink.lines()
+                .iter()
+                .any(|line| line.contains("ponderhit without a held go ponder"))
+        );
+        assert!(
+            sink.lines()
+                .iter()
+                .filter(|line| line.starts_with("bestmove "))
+                .count()
+                == 2,
+            "each discarded go ponder answers stop so the GUI never stalls"
+        );
+    }
+
+    #[test]
+    fn go_mate_is_declined_without_leaving_the_protocol() {
+        let sink = Arc::new(MemorySink::default());
+        let mut session = UsiSession::new(sink.clone());
+        assert!(session.process_line("go mate 5000"));
+        assert!(session.process_line("isready"));
+        assert!(session.active.is_none());
+        let lines = sink.lines();
+        assert!(lines.iter().any(|line| line == "checkmate notimplemented"));
+        assert!(lines.iter().any(|line| line == "readyok"));
     }
 
     #[test]
@@ -1721,35 +1654,18 @@ mod tests {
         thread::sleep(Duration::from_millis(25));
         assert!(
             !sink
-                .0
-                .lock()
-                .unwrap()
+                .lines()
                 .iter()
                 .any(|line| line.starts_with("bestmove "))
         );
         assert!(session.process_line("stop"));
         assert_eq!(
-            sink.0
-                .lock()
-                .unwrap()
+            sink.lines()
                 .iter()
                 .filter(|line| line.starts_with("bestmove "))
                 .count(),
             1
         );
-    }
-
-    #[test]
-    fn bounded_reader_drains_overlong_no_newline_input() {
-        let mut reader = Cursor::new(vec![b'x'; 4_097]);
-        assert!(matches!(
-            read_bounded_line(&mut reader, 4_096).unwrap(),
-            BoundedLine::TooLong
-        ));
-        assert!(matches!(
-            read_bounded_line(&mut reader, 4_096).unwrap(),
-            BoundedLine::Eof
-        ));
     }
 
     #[test]
@@ -1759,7 +1675,7 @@ mod tests {
         let mut reader = Cursor::new(input);
         let sink = Arc::new(MemorySink::default());
         run_protocol(&mut reader, sink.clone()).unwrap();
-        let lines = sink.0.lock().unwrap();
+        let lines = sink.lines();
         assert!(
             lines
                 .iter()
