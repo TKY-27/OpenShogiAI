@@ -107,8 +107,8 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
 
 fn options(arguments: &[String]) -> Result<BTreeMap<&str, &str>, String> {
     let mut options = BTreeMap::new();
-    let mut chunks = arguments.chunks_exact(2);
-    for pair in &mut chunks {
+    let (pairs, remainder) = arguments.as_chunks::<2>();
+    for pair in pairs {
         if !matches!(
             pair[0].as_str(),
             "--model"
@@ -127,7 +127,7 @@ fn options(arguments: &[String]) -> Result<BTreeMap<&str, &str>, String> {
             return Err(format!("duplicate option {}", pair[0]));
         }
     }
-    if !chunks.remainder().is_empty() {
+    if !remainder.is_empty() {
         return Err("option requires a value".to_owned());
     }
     Ok(options)
