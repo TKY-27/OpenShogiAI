@@ -38,6 +38,7 @@ pub use phase10v::{
 };
 mod pure_playing;
 pub use pure_playing::PurePlayingEvaluator;
+mod parallel;
 mod position;
 mod resource;
 mod runtime_profile;
@@ -63,7 +64,9 @@ mod secure_file;
     target_os = "android"
 )))]
 mod secure_file_portable;
+mod threads;
 mod time_control;
+mod transposition;
 mod types;
 
 pub use analysis::{
@@ -145,6 +148,7 @@ pub use secure_file::{
     target_os = "android"
 )))]
 pub use secure_file_portable::{AnchoredFile, StableFileIdentity};
+pub use threads::{WorkerBasis, probe_worker_basis, usable_logical_cpus};
 pub use time_control::{
     CASUAL_HARD_MAX_MS, MAX_CLOCK_MS, MAX_MOVE_TIME_MS, MAX_SAFETY_MARGIN_MS,
     MAX_TIME_CONTROL_DEPTH, MAX_TIME_CONTROL_NODES, StabilityPolicy, TIME_CONTROL_SCHEMA,

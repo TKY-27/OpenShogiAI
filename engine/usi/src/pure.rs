@@ -1,6 +1,6 @@
 //! Pure-only USI session. The model is validated before the protocol starts and stays
-//! immutable; only the transposition budget is negotiable. One search worker, ponder
-//! never enabled, and every fatal failure is reported instead of becoming a move.
+//! immutable; only the transposition budget and search-worker count are negotiable. Ponder
+//! is never enabled, and every fatal failure is reported instead of becoming a move.
 
 use std::{
     io::{self, BufRead},
@@ -15,7 +15,7 @@ use std::{
 use open_shogi_core::{
     CancellationToken, Position, PurePlayingEvaluator, SearchConfig, SearchEngine, SearchOutcome,
     SearchTermination, TimeManager, TimePlan, is_mate_score, parse_sfen, parse_usi_move,
-    to_usi_move,
+    probe_worker_basis, to_usi_move, usable_logical_cpus,
 };
 
 use crate::{
@@ -40,12 +40,17 @@ const MODEL_SHORT_HASH_BYTES: usize = 8;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PureOptions {
     hash_megabytes: usize,
+    /// Manual worker count, applied when `auto_threads` is false.
+    threads: usize,
+    auto_threads: bool,
 }
 
 impl Default for PureOptions {
     fn default() -> Self {
         Self {
             hash_megabytes: DEFAULT_HASH_MEGABYTES,
+            threads: 1,
+            auto_threads: true,
         }
     }
 }
@@ -112,6 +117,7 @@ struct PureSession<'a> {
     model: &'a PurePlayingEvaluator,
     model_hash: &'a str,
     options: PureOptions,
+    threads_max: usize,
     output: Arc<dyn ProtocolSink>,
     authority: Arc<OutputAuthority>,
     events: mpsc::Receiver<Event>,
@@ -122,6 +128,10 @@ struct PureSession<'a> {
     worker: Option<PureWorker>,
     /// A held `go ponder` request. Invariant: set only while no worker is active.
     pending_ponder: Option<GoParameters>,
+    /// Cross-move clock state (extension cooldown) shared with the search worker, and
+    /// sticky automatic worker sizing.
+    time_manager: Arc<std::sync::Mutex<TimeManager>>,
+    auto_workers: usize,
 }
 
 /// Run USI with an immutable validated pure model and no alternate evaluator.
@@ -178,6 +188,7 @@ fn session_loop(
         model,
         model_hash: hash,
         options: PureOptions::default(),
+        threads_max: usable_logical_cpus(),
         output,
         authority: Arc::new(OutputAuthority::default()),
         events,
@@ -187,6 +198,8 @@ fn session_loop(
         history_moves: Vec::new(),
         worker: None,
         pending_ponder: None,
+        time_manager: Arc::new(std::sync::Mutex::new(TimeManager::default())),
+        auto_workers: probe_worker_basis().automatic_workers().get(),
     };
     loop {
         let event = session
@@ -366,34 +379,38 @@ impl PureSession<'_> {
 
     fn set_option(&mut self, name: &str, value: Option<&str>) {
         let applied = match name {
-            "USI_Hash" | "Hash" => parse_hash_megabytes(value).map(Some),
+            "USI_Hash" | "Hash" => {
+                parse_hash_megabytes(value).map(|megabytes| self.options.hash_megabytes = megabytes)
+            }
             "USI_Ponder" => match value {
-                Some("false") => Ok(None),
+                Some("false") => Ok(()),
                 Some("true") => {
                     Err("pondering is not implemented; keep USI_Ponder false".to_owned())
                 }
                 _ => Err("USI_Ponder must be `true` or `false`".to_owned()),
             },
-            "Threads" => match value {
-                Some("1") => Ok(None),
-                _ => Err("only one search worker is supported".to_owned()),
+            "Threads" => {
+                parse_threads(value, self.threads_max).map(|threads| self.options.threads = threads)
+            }
+            "AutoThreads" => match value {
+                Some("true") => Ok(self.options.auto_threads = true),
+                Some("false") => Ok(self.options.auto_threads = false),
+                _ => Err("AutoThreads must be `true` or `false`".to_owned()),
             },
             "RuntimeProfile" => match value {
-                Some("pure_learned") => Ok(None),
+                Some("pure_learned") => Ok(()),
                 _ => Err(
                     "pure-only USI only accepts RuntimeProfile=pure_learned; model identity is immutable"
                         .to_owned(),
                 ),
             },
             _ => Err(format!(
-                "unknown option `{}`; accepted: USI_Hash, USI_Ponder, Threads, RuntimeProfile",
+                "unknown option `{}`; accepted: USI_Hash, USI_Ponder, Threads, AutoThreads, RuntimeProfile",
                 sanitized(name)
             )),
         };
-        match applied {
-            Ok(Some(hash_megabytes)) => self.options.hash_megabytes = hash_megabytes,
-            Ok(None) => {}
-            Err(message) => self.diagnose(&message),
+        if let Err(message) = applied {
+            self.diagnose(&message);
         }
     }
 
@@ -410,20 +427,40 @@ impl PureSession<'_> {
         }
     }
 
+    /// Worker count for this search: manual when overridden, otherwise the automatic
+    /// topology/load plan smoothed by hysteresis so jitter cannot thrash worker counts
+    /// between moves. Evaluated only here, at a search boundary.
+    fn workers_for_search(&mut self) -> (usize, String) {
+        if !self.options.auto_threads {
+            return (self.options.threads, "manual".to_owned());
+        }
+        let basis = probe_worker_basis();
+        let automatic = basis.automatic_workers().get();
+        if automatic.abs_diff(self.auto_workers) >= 2 {
+            self.auto_workers = automatic;
+        }
+        (self.auto_workers, basis.describe())
+    }
+
     fn start_search(&mut self, parameters: &GoParameters) -> Result<(), String> {
         self.finish(FinishPolicy::Supersede)?;
         self.pending_ponder = None;
-        let plan = match TimeManager::default().plan_for_position(
-            &self.position,
-            time_control(parameters, DEFAULT_SAFETY_MARGIN_MS),
-            open_shogi_core::MAX_TIME_CONTROL_DEPTH,
-        ) {
+        let plan = match self
+            .time_manager
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .plan_for_position(
+                &self.position,
+                time_control(parameters, DEFAULT_SAFETY_MARGIN_MS),
+                open_shogi_core::MAX_TIME_CONTROL_DEPTH,
+            ) {
             Ok(plan) => plan,
             Err(message) => {
                 self.diagnose(&message);
                 return Ok(());
             }
         };
+        let (workers, basis) = self.workers_for_search();
         let entries = hash_entries(self.options.hash_megabytes);
         // One fresh engine per accepted request: the transposition table is rebuilt
         // with the negotiated budget and never carries state across games or moves.
@@ -441,7 +478,7 @@ impl PureSession<'_> {
             .set_pure_history(&self.history_initial, &self.history_moves)
             .map_err(|error| format!("pure history binding failed: {error}"))?;
         self.send(&format!(
-            "info string hash {}MiB transposition_entries {entries} workers 1",
+            "info string hash {}MiB transposition_entries {entries} workers {workers} threads {basis}",
             self.options.hash_megabytes
         ));
         let generation = self.authority.advance();
@@ -459,6 +496,7 @@ impl PureSession<'_> {
         let event_sender = self.event_sender.clone();
         let model_hash = self.model_hash.to_owned();
         let root = self.position.clone();
+        let worker_time_manager = Arc::clone(&self.time_manager);
         let worker_generation = completion.generation;
         let handle = thread::spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -470,6 +508,8 @@ impl PureSession<'_> {
                     &mut engine,
                     &root,
                     plan,
+                    workers,
+                    &worker_time_manager,
                     &worker_cancellation,
                     &model_hash,
                     &completion,
@@ -527,13 +567,20 @@ fn run_search(
     engine: &mut SearchEngine,
     root: &Position,
     plan: TimePlan,
+    workers: usize,
+    time_manager: &Arc<std::sync::Mutex<TimeManager>>,
     cancellation: &CancellationToken,
     model_hash: &str,
     completion: &Completion,
 ) -> Result<(), String> {
-    let result = engine.search_managed_with_callback(root, plan, cancellation, |info| {
-        completion.line(|| format_search_info(info));
-    });
+    let result =
+        engine.search_parallel_managed_with_callback(root, plan, cancellation, workers, |info| {
+            completion.line(|| format_search_info(info));
+        });
+    time_manager
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .observe_spend(&plan, result.elapsed);
     if result.termination == SearchTermination::EvaluationError {
         return Err("pure-only inference failed; no bestmove is available".to_owned());
     }
@@ -606,15 +653,30 @@ fn identity_line(model_hash: &str) -> String {
     format!("{} pure_learned {short}", engine_id_line())
 }
 
-fn option_lines() -> [String; 4] {
-    [
+fn option_lines() -> Vec<String> {
+    vec![
         format!(
             "option name USI_Hash type spin default {DEFAULT_HASH_MEGABYTES} min 1 max {MAX_HASH_MEGABYTES}"
         ),
         "option name USI_Ponder type check default false".to_owned(),
-        "option name Threads type spin default 1 min 1 max 1".to_owned(),
+        format!(
+            "option name Threads type spin default 1 min 1 max {}",
+            usable_logical_cpus()
+        ),
+        "option name AutoThreads type check default true".to_owned(),
         "option name RuntimeProfile type combo default pure_learned var pure_learned".to_owned(),
     ]
+}
+
+fn parse_threads(value: Option<&str>, maximum: usize) -> Result<usize, String> {
+    let value = value
+        .ok_or_else(|| "Threads requires a value".to_owned())?
+        .parse::<usize>()
+        .map_err(|_| "Threads must be an integer".to_owned())?;
+    if !(1..=maximum).contains(&value) {
+        return Err(format!("Threads must be 1..={maximum}"));
+    }
+    Ok(value)
 }
 
 fn parse_hash_megabytes(value: Option<&str>) -> Result<usize, String> {
@@ -894,10 +956,17 @@ mod tests {
                 .iter()
                 .any(|line| line == "option name USI_Ponder type check default false")
         );
+        assert!(lines.iter().any(|line| {
+            line.starts_with("option name Threads type spin default 1 min 1 max ")
+                && line
+                    .strip_prefix("option name Threads type spin default 1 min 1 max ")
+                    .and_then(|max| max.parse::<usize>().ok())
+                    .is_some_and(|max| max >= 1)
+        }));
         assert!(
             lines
                 .iter()
-                .any(|line| line == "option name Threads type spin default 1 min 1 max 1")
+                .any(|line| line == "option name AutoThreads type check default true")
         );
         assert!(lines.iter().any(|line| line
             == "option name RuntimeProfile type combo default pure_learned var pure_learned"));
@@ -922,6 +991,9 @@ mod tests {
             "setoption name USI_Ponder value false\n",
             "setoption name Threads value 1\n",
             "setoption name Threads value 4\n",
+            "setoption name Threads value 0\n",
+            "setoption name AutoThreads value false\n",
+            "setoption name AutoThreads value banana\n",
             "setoption name RuntimeProfile value standard\n",
             "setoption name EvaluationAttack value 50\n",
             "setoption name ClearNet value true\n",
@@ -949,7 +1021,12 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("only one search worker"))
+                .any(|line| line.contains("Threads must be 1..="))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("AutoThreads must be `true` or `false`"))
         );
         assert!(
             lines
@@ -1076,10 +1153,54 @@ mod tests {
         session.send("go movetime 100");
         assert!(session.wait_for("bestmove "));
         let expected = format!(
-            "info string hash 16MiB transposition_entries {} workers 1",
+            "info string hash 16MiB transposition_entries {} workers ",
             hash_entries(16)
         );
-        assert!(session.sink.lines().contains(&expected));
+        assert!(
+            session
+                .sink
+                .lines()
+                .iter()
+                .any(|line| line.starts_with(&expected) && line.contains("threads "))
+        );
+        session.finish().expect("clean exit");
+    }
+
+    #[test]
+    fn manual_threads_run_a_parallel_search_with_one_completion() {
+        let model = loaded_model();
+        let session = PipedSession::start(&model.engine, &model.hash);
+        session.send("setoption name AutoThreads value false");
+        session.send("setoption name Threads value 2");
+        session.send("position startpos moves 7g7f 3c3d");
+        session.send("go nodes 20000 depth 4");
+        assert!(session.wait_for("bestmove "));
+        assert_eq!(session.bestmove_count(), 1);
+        assert!(
+            session
+                .sink
+                .lines()
+                .iter()
+                .any(|line| line.contains("workers 2 threads manual"))
+        );
+        session.finish().expect("clean exit");
+    }
+
+    #[test]
+    fn automatic_threads_advertise_their_basis() {
+        let model = loaded_model();
+        let session = PipedSession::start(&model.engine, &model.hash);
+        session.send("position startpos");
+        session.send("go nodes 2000 depth 2");
+        assert!(session.wait_for("bestmove "));
+        assert_eq!(session.bestmove_count(), 1);
+        assert!(
+            session
+                .sink
+                .lines()
+                .iter()
+                .any(|line| line.contains("threads logical ") && line.contains("workers "))
+        );
         session.finish().expect("clean exit");
     }
 

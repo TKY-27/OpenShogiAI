@@ -175,6 +175,9 @@ pub struct TimePlan {
     pub hard_limit: Option<Duration>,
     pub allocated_hard_limit: Option<Duration>,
     pub safety_margin: Duration,
+    /// Stability and predicted-overrun early stops stay silent before this floor.
+    /// Set for per-move budgets (pure byoyomi) whose unused time can never be banked.
+    pub min_spend: Option<Duration>,
     pub allow_stable_early_stop: bool,
     pub stability: StabilityPolicy,
 }
@@ -197,11 +200,28 @@ impl Default for TimeManagerConfig {
     }
 }
 
-/// Stateless allocator; callers retain clock state and subtract measured elapsed time.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Stateless per-call allocation math plus small cross-move state: a cooldown that
+/// temporarily shrinks the difficult-position extension cap after a move that actually
+/// spent it, so consecutive extensions cannot drain a finite clock.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TimeManager {
     config: TimeManagerConfig,
+    extension_cooldown: u8,
 }
+
+/// Live-clock spending plan: target `remaining / CLOCK_RUNWAY_MOVES`, a fraction that
+/// decays geometrically and can never reach zero. Extensions are capped both relative to
+/// the target and as a fraction of the remaining clock, so no single move can consume a
+/// large slice of a sudden-death clock.
+const CLOCK_RUNWAY_MOVES: u64 = 64;
+const CLOCK_SPEND_FACTOR_NUM: u64 = 9;
+const CLOCK_EXTENSION_CAP_MULT: u64 = 5;
+const CLOCK_EXTENSION_FRACTION: u64 = 8;
+const CLOCK_COOLDOWN_EXTENSION_MULT: u64 = 3;
+const CLOCK_EMERGENCY_MS: u64 = 20_000;
+/// Extra conservatism below the emergency threshold: target `remaining / 12`, hard cap
+/// `remaining / 6`, so the engine always has several moves of runway left.
+const CLOCK_EMERGENCY_RUNWAY: u64 = 12;
 
 impl TimeManager {
     /// Constructs a validated manager.
@@ -222,7 +242,23 @@ impl TimeManager {
                 "casual soft limit must be positive and not exceed its hard limit".to_owned(),
             );
         }
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            extension_cooldown: 0,
+        })
+    }
+
+    /// Reports the wall-clock spend of a completed move. A move that spent well beyond
+    /// its soft target engages the extension cooldown for the next few moves.
+    pub fn observe_spend(&mut self, plan: &TimePlan, spent: Duration) {
+        let extended = plan
+            .soft_limit
+            .is_some_and(|soft| spent.as_millis() > soft.as_millis() * 6 / 5);
+        self.extension_cooldown = if extended {
+            3
+        } else {
+            self.extension_cooldown.saturating_sub(1)
+        };
     }
 
     /// Allocates soft and hard monotonic durations for the side to move.
@@ -231,7 +267,7 @@ impl TimeManager {
     ///
     /// Returns an error for an invalid shared request.
     pub fn plan(
-        self,
+        &self,
         side: Side,
         request: TimeControl,
         default_max_depth: u8,
@@ -262,6 +298,7 @@ impl TimeManager {
                 hard_limit: Some(Duration::from_millis(hard)),
                 allocated_hard_limit: Some(Duration::from_millis(allocated)),
                 safety_margin: Duration::from_millis(allocated.saturating_sub(hard)),
+                min_spend: None,
                 allow_stable_early_stop: true,
                 stability: self.config.stability,
             });
@@ -269,7 +306,7 @@ impl TimeManager {
         // A live game clock is authoritative even when an adapter accidentally includes
         // a preset move time. Diagnostic limits may only further restrict it.
         if has_clock(request) {
-            return Ok(self.clock_plan(side, request, max_depth, 100));
+            return Ok(self.clock_plan(side, request, max_depth));
         }
         if let Some(movetime) = request.movetime_ms {
             let hard = deadline_after_margin(movetime, request.safety_margin_ms);
@@ -281,6 +318,7 @@ impl TimeManager {
                 hard_limit: Some(Duration::from_millis(hard)),
                 allocated_hard_limit: Some(Duration::from_millis(movetime)),
                 safety_margin: Duration::from_millis(movetime.saturating_sub(hard)),
+                min_spend: None,
                 allow_stable_early_stop: false,
                 stability: self.config.stability,
             });
@@ -293,33 +331,23 @@ impl TimeManager {
         Ok(self.plan_without_deadline(mode, max_depth, request.nodes))
     }
 
-    /// Position-aware game-clock allocation. The conservative remaining-move estimate is a
-    /// spending prior, not a position score or a restriction on legal opening moves.
+    /// Position-aware allocation. Clock spending is a fixed fraction of the remaining
+    /// clock, so the position only selects the side whose clock is spent; no position
+    /// score or move-count prior restricts legal play.
     ///
     /// # Errors
     /// Returns the same validation errors as `plan`.
     pub fn plan_for_position(
-        self,
+        &self,
         position: &Position,
         request: TimeControl,
         default_max_depth: u8,
     ) -> Result<TimePlan, String> {
-        let plan = self.plan(position.side_to_move(), request, default_max_depth)?;
-        if plan.mode != TimeControlMode::Clock {
-            return Ok(plan);
-        }
-        let moves_played = u64::from(position.move_number().saturating_sub(1)) / 2;
-        let expected_moves = 100_u64.saturating_sub(moves_played).clamp(24, 100);
-        Ok(self.clock_plan(
-            position.side_to_move(),
-            request,
-            plan.max_depth,
-            expected_moves,
-        ))
+        self.plan(position.side_to_move(), request, default_max_depth)
     }
 
     fn plan_without_deadline(
-        self,
+        &self,
         mode: TimeControlMode,
         max_depth: u8,
         max_nodes: Option<u64>,
@@ -332,18 +360,13 @@ impl TimeManager {
             hard_limit: None,
             allocated_hard_limit: None,
             safety_margin: Duration::ZERO,
+            min_spend: None,
             allow_stable_early_stop: false,
             stability: self.config.stability,
         }
     }
 
-    fn clock_plan(
-        self,
-        side: Side,
-        request: TimeControl,
-        max_depth: u8,
-        expected_moves: u64,
-    ) -> TimePlan {
+    fn clock_plan(&self, side: Side, request: TimeControl, max_depth: u8) -> TimePlan {
         let remaining = match side {
             Side::Black => request.black_time_ms,
             Side::White => request.white_time_ms,
@@ -355,15 +378,66 @@ impl TimeManager {
         }
         .unwrap_or(0);
         let byoyomi = request.byoyomi_ms.unwrap_or(0);
-        // Increment is earned after the move, so it improves the target share but is not part of
-        // the amount that may be consumed before this move is returned.
-        let target = (remaining / expected_moves)
+        let margin = move_margin_ms(remaining.max(byoyomi), request.safety_margin_ms);
+
+        // A zero base clock with byoyomi is a pure per-move budget: unused time never
+        // carries, so the engine should spend most of each period. Stability and
+        // predicted-overrun stops stay silent until half the period is gone; proven
+        // mates and trivial positions still return early.
+        if remaining == 0 && byoyomi > 0 {
+            let hard = byoyomi.saturating_sub(margin);
+            let soft = (byoyomi * 3 / 4).min(hard);
+            return TimePlan {
+                mode: TimeControlMode::Clock,
+                max_depth,
+                max_nodes: request.nodes,
+                soft_limit: Some(Duration::from_millis(soft)),
+                hard_limit: Some(Duration::from_millis(hard)),
+                allocated_hard_limit: Some(Duration::from_millis(byoyomi)),
+                safety_margin: Duration::from_millis(byoyomi.saturating_sub(hard)),
+                min_spend: Some(Duration::from_millis(byoyomi / 2.min(hard))),
+                allow_stable_early_stop: true,
+                stability: self.config.stability,
+            };
+        }
+
+        // Emergency regime: a dangerously low clock gets a short decisive target with a
+        // proportional hard cap and no saving floor.
+        if remaining > 0 && remaining <= CLOCK_EMERGENCY_MS {
+            let allocated = (remaining / 6).max(1);
+            let hard = allocated.saturating_sub(margin.min(allocated.saturating_sub(1)));
+            let soft = (remaining / CLOCK_EMERGENCY_RUNWAY).min(hard).max(1);
+            return TimePlan {
+                mode: TimeControlMode::Clock,
+                max_depth,
+                max_nodes: request.nodes,
+                soft_limit: Some(Duration::from_millis(soft)),
+                hard_limit: Some(Duration::from_millis(hard)),
+                allocated_hard_limit: Some(Duration::from_millis(allocated)),
+                safety_margin: Duration::from_millis(allocated.saturating_sub(hard)),
+                min_spend: None,
+                allow_stable_early_stop: true,
+                stability: self.config.stability,
+            };
+        }
+
+        let share = remaining.saturating_mul(CLOCK_SPEND_FACTOR_NUM) / CLOCK_RUNWAY_MOVES / 10;
+        let target = share
             .saturating_add(increment.saturating_mul(3) / 4)
             .saturating_add(byoyomi.saturating_mul(3) / 4)
             .max(1);
+        let extension_multiple = if self.extension_cooldown > 0 {
+            CLOCK_COOLDOWN_EXTENSION_MULT
+        } else {
+            CLOCK_EXTENSION_CAP_MULT
+        };
+        // Two absolute caps: extension headroom relative to the target, and a fraction of
+        // the remaining clock no single move may consume even in a critical position.
+        let extension_cap = (target.saturating_mul(extension_multiple) / 2)
+            .min(remaining.saturating_div(CLOCK_EXTENSION_FRACTION));
         let available = remaining.saturating_add(byoyomi);
-        let allocated = target.saturating_mul(3).max(byoyomi).min(available);
-        let hard = deadline_after_margin(allocated, request.safety_margin_ms);
+        let allocated = extension_cap.max(target).min(available);
+        let hard = allocated.saturating_sub(margin.min(allocated.saturating_sub(1)));
         let soft = target.min(hard);
         TimePlan {
             mode: TimeControlMode::Clock,
@@ -373,6 +447,7 @@ impl TimeManager {
             hard_limit: Some(Duration::from_millis(hard)),
             allocated_hard_limit: Some(Duration::from_millis(allocated)),
             safety_margin: Duration::from_millis(allocated.saturating_sub(hard)),
+            min_spend: None,
             allow_stable_early_stop: true,
             stability: self.config.stability,
         }
@@ -408,6 +483,14 @@ const fn deadline_after_margin(allocated_ms: u64, requested_margin_ms: u64) -> u
     } else {
         maximum_margin
     })
+}
+
+/// Deadline margin for live clocks: the requested base plus a small share of the
+/// allowance, bounded away from dominating short budgets.
+fn move_margin_ms(allowance_ms: u64, requested_margin_ms: u64) -> u64 {
+    let scaled = allowance_ms / 100;
+    let margin = requested_margin_ms.max(scaled.min(250)).min(250);
+    margin.min(allowance_ms.saturating_sub(1))
 }
 
 /// Controller-independent estimate of whether another completed depth is worth its cost.
@@ -471,10 +554,14 @@ impl AdaptiveTimeBudget {
         // Odd/even depths can alternate cheap and expensive iterations. The last
         // ratio alone underestimates the next expensive depth after a cheap one.
         let predicted_growth = growth.max(self.previous_growth);
-        let stop = elapsed_ms >= target
-            || (info.depth >= 2
-                && elapsed_ms >= target * 0.15
-                && elapsed_ms + iteration_ms * predicted_growth >= target);
+        let predicted_stop = info.depth >= 2
+            && elapsed_ms >= target * 0.15
+            && elapsed_ms + iteration_ms * predicted_growth >= target;
+        let stop = (elapsed_ms >= target || predicted_stop)
+            && elapsed_ms
+                >= plan
+                    .min_spend
+                    .map_or(0.0, |floor| floor.as_secs_f64() * 1_000.0);
         self.previous_growth = growth;
         self.previous_iteration_ms = iteration_ms;
         self.previous = Some(info.clone());
@@ -545,14 +632,136 @@ mod tests {
                     .unwrap();
                 assert_eq!(expected, contaminated);
                 assert_eq!(expected.mode, TimeControlMode::Clock);
+                // Geometric sudden-death target: remaining / 64 shrunk by one tenth.
                 assert_eq!(
                     expected.soft_limit,
-                    Some(Duration::from_millis(remaining / 100))
+                    Some(Duration::from_millis(remaining * 9 / 64 / 10))
                 );
                 assert!(expected.allow_stable_early_stop);
-                assert!(expected.hard_limit.unwrap() < Duration::from_secs(18));
+                // One move can never consume more than an eighth of the clock.
+                assert!(expected.hard_limit.unwrap() <= Duration::from_millis(remaining / 8));
             }
         }
+    }
+
+    #[test]
+    fn pure_byoyomi_spends_most_of_each_period_but_keeps_a_margin() {
+        for byoyomi in [1_000_u64, 5_000, 30_000, 60_000] {
+            let request = TimeControl {
+                byoyomi_ms: Some(byoyomi),
+                casual: false,
+                ..TimeControl::casual()
+            };
+            let plan = TimeManager::default()
+                .plan(Side::Black, request, 64)
+                .unwrap();
+            assert_eq!(plan.mode, TimeControlMode::Clock);
+            let period = u128::from(byoyomi);
+            let hard = plan.hard_limit.unwrap().as_millis();
+            let soft = plan.soft_limit.unwrap().as_millis();
+            let floor = plan.min_spend.unwrap().as_millis();
+            assert!(
+                hard >= period * 95 / 100,
+                "{byoyomi} keeps most of the period"
+            );
+            assert!(hard <= period, "never plans past the period");
+            assert!(
+                soft >= period * 3 / 4,
+                "{byoyomi} targets most of the period"
+            );
+            assert!(floor >= period / 2, "{byoyomi} saving is gated below half");
+            assert!(floor <= hard);
+        }
+    }
+
+    #[test]
+    fn short_byoyomi_periods_keep_a_positive_margin() {
+        let request = TimeControl {
+            byoyomi_ms: Some(1_000),
+            casual: false,
+            ..TimeControl::casual()
+        };
+        let plan = TimeManager::default()
+            .plan(Side::Black, request, 64)
+            .unwrap();
+        assert_eq!(plan.hard_limit, Some(Duration::from_millis(950)));
+        assert_eq!(plan.soft_limit, Some(Duration::from_millis(750)));
+    }
+
+    #[test]
+    fn sudden_death_targets_decay_with_the_remaining_clock() {
+        let manager = TimeManager::default();
+        let early = manager
+            .plan(Side::Black, clock_request(120_000), 64)
+            .unwrap();
+        let late = manager
+            .plan(Side::Black, clock_request(60_000), 64)
+            .unwrap();
+        let half_early = early.soft_limit.unwrap() / 2;
+        assert!(
+            late.soft_limit.unwrap() <= half_early
+                && late.soft_limit.unwrap() + Duration::from_millis(1) >= half_early,
+            "targets are a fixed fraction of the remaining clock"
+        );
+        // The emergency regime takes over below 20 seconds.
+        let low = manager
+            .plan(Side::Black, clock_request(15_000), 64)
+            .unwrap();
+        assert_eq!(low.soft_limit, Some(Duration::from_millis(15_000 / 12)));
+        assert!(low.hard_limit.unwrap() <= Duration::from_millis(15_000 / 6));
+        // A zero clock never manufactures time, with or without increment.
+        for request in [
+            clock_request(0),
+            TimeControl {
+                black_time_ms: Some(0),
+                black_increment_ms: Some(30_000),
+                casual: false,
+                ..TimeControl::casual()
+            },
+        ] {
+            let plan = manager.plan(Side::Black, request, 64).unwrap();
+            assert_eq!(plan.soft_limit, Some(Duration::ZERO));
+            assert_eq!(plan.hard_limit, Some(Duration::ZERO));
+        }
+    }
+
+    #[test]
+    fn extension_cooldown_tightens_after_a_long_move() {
+        let mut manager = TimeManager::default();
+        let request = clock_request(120_000);
+        let plan = manager.plan(Side::Black, request, 64).unwrap();
+        let free_cap = plan.hard_limit.unwrap();
+        manager.observe_spend(&plan, Duration::from_millis(60_000));
+        let cooled = manager.plan(Side::Black, request, 64).unwrap();
+        let cooled_cap = cooled.hard_limit.unwrap();
+        assert!(
+            cooled_cap < free_cap,
+            "a spent extension cools the next moves"
+        );
+        for _ in 0..3 {
+            manager.observe_spend(&cooled, Duration::from_millis(10));
+        }
+        let recovered = manager.plan(Side::Black, request, 64).unwrap();
+        assert_eq!(recovered.hard_limit.unwrap(), free_cap);
+    }
+
+    #[test]
+    fn fischer_increment_adds_income_to_the_target() {
+        let request = TimeControl {
+            black_time_ms: Some(60_000),
+            black_increment_ms: Some(5_000),
+            casual: false,
+            ..TimeControl::casual()
+        };
+        let plan = TimeManager::default()
+            .plan(Side::Black, request, 64)
+            .unwrap();
+        let expected = 60_000 / 64 * 9 / 10 + 5_000 * 3 / 4;
+        assert_eq!(plan.soft_limit, Some(Duration::from_millis(expected)));
+        let plan = TimeManager::default()
+            .plan_for_position(&Position::startpos(), request, 64)
+            .unwrap();
+        assert_eq!(plan.soft_limit, Some(Duration::from_millis(expected)));
     }
 
     #[test]
@@ -597,7 +806,7 @@ mod tests {
         assert!(!budget.observe(&iteration(1, 100, 10), plan));
         assert!(!budget.observe(&iteration(2, 400, 15), plan));
         assert!(budget.observe(&iteration(3, 1_600, 18), plan));
-        assert_eq!(budget.target_ms(), Some(3_600.0));
+        assert_eq!(budget.target_ms(), Some(5_062.2));
         assert!(Duration::from_millis(1_600) < plan.soft_limit.unwrap());
     }
 
@@ -630,7 +839,7 @@ mod tests {
             assert!(!budget.observe(&iteration(depth, elapsed, score), plan));
         }
         assert!(budget.observe(&iteration(6, 1_098, 48), plan));
-        assert_eq!(budget.target_ms(), Some(3_600.0));
+        assert_eq!(budget.target_ms(), Some(5_062.2));
     }
 
     proptest! {

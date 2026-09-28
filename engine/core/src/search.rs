@@ -1,7 +1,6 @@
 //! Deterministic single-threaded baseline search.
 
 use std::{
-    mem::size_of,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -10,6 +9,7 @@ use std::{
 };
 use web_time::Instant;
 
+use crate::transposition::{Bound, TranspositionHit, TranspositionTable};
 use crate::{
     Move, Osaval02SearchAdapter, PieceKind, Position, RuntimeProfile, RuntimeProofCounters, Side,
     TimePlan,
@@ -333,23 +333,6 @@ impl RandomMoveSelector {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Bound {
-    Exact,
-    Lower,
-    Upper,
-}
-
-#[derive(Clone, Debug)]
-struct TranspositionEntry {
-    hash: u64,
-    position: Position,
-    depth: u8,
-    score: i32,
-    bound: Bound,
-    best_move: Option<Move>,
-}
-
 #[derive(Clone, Debug)]
 struct NodeValue {
     score: i32,
@@ -392,7 +375,9 @@ pub struct SearchEngine {
     root_osaval02_policy: Vec<(Move, i32)>,
     #[cfg(feature = "handcrafted")]
     neural_mode: NeuralEvaluationMode,
-    transposition_table: Vec<Option<TranspositionEntry>>,
+    transposition_table: Arc<TranspositionTable>,
+    /// Coordination state of an active parallel search; absent for serial searches.
+    active_parallel: Option<Arc<crate::parallel::ParallelSearch>>,
     killers: Vec<[Option<Move>; 2]>,
     history: Vec<i32>,
     clock: Arc<dyn MonotonicClock>,
@@ -553,7 +538,8 @@ impl SearchEngine {
             root_osaval02_policy: Vec::new(),
             #[cfg(feature = "handcrafted")]
             neural_mode: NeuralEvaluationMode::PureValue,
-            transposition_table: vec![None; config.transposition_entries],
+            transposition_table: Arc::new(TranspositionTable::new(config.transposition_entries)),
+            active_parallel: None,
             killers: vec![[None; 2]; MAX_SEARCH_PLY],
             history: vec![0; 2 * MOVE_BUCKETS],
             clock,
@@ -979,20 +965,19 @@ impl SearchEngine {
     /// Entries intentionally retain a full position to make hash collisions harmless.
     #[must_use]
     pub const fn transposition_entry_size_bytes() -> usize {
-        size_of::<Option<TranspositionEntry>>()
+        TranspositionTable::entry_size_bytes()
     }
 
     /// Converts a byte budget into the largest whole number of table entries that fits.
     #[must_use]
     pub const fn transposition_entries_for_bytes(bytes: usize) -> usize {
-        bytes / Self::transposition_entry_size_bytes()
+        TranspositionTable::entries_for_bytes(bytes)
     }
 
     /// Converts a mebibyte budget into a bounded whole-entry count.
     #[must_use]
     pub const fn transposition_entries_for_megabytes(megabytes: usize) -> usize {
-        let bytes = megabytes.saturating_mul(1024 * 1024);
-        Self::transposition_entries_for_bytes(bytes)
+        TranspositionTable::entries_for_megabytes(megabytes)
     }
 
     #[must_use]
@@ -1002,7 +987,7 @@ impl SearchEngine {
 
     /// Invalidates every transposition entry after an evaluator or search-semantics change.
     pub fn clear_transpositions(&mut self) {
-        self.transposition_table.fill(None);
+        self.transposition_table.clear();
     }
 
     /// Searches without receiving intermediate iteration reports.
@@ -1089,6 +1074,353 @@ impl SearchEngine {
         )
     }
 
+    /// Parallel managed search with `workers` total workers. The calling engine is the
+    /// controller and publishes every iteration and the final result; helpers are scoped
+    /// threads sharing this engine's transposition table, always joined before return.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn search_parallel_managed_with_callback(
+        &mut self,
+        position: &Position,
+        plan: TimePlan,
+        cancellation: &CancellationToken,
+        workers: usize,
+        mut callback: impl FnMut(&SearchInfo),
+    ) -> SearchResult {
+        if workers <= 1 {
+            return self.search_managed_with_callback(position, plan, cancellation, callback);
+        }
+        let workers = workers.min(crate::parallel::MAX_WORKERS);
+        let parallel = Arc::new(crate::parallel::ParallelSearch::new());
+        self.active_parallel = Some(Arc::clone(&parallel));
+        let result = std::thread::scope(|scope| {
+            for _ in 1..workers {
+                let helper = self.fork_for_worker();
+                let root = position.clone();
+                let parallel = Arc::clone(&parallel);
+                let cancellation = cancellation.clone();
+                let hard_limit = plan.hard_limit;
+                scope.spawn(move || {
+                    crate::parallel::run_helper(helper, root, parallel, cancellation, hard_limit);
+                });
+            }
+            let search = self.search_managed_observed(position, plan, cancellation, |info, _| {
+                callback(info);
+            });
+            parallel.stop();
+            search
+        });
+        self.active_parallel = None;
+        result
+    }
+
+    /// Per-worker engine state: shared immutable evaluators and table, private
+    /// heuristics, accumulator stack and statistics.
+    fn fork_for_worker(&self) -> Self {
+        let mut worker = Self::empty(self.config, Arc::clone(&self.clock));
+        worker.computation.clone_from(&self.computation);
+        worker.computation_enabled = self.computation_enabled;
+        worker.phase10v.clone_from(&self.phase10v);
+        worker.phase10t.clone_from(&self.phase10t);
+        worker.a1_game_positions.clone_from(&self.a1_game_positions);
+        worker.a1_game_checks.clone_from(&self.a1_game_checks);
+        worker.pure_history_rejected = self.pure_history_rejected;
+        worker.osaval02.clone_from(&self.osaval02);
+        worker
+            .transposition_table
+            .clone_from(&self.transposition_table);
+        #[cfg(feature = "handcrafted")]
+        {
+            worker.neural.clone_from(&self.neural);
+            worker.neural_mode = self.neural_mode;
+        }
+        worker
+    }
+
+    /// Waits for helper partitions, adopts their published results, and finishes any
+    /// abandoned work here so the iteration always completes or the search stops.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the partition merge needs the iteration identity, window and buffers"
+    )]
+    fn collect_partition_results(
+        &mut self,
+        position: &Position,
+        depth: u8,
+        epoch: u64,
+        iteration_beta: i32,
+        move_count: usize,
+        own: &mut [Option<RootMoveStat>],
+        context: &mut SearchContext<'_>,
+    ) -> Result<(), ()> {
+        let parallel = self.active_parallel.clone().ok_or(())?;
+        let adopt = |own: &mut [Option<RootMoveStat>],
+                     parallel: &crate::parallel::ParallelSearch| {
+            for (slot, index) in own.iter_mut().zip(0..move_count) {
+                if slot.is_none()
+                    && let Some(stat) = parallel.result(epoch, index)
+                {
+                    *slot = Some(stat);
+                }
+            }
+        };
+        while own.iter().any(Option::is_none) {
+            if context.check_termination().is_err() || parallel.is_stopped() {
+                return Err(());
+            }
+            adopt(own, &parallel);
+            if own.iter().all(Option::is_some) {
+                return Ok(());
+            }
+            if parallel.helpers_alive() {
+                std::thread::sleep(crate::parallel::ITERATION_POLL);
+                continue;
+            }
+            for (slot, index) in own.iter_mut().zip(0..move_count) {
+                if slot.is_some() {
+                    continue;
+                }
+                let Some(movement) = parallel.move_at(epoch, index) else {
+                    return Err(());
+                };
+                let Some(stat) = self.search_root_move(
+                    position,
+                    movement,
+                    depth,
+                    parallel.current_alpha(),
+                    iteration_beta,
+                    false,
+                    context,
+                ) else {
+                    return Err(());
+                };
+                *slot = Some(stat);
+            }
+        }
+        Ok(())
+    }
+
+    /// Sets the coordination structure used by this engine's next search. Search-internal.
+    pub(crate) fn set_active_parallel(&mut self, parallel: Arc<crate::parallel::ParallelSearch>) {
+        self.active_parallel = Some(parallel);
+    }
+
+    /// One root iteration: `negamax` when serial, partitioned workers with a shared
+    /// rising alpha when parallel, merged into the same root evidence either way.
+    fn search_root_iteration(
+        &mut self,
+        position: &Position,
+        depth: u8,
+        alpha: i32,
+        beta: i32,
+        context: &mut SearchContext<'_>,
+    ) -> Result<NodeValue, ()> {
+        let Some(parallel) = self.active_parallel.clone() else {
+            return self.negamax(&mut position.clone(), depth, alpha, beta, 0, context);
+        };
+        let Some((epoch, _, _, iteration_beta)) = parallel.iteration_window() else {
+            return self.negamax(&mut position.clone(), depth, alpha, beta, 0, context);
+        };
+        let move_count = parallel.move_count(epoch);
+        let mut own: Vec<Option<RootMoveStat>> = vec![None; move_count];
+        while let Some((claim_epoch, index, movement)) = parallel.claim() {
+            if claim_epoch != epoch || context.check_termination().is_err() {
+                return Err(());
+            }
+            let first = parallel.claim_full_window();
+            if !first {
+                parallel.wait_until_primed();
+                if context.check_termination().is_err() {
+                    return Err(());
+                }
+            }
+            let claim_alpha = parallel.current_alpha();
+            let Some(stat) = self.search_root_move(
+                position,
+                movement,
+                depth,
+                claim_alpha,
+                iteration_beta,
+                first,
+                context,
+            ) else {
+                return Err(());
+            };
+            parallel.raise_alpha(stat.score);
+            if first {
+                parallel.mark_primed();
+            }
+            parallel.publish(epoch, index, stat.clone());
+            own[index] = Some(stat);
+        }
+        self.collect_partition_results(
+            position,
+            depth,
+            epoch,
+            iteration_beta,
+            move_count,
+            &mut own,
+            context,
+        )?;
+        // First strict maximum in claim order matches serial tie-breaking.
+        let best = own
+            .iter()
+            .fold(None::<&RootMoveStat>, |best, stat| match (best, stat) {
+                (_, Some(stat)) => match best {
+                    Some(best) if best.score >= stat.score => Some(best),
+                    _ => Some(stat),
+                },
+                (best, None) => best,
+            })
+            .cloned()
+            .ok_or(())?;
+        context.root_moves.clear();
+        context.root_moves.extend(own.into_iter().flatten());
+        context.complete_root_iteration(depth);
+        context.root_partial = Some(NodeValue {
+            score: best.score,
+            pv: best.pv.clone(),
+        });
+        if self.config.enable_transposition_table {
+            let bound = if best.score <= alpha {
+                Bound::Upper
+            } else if best.score >= beta {
+                Bound::Lower
+            } else {
+                Bound::Exact
+            };
+            self.store_transposition(
+                position,
+                depth,
+                score_to_transposition(best.score, 0),
+                bound,
+                Some(best.movement),
+            );
+        }
+        Ok(NodeValue {
+            score: best.score,
+            pv: best.pv.clone(),
+        })
+    }
+
+    /// Prepares a helper's per-worker state so claimed root moves can be searched
+    /// exactly like the controller would search them. Rejects a terminal root.
+    pub(crate) fn prepare_worker_root(&mut self, root: &Position) -> Result<(), ()> {
+        if self.config.runtime_profile == RuntimeProfile::PureLearned
+            && (self.pure_history_rejected
+                || self
+                    .a1_game_positions
+                    .last()
+                    .is_some_and(|game_root| game_root != root))
+        {
+            return Err(());
+        }
+        if self.phase10t.is_some() || self.config.runtime_profile == RuntimeProfile::PureLearned {
+            if self
+                .a1_game_positions
+                .last()
+                .is_some_and(|game_root| game_root.same_state(root))
+            {
+                self.a1_positions.clone_from(&self.a1_game_positions);
+                self.a1_checks.clone_from(&self.a1_game_checks);
+            } else {
+                self.a1_game_positions.clear();
+                self.a1_game_checks.clear();
+                self.a1_positions = vec![root.clone()];
+                self.a1_checks.clear();
+            }
+        }
+        if let Some(evaluator) = &self.phase10v {
+            self.v3_state = Some(evaluator.accumulator(root).map_err(|_| ())?);
+        }
+        if let Some(evaluator) = &self.phase10t {
+            self.a1_state = Some(
+                evaluator
+                    .accumulator(root, self.a1_history())
+                    .map_err(|_| ())?,
+            );
+        }
+        if self.a1_repetition(root, 0).is_some() || root.legal_moves().is_empty() {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    /// Helper-side root-move search with a private context bound to this search's
+    /// coordination state.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "helpers pass the claim's identity, window, limits and token explicitly"
+    )]
+    pub(crate) fn search_root_move_detached(
+        &mut self,
+        root: &Position,
+        movement: Move,
+        depth: u8,
+        alpha: i32,
+        beta: i32,
+        first_move: bool,
+        limits: SearchLimits,
+        cancellation: &CancellationToken,
+    ) -> Option<RootMoveStat> {
+        let clock = Arc::clone(&self.clock);
+        let mut context = SearchContext::new(limits, cancellation, clock.now(), clock.as_ref());
+        context.parallel = self.active_parallel.clone();
+        self.search_root_move(root, movement, depth, alpha, beta, first_move, &mut context)
+    }
+
+    /// Searches one root move with the current shared window so the published score is
+    /// exact (or a bound above the shared alpha) and mergeable across workers.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the claim's move, window and worker role are passed explicitly"
+    )]
+    pub(crate) fn search_root_move(
+        &mut self,
+        root: &Position,
+        movement: Move,
+        depth: u8,
+        alpha: i32,
+        beta: i32,
+        first_move: bool,
+        context: &mut SearchContext<'_>,
+    ) -> Option<RootMoveStat> {
+        if depth == 0 {
+            return None;
+        }
+        let mut position = root.clone();
+        let undo = position.make_generated_move(movement);
+        let a1_previous = self.a1_push(movement, &position);
+        // PVS discipline: exactly one full-window search per iteration (serial gives it
+        // to the first move); every other move scouts zero-window against the shared
+        // alpha and re-searches only when it beats alpha.
+        let child = if first_move {
+            self.negamax(&mut position, depth - 1, -beta, -alpha, 1, context)
+        } else {
+            let scout = self.negamax(&mut position, depth - 1, -alpha - 1, -alpha, 1, context);
+            match scout {
+                Ok(value) if -value.score > alpha && -value.score < beta => {
+                    self.negamax(&mut position, depth - 1, -beta, -alpha, 1, context)
+                }
+                other => other,
+            }
+        };
+        position.unmake_move(undo);
+        self.a1_pop(a1_previous);
+        let Ok(child) = child else {
+            return None;
+        };
+        let mut pv = Vec::with_capacity(child.pv.len() + 1);
+        pv.push(movement);
+        pv.extend(child.pv.iter().copied());
+        Some(RootMoveStat {
+            movement,
+            score: -child.score,
+            depth,
+            nodes: context.nodes,
+            pv,
+        })
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "iterative-deepening completion and hard-deadline fallback remain one state transition"
@@ -1168,6 +1500,7 @@ impl SearchEngine {
         };
         let fallback = legal_moves.first().copied();
         let mut context = SearchContext::new(limits, cancellation, started, clock.as_ref());
+        context.parallel = self.active_parallel.clone();
         let root_terminal = if let Some(repetition) = &root_repetition {
             Some((
                 if repetition.score == 0 {
@@ -1295,6 +1628,7 @@ impl SearchEngine {
             vec![limits.max_depth]
         };
 
+        let single_reply = legal_moves.len() == 1;
         if limits.max_depth == 0 {
             let _ = context.enter_node(0, false);
         } else {
@@ -1322,8 +1656,16 @@ impl SearchEngine {
                     // An aspiration retry replaces incomplete/bounded root evidence from
                     // the previous attempt; duplicate candidates are not separate moves.
                     context.root_moves.clear();
+                    if let Some(parallel) = self.active_parallel.clone() {
+                        let ranked = context
+                            .last_completed_root_moves
+                            .iter()
+                            .map(|stat| stat.movement)
+                            .collect();
+                        parallel.begin_iteration(depth, alpha, beta, ranked, &legal_moves);
+                    }
                     let result =
-                        self.negamax(&mut position.clone(), depth, alpha, beta, 0, &mut context);
+                        self.search_root_iteration(position, depth, alpha, beta, &mut context);
                     let Ok(value) = result else {
                         break None;
                     };
@@ -1369,6 +1711,12 @@ impl SearchEngine {
                     break;
                 }
                 if is_mate_score(completed.score) {
+                    break;
+                }
+                // A forced move needs no further depth; return it without burning the
+                // whole per-move allowance.
+                if single_reply && completed_depth >= 1 {
+                    context.termination = Some(SearchTermination::Stable);
                     break;
                 }
                 // The learned change predictor may save work, but cannot bypass the common
@@ -1492,7 +1840,7 @@ impl SearchEngine {
 
     fn reset_for_search(&mut self, clear_transpositions: bool) {
         if clear_transpositions {
-            self.transposition_table.fill(None);
+            self.transposition_table.clear();
         }
         self.killers.fill([None; 2]);
         self.history.fill(0);
@@ -1544,34 +1892,34 @@ impl SearchEngine {
         let alpha_original = alpha;
         let mut tt_move = None;
         if self.config.enable_transposition_table
-            && let Some(entry) = self.probe_transposition(position, context)
+            && let Some(hit) = self.probe_transposition(position, context)
         {
-            tt_move = entry.best_move;
+            tt_move = hit.best_move;
             // The root must still enumerate every move so MultiPV/root evidence remains complete.
             // Retained root entries are used only for move ordering; interior entries may cut.
             if self.phase10t.is_none()
                 && self.config.runtime_profile != RuntimeProfile::PureLearned
                 && ply > 0
-                && entry.depth >= depth
+                && hit.depth >= depth
             {
-                let score = score_from_transposition(entry.score, ply);
-                match entry.bound {
+                let score = score_from_transposition(hit.score, ply);
+                match hit.bound {
                     Bound::Exact => {
                         return Ok(NodeValue {
                             score,
-                            pv: entry.best_move.into_iter().collect(),
+                            pv: hit.best_move.into_iter().collect(),
                         });
                     }
                     Bound::Lower if score >= beta => {
                         return Ok(NodeValue {
                             score,
-                            pv: entry.best_move.into_iter().collect(),
+                            pv: hit.best_move.into_iter().collect(),
                         });
                     }
                     Bound::Upper if score <= alpha => {
                         return Ok(NodeValue {
                             score,
-                            pv: entry.best_move.into_iter().collect(),
+                            pv: hit.best_move.into_iter().collect(),
                         });
                     }
                     Bound::Lower => alpha = alpha.max(score),
@@ -1815,47 +2163,44 @@ impl SearchEngine {
         &self,
         position: &Position,
         context: &mut SearchContext<'_>,
-    ) -> Option<TranspositionEntry> {
-        if self.transposition_table.is_empty() {
+    ) -> Option<TranspositionHit> {
+        if self.config.transposition_entries == 0 {
             return None;
         }
         context.stats.tt_probes = context.stats.tt_probes.saturating_add(1);
-        let index = transposition_index(position.zobrist_hash(), self.transposition_table.len());
-        let entry = self.transposition_table[index].as_ref()?;
-        if entry.hash == position.zobrist_hash() && entry.position.same_state(position) {
-            context.stats.tt_hits = context.stats.tt_hits.saturating_add(1);
-            Some(entry.clone())
-        } else {
-            context.stats.tt_collisions = context.stats.tt_collisions.saturating_add(1);
-            None
+        let hash = position.zobrist_hash();
+        match self.transposition_table.probe(position, hash) {
+            Ok(hit) => {
+                context.stats.tt_hits = context.stats.tt_hits.saturating_add(1);
+                Some(hit)
+            }
+            Err(crate::transposition::ProbeMiss::Collision) => {
+                context.stats.tt_collisions = context.stats.tt_collisions.saturating_add(1);
+                None
+            }
+            Err(crate::transposition::ProbeMiss::Empty) => None,
         }
     }
 
     fn store_transposition(
-        &mut self,
+        &self,
         position: &Position,
         depth: u8,
         score: i32,
         bound: Bound,
         best_move: Option<Move>,
     ) {
-        if self.transposition_table.is_empty() {
+        if self.config.transposition_entries == 0 {
             return;
         }
-        let index = transposition_index(position.zobrist_hash(), self.transposition_table.len());
-        let replace = self.transposition_table[index]
-            .as_ref()
-            .is_none_or(|entry| entry.hash != position.zobrist_hash() || depth >= entry.depth);
-        if replace {
-            self.transposition_table[index] = Some(TranspositionEntry {
-                hash: position.zobrist_hash(),
-                position: position.clone(),
-                depth,
-                score,
-                bound,
-                best_move,
-            });
-        }
+        self.transposition_table.store(
+            position,
+            position.zobrist_hash(),
+            depth,
+            score,
+            bound,
+            best_move,
+        );
     }
 
     fn order_moves(
@@ -2103,7 +2448,7 @@ impl SearchEngine {
     }
 }
 
-struct SearchContext<'a> {
+pub(crate) struct SearchContext<'a> {
     limits: SearchLimits,
     cancellation: &'a CancellationToken,
     started: Duration,
@@ -2118,6 +2463,8 @@ struct SearchContext<'a> {
     previous_best_move: Option<Move>,
     previous_score: Option<i32>,
     stable_iterations: u8,
+    /// Present while this context drives (or serves) an active parallel search.
+    parallel: Option<Arc<crate::parallel::ParallelSearch>>,
 }
 
 impl<'a> SearchContext<'a> {
@@ -2142,6 +2489,7 @@ impl<'a> SearchContext<'a> {
             previous_best_move: None,
             previous_score: None,
             stable_iterations: 0,
+            parallel: None,
         }
     }
 
@@ -2169,7 +2517,10 @@ impl<'a> SearchContext<'a> {
         plan: TimePlan,
         elapsed: Duration,
     ) -> bool {
-        if !plan.allow_stable_early_stop || plan.soft_limit.is_none_or(|soft| elapsed < soft) {
+        if !plan.allow_stable_early_stop
+            || plan.soft_limit.is_none_or(|soft| elapsed < soft)
+            || plan.min_spend.is_some_and(|floor| elapsed < floor)
+        {
             self.observe_stability(completed, plan);
             return false;
         }
@@ -2224,6 +2575,14 @@ impl<'a> SearchContext<'a> {
             return Err(());
         }
         if self.cancellation.is_cancelled() {
+            self.termination = Some(SearchTermination::Cancelled);
+            return Err(());
+        }
+        if self
+            .parallel
+            .as_ref()
+            .is_some_and(|parallel| parallel.is_stopped())
+        {
             self.termination = Some(SearchTermination::Cancelled);
             return Err(());
         }
@@ -2431,16 +2790,12 @@ fn history_index(side: Side, movement: Move) -> usize {
     side.index() * MOVE_BUCKETS + bucket
 }
 
-fn transposition_index(hash: u64, table_len: usize) -> usize {
-    let table_len = u64::try_from(table_len).unwrap_or(u64::MAX);
-    usize::try_from(hash % table_len).unwrap_or_default()
-}
-
 #[cfg(all(test, feature = "handcrafted"))]
 mod tests {
     use super::*;
     use crate::neural::NeuralEvaluator;
     use crate::{Hand, Piece, Square, TimeControl, TimeManager};
+    use std::mem::size_of;
     use std::sync::atomic::AtomicU64;
 
     #[derive(Debug)]
@@ -2979,7 +3334,7 @@ mod tests {
 
     #[test]
     fn full_position_check_rejects_direct_table_collisions() {
-        let mut engine = SearchEngine::new(SearchConfig {
+        let engine = SearchEngine::new(SearchConfig {
             transposition_entries: 1,
             ..SearchConfig::default()
         });
@@ -3291,6 +3646,103 @@ mod tests {
         });
         assert_eq!(engine.config.runtime_profile, RuntimeProfile::PureLearned);
         assert_eq!(engine.config.evaluation, EvaluationConfig::disabled());
+    }
+
+    #[test]
+    fn parallel_iteration_claims_and_publishes_partition_work() {
+        let parallel = crate::parallel::ParallelSearch::new();
+        let first = crate::parse_usi_move("7g7f").unwrap();
+        let second = crate::parse_usi_move("3c3d").unwrap();
+        parallel.begin_iteration(4, -10, 10, vec![first], &[first, second]);
+        assert_eq!(parallel.current_alpha(), -10);
+        let (epoch, index, claimed) = parallel.claim().expect("claim");
+        assert_eq!(claimed, first);
+        assert_eq!(parallel.move_count(epoch), 2);
+        parallel.raise_alpha(3);
+        assert_eq!(parallel.current_alpha(), 3);
+        parallel.publish(
+            epoch,
+            index,
+            RootMoveStat {
+                movement: claimed,
+                score: 11,
+                depth: 4,
+                nodes: 5,
+                pv: vec![claimed],
+            },
+        );
+        assert_eq!(parallel.claim().expect("second claim").2, second);
+        assert!(parallel.claim().is_none(), "queue drains");
+        assert_eq!(parallel.result(epoch, index).expect("mergeable").score, 11);
+        // A replaced iteration drops late publishes.
+        parallel.begin_iteration(5, -10, 10, vec![first], &[first]);
+        assert!(parallel.result(epoch, index).is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_search_keeps_controller_exact_node_limits_and_a_legal_move() {
+        let position = Position::startpos();
+        let plan = TimeManager::default()
+            .plan(
+                Side::Black,
+                crate::TimeControl {
+                    nodes: Some(1_000),
+                    casual: false,
+                    ..crate::TimeControl::casual()
+                },
+                64,
+            )
+            .expect("nodes plan");
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            plan,
+            &CancellationToken::new(),
+            4,
+            |_| {},
+        );
+        assert_eq!(result.termination, SearchTermination::NodeLimit);
+        assert_eq!(result.nodes, 1_000);
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_infinite_search_stops_promptly_on_cancellation() {
+        let plan = TimeManager::default()
+            .plan(
+                Side::Black,
+                crate::TimeControl {
+                    infinite: true,
+                    casual: false,
+                    ..crate::TimeControl::casual()
+                },
+                64,
+            )
+            .expect("infinite plan");
+        let cancellation = CancellationToken::new();
+        let worker_cancellation = cancellation.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            worker_cancellation.cancel();
+        });
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let started = Instant::now();
+        let result = engine.search_parallel_managed_with_callback(
+            &Position::startpos(),
+            plan,
+            &cancellation,
+            4,
+            |_| {},
+        );
+        let elapsed = started.elapsed();
+        stopper.join().expect("stopper joins");
+        assert_eq!(result.termination, SearchTermination::Cancelled);
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "helpers must not outlive a cancelled search: stopped in {elapsed:?}"
+        );
     }
 
     #[test]
