@@ -393,8 +393,14 @@ impl PureSession<'_> {
                 parse_threads(value, self.threads_max).map(|threads| self.options.threads = threads)
             }
             "AutoThreads" => match value {
-                Some("true") => Ok(self.options.auto_threads = true),
-                Some("false") => Ok(self.options.auto_threads = false),
+                Some("true") => {
+                    self.options.auto_threads = true;
+                    Ok(())
+                }
+                Some("false") => {
+                    self.options.auto_threads = false;
+                    Ok(())
+                }
                 _ => Err("AutoThreads must be `true` or `false`".to_owned()),
             },
             "RuntimeProfile" => match value {
@@ -448,7 +454,7 @@ impl PureSession<'_> {
         let plan = match self
             .time_manager
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plan_for_position(
                 &self.position,
                 time_control(parameters, DEFAULT_SAFETY_MARGIN_MS),
@@ -504,16 +510,16 @@ impl PureSession<'_> {
                 if let Some(message) = injected_worker_failure() {
                     return Err(message);
                 }
-                run_search(
-                    &mut engine,
-                    &root,
+                run_search(SearchRequest {
+                    engine: &mut engine,
+                    root: &root,
                     plan,
                     workers,
-                    &worker_time_manager,
-                    &worker_cancellation,
-                    &model_hash,
-                    &completion,
-                )
+                    time_manager: &worker_time_manager,
+                    cancellation: &worker_cancellation,
+                    model_hash: &model_hash,
+                    completion: &completion,
+                })
             }));
             let report = |message| {
                 let _ = event_sender.send(Event::Failed {
@@ -563,15 +569,29 @@ impl PureSession<'_> {
     }
 }
 
-fn run_search(
-    engine: &mut SearchEngine,
-    root: &Position,
+/// Everything one accepted `go` needs to run and report its search.
+struct SearchRequest<'a> {
+    engine: &'a mut SearchEngine,
+    root: &'a Position,
     plan: TimePlan,
     workers: usize,
-    time_manager: &Arc<std::sync::Mutex<TimeManager>>,
-    cancellation: &CancellationToken,
-    model_hash: &str,
-    completion: &Completion,
+    time_manager: &'a Arc<std::sync::Mutex<TimeManager>>,
+    cancellation: &'a CancellationToken,
+    model_hash: &'a str,
+    completion: &'a Completion,
+}
+
+fn run_search(
+    SearchRequest {
+        engine,
+        root,
+        plan,
+        workers,
+        time_manager,
+        cancellation,
+        model_hash,
+        completion,
+    }: SearchRequest<'_>,
 ) -> Result<(), String> {
     let result =
         engine.search_parallel_managed_with_callback(root, plan, cancellation, workers, |info| {
@@ -579,7 +599,7 @@ fn run_search(
         });
     time_manager
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .observe_spend(&plan, result.elapsed);
     if result.termination == SearchTermination::EvaluationError {
         return Err("pure-only inference failed; no bestmove is available".to_owned());
