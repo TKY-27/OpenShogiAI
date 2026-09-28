@@ -1151,8 +1151,7 @@ fn rollback_untrusted_link(
     if provably_linked
         && target_directory
             .unlink_if_identity(target, target_identity)
-            .ok()
-            .is_some_and(std::convert::identity)
+            .is_ok_and(std::convert::identity)
     {
         let _ = target_directory.sync();
     }
@@ -1193,9 +1192,11 @@ impl StableDirectoryIdentity {
                 "retained descriptor is not a directory",
             ));
         }
+        #[cfg_attr(target_os = "linux", allow(clippy::useless_conversion))]
+        let device = u64::try_from(stat.st_dev)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid device id"))?;
         Ok(Self {
-            device: u64::try_from(stat.st_dev)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid device id"))?,
+            device,
             inode: stat.st_ino,
         })
     }
@@ -1225,11 +1226,15 @@ impl StableFileIdentity {
     }
 
     fn from_stat(stat: &libc::stat) -> io::Result<Self> {
+        // `dev_t` is already `u64` on Linux, where the wide conversion would be a
+        // useless-conversion lint; it stays a checked widening on macOS.
+        #[cfg_attr(target_os = "linux", allow(clippy::useless_conversion))]
+        let device = u64::try_from(stat.st_dev)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid device id"))?;
         Ok(Self {
             length: u64::try_from(stat.st_size)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative file size"))?,
-            device: u64::try_from(stat.st_dev)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid device id"))?,
+            device,
             inode: stat.st_ino,
             modified_seconds: stat_modified_seconds(stat),
             modified_nanoseconds: stat_modified_nanoseconds(stat),

@@ -575,8 +575,8 @@ fn read_values(
         .ok_or(Phase10TError::PayloadLengthMismatch)?;
     let range = payload.get(*cursor..end).ok_or(Phase10TError::Truncated)?;
     let mut values = Vec::with_capacity(count);
-    for chunk in range.chunks_exact(4) {
-        let value = f32::from_le_bytes(chunk.try_into().map_err(|_| Phase10TError::Truncated)?);
+    for chunk in range.as_chunks::<4>().0 {
+        let value = f32::from_le_bytes(*chunk);
         if !value.is_finite() {
             return Err(Phase10TError::NonFinite(field));
         }
