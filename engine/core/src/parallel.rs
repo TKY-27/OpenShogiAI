@@ -335,9 +335,13 @@ pub(crate) fn run_helper(
                 parallel.raise_alpha(stat.score);
                 parallel.publish(claim_epoch, index, stat);
             }
-            // A panic leaves this worker's engine state unbalanced: exit so the
-            // controller sees helpers_alive()==0 and finishes abandoned slots itself.
-            Err(_) => return,
+            // A panic leaves this worker's engine state unbalanced. Stop the whole
+            // search: surviving helpers never exit on their own, so the controller's
+            // drain must not wait on them for a search that cannot complete cleanly.
+            Err(_) => {
+                parallel.stop();
+                return;
+            }
             Ok(None) => {}
         }
     }

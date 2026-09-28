@@ -12,6 +12,7 @@ use web_time::Instant;
 use crate::transposition::{Bound, TranspositionHit, TranspositionTable};
 
 /// Stops the helper workers when dropped, including through unwinding.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct StopOnDrop(Arc<crate::parallel::ParallelSearch>);
 
 impl Drop for StopOnDrop {
@@ -1106,10 +1107,25 @@ impl SearchEngine {
                 let helper = self.fork_for_worker();
                 let root = position.clone();
                 let parallel = Arc::clone(&parallel);
+                let stop_watcher = Arc::clone(&parallel);
                 let cancellation = cancellation.clone();
                 let hard_limit = plan.hard_limit;
                 scope.spawn(move || {
-                    crate::parallel::run_helper(helper, root, parallel, cancellation, hard_limit);
+                    // Any helper panic — anywhere in its body — stops the whole
+                    // search: survivors never exit on their own, so the controller
+                    // must observe a stop rather than wait on a wounded worker.
+                    let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::parallel::run_helper(
+                            helper,
+                            root,
+                            parallel,
+                            cancellation,
+                            hard_limit,
+                        );
+                    }));
+                    if survived.is_err() {
+                        stop_watcher.stop();
+                    }
                 });
             }
             // A panicking controller must still stop the helpers, or the scoped join
@@ -1133,6 +1149,7 @@ impl SearchEngine {
 
     /// Per-worker engine state: shared immutable evaluators and table, private
     /// heuristics, accumulator stack and statistics.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn fork_for_worker(&self) -> Self {
         let mut worker = Self::empty(self.config, Arc::clone(&self.clock));
         worker.computation.clone_from(&self.computation);
@@ -1160,6 +1177,7 @@ impl SearchEngine {
         clippy::too_many_arguments,
         reason = "the partition merge needs the iteration identity, window and buffers"
     )]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn collect_partition_results(
         &mut self,
         position: &Position,
@@ -1224,6 +1242,7 @@ impl SearchEngine {
 
     /// One root iteration: `negamax` when serial, partitioned workers with a shared
     /// rising alpha when parallel, merged into the same root evidence either way.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn search_root_iteration(
         &mut self,
         position: &Position,
@@ -1280,8 +1299,9 @@ impl SearchEngine {
             &mut own,
             context,
         )?;
-        // Highest score wins; exact ties resolve to the smallest move so the choice
-        // matches the serial loop's first-strict-maximum over canonical move order.
+        // Highest score wins; exact ties resolve to the smallest move, which is
+        // deterministic but not identical to the serial loop's heuristic-order
+        // first-strict-maximum (both stay within genuinely tied-best moves).
         let best = own
             .iter()
             .fold(None::<&RootMoveStat>, |best, stat| match (best, stat) {
@@ -1399,6 +1419,7 @@ impl SearchEngine {
         clippy::too_many_arguments,
         reason = "the claim's move, window and worker role are passed explicitly"
     )]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn search_root_move(
         &mut self,
         root: &Position,
@@ -3712,6 +3733,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn parallel_search_keeps_controller_exact_node_limits_and_a_legal_move() {
+        // `result.nodes` counts the controller only; the guarantee is the controller's
+        // own budget staying exact, not a total across helpers.
         let position = Position::startpos();
         let plan = TimeManager::default()
             .plan(

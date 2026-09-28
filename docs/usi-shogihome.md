@@ -109,7 +109,10 @@ The engine itself writes nothing to stdout except USI lines.
   publishes exactly one completion after `stop`; a replaced position supersedes
   any running search.
 - The engine keeps its previous valid state on malformed options or invalid
-  positions and answers with bounded `info string` diagnostics.
+  positions and answers with bounded `info string` diagnostics. A `go` whose
+  values are rejected (out-of-range clocks, `movetime`/`nodes` 0, depth 0)
+  is answered with a diagnostic and no `bestmove`; ShogiHome never sends
+  these, but USI-strict peers should treat a diagnostic as the completion.
 - EarlyPonder (ponderhit carrying clocks) is handled.
 
 ## Trial match conditions to record
