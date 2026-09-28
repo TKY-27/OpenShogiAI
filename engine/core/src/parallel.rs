@@ -250,8 +250,7 @@ impl ParallelSearch {
         let current = self
             .iteration
             .lock()
-            .map(|iteration| iteration.epoch)
-            .unwrap_or(seen_epoch);
+            .map_or(seen_epoch, |iteration| iteration.epoch);
         if current == seen_epoch {
             std::thread::sleep(ITERATION_POLL);
         }
