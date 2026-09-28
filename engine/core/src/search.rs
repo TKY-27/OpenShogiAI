@@ -1719,9 +1719,13 @@ impl SearchEngine {
                     context.termination = Some(SearchTermination::Stable);
                     break;
                 }
-                // The learned change predictor may save work, but cannot bypass the common
-                // adaptive policy or the recursively checked absolute deadline.
-                if adaptive_stop || controller_stop {
+                // The learned change predictor may save work, but cannot bypass the
+                // common adaptive policy, the per-move spending floor, or the
+                // recursively checked absolute deadline.
+                let floored = managed
+                    .and_then(|plan| plan.min_spend)
+                    .is_none_or(|floor| elapsed >= floor);
+                if (adaptive_stop || controller_stop) && floored {
                     context.termination = Some(SearchTermination::Stable);
                     break;
                 }

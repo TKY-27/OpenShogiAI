@@ -81,8 +81,8 @@ impl ParallelSearch {
     }
 
     /// Publishes one root iteration for partitioned search. The claim order is the
-    /// previous iteration's root ranking (expensive moves first) plus any missing legal
-    /// moves in canonical order.
+    /// previous iteration's best-score-first ranking plus any missing legal moves in
+    /// canonical order.
     pub(crate) fn begin_iteration(
         &self,
         depth: u8,
@@ -117,21 +117,17 @@ impl ParallelSearch {
         epoch
     }
 
-    /// Claims the next unsearched root move of the current iteration.
+    /// Claims the next unsearched root move of the current iteration. The cursor lives
+    /// under the iteration lock so a claim can never straddle `begin_iteration` and
+    /// consume a slot of the epoch it was not issued for.
     pub(crate) fn claim(&self) -> Option<(u64, usize, Move)> {
-        if self.is_stopped() {
+        let iteration = self.iteration.lock().ok()?;
+        if self.is_stopped() || iteration.epoch == 0 {
             return None;
         }
-        let (epoch, moves) = {
-            let iteration = self.iteration.lock().ok()?;
-            if iteration.epoch == 0 {
-                return None;
-            }
-            (iteration.epoch, iteration.moves.clone())
-        };
         let index = self.cursor.fetch_add(1, Ordering::AcqRel);
-        let movement = moves.get(index).copied()?;
-        Some((epoch, index, movement))
+        let movement = iteration.moves.get(index).copied()?;
+        Some((iteration.epoch, index, movement))
     }
 
     /// Window parameters of the current iteration.
@@ -202,13 +198,15 @@ impl ParallelSearch {
 
     /// Scouts must not run before the first full-window search raised the shared alpha;
     /// otherwise a widened aspiration window would put every worker into a full search.
-    pub(crate) fn wait_until_primed(&self) {
+    /// Returns false if the primer disappeared (panic, stop) and priming never happened.
+    pub(crate) fn wait_until_primed(&self) -> bool {
         while !self.primed.load(Ordering::Acquire) {
-            if self.is_stopped() {
-                return;
+            if self.is_stopped() || !self.helpers_alive() {
+                return self.primed.load(Ordering::Acquire);
             }
             std::thread::sleep(ITERATION_POLL);
         }
+        true
     }
 
     /// Exact scores raise the shared alpha so later claims search narrower windows.
@@ -306,24 +304,25 @@ pub(crate) fn run_helper(
                 return;
             }
         }
-        if let Some(stat) = engine.search_root_move_detached(
-            &root,
-            movement,
-            depth,
-            parallel.current_alpha(),
-            beta,
-            first,
-            limits,
-            &cancellation,
-        ) {
+        let search = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.search_root_move_detached(
+                &root,
+                movement,
+                depth,
+                parallel.current_alpha(),
+                beta,
+                first,
+                limits,
+                &cancellation,
+            )
+        }));
+        if let Ok(Some(stat)) = search {
             parallel.raise_alpha(stat.score);
-            if first {
-                parallel.mark_primed();
-            }
             parallel.publish(epoch, index, stat);
-        } else if first {
-            // The priming search failed (time or cancellation): unblock the scouts so
-            // they observe the stop flag instead of waiting forever.
+        }
+        if first {
+            // The priming search ended (published, failed, time, cancellation or panic):
+            // unblock the scouts so they observe the stop flag instead of waiting.
             parallel.mark_primed();
         }
     }
