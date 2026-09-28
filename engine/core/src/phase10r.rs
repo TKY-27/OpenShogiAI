@@ -591,12 +591,8 @@ impl Osaval02Evaluator {
             let values = match quantization {
                 Osaval02Quantization::Float32 => {
                     let mut values = Vec::with_capacity(expected_elements);
-                    for chunk in encoded.chunks_exact(4) {
-                        let value = f32::from_le_bytes(
-                            chunk
-                                .try_into()
-                                .expect("four-byte chunks always convert to f32 bytes"),
-                        );
+                    for chunk in encoded.as_chunks::<4>().0 {
+                        let value = f32::from_le_bytes(*chunk);
                         if !value.is_finite() {
                             return Err(Osaval02Error::InvalidOwned(format!(
                                 "OSAVAL02 tensor {name} contains a non-finite parameter"
@@ -1407,7 +1403,7 @@ fn encode_features(
                 }
             }
         }
-        candidates.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
+        candidates.sort_by_key(|candidate| (candidate.0, candidate.1));
         let mut seen = HashSet::new();
         for (category, _, piece_indices) in candidates {
             let mut key = vec![3, category];
