@@ -74,7 +74,9 @@ version differs, expect the same flow under slightly different names.
 4. The engine appears as `OpenShogiAI … pure_learned <model hash prefix>`.
    Set its options in the same dialog (defaults are correct):
    - `USI_Ponder`: **false** (keep it off; see below).
-   - `Threads`: **1** (the engine runs exactly one search worker).
+   - `AutoThreads`: **true** (the engine picks search workers from the
+     machine's topology and current load; see below).
+   - `Threads`: manual worker count, used only when `AutoThreads` is **false**.
    - `USI_Hash`: 32 MiB is the default and a reasonable starting budget.
 5. In the game dialog, choose this engine for one or both sides, pick a clock
    (for example 10 minutes + 5 seconds Fisher or byoyomi), and start.
@@ -90,7 +92,8 @@ The engine itself writes nothing to stdout except USI lines.
 | --- | --- | --- |
 | `USI_Hash` (alias `Hash`) | spin 1..1024, default 32 MiB | Applied to the next search's transposition table via the engine's real table sizing. This budget is the TT size, **not** the process's total memory (observed RSS for a short match move is larger). |
 | `USI_Ponder` | check, default **false** | Advertised false so the GUI does not invent `true`. Pondering is not implemented; keep it false. |
-| `Threads` | spin 1..1, default 1 | One search worker. Other values are declined with a diagnostic, not accepted silently. |
+| `AutoThreads` | check, default **true** | Worker count is chosen automatically at each search start from physical/logical CPU topology and the one-minute load average, with hysteresis so the count does not oscillate between moves. The chosen value and its basis are reported in the `info string hash …` line. |
+| `Threads` | spin 1..logical CPUs, default 1 | Manual worker count, applied when `AutoThreads` is false and persistent for the session. Out-of-range values are declined with a diagnostic. |
 | `RuntimeProfile` | combo, only `pure_learned` | The model and its verified hash are immutable at runtime. |
 
 - Clocks follow the USI definition the GUIs implement: `btime + binc` (or
