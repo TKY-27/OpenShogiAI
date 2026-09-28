@@ -38,6 +38,7 @@ pub use phase10v::{
 };
 mod pure_playing;
 pub use pure_playing::PurePlayingEvaluator;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod parallel;
 mod position;
 mod resource;

@@ -10,6 +10,15 @@ use std::{
 use web_time::Instant;
 
 use crate::transposition::{Bound, TranspositionHit, TranspositionTable};
+
+/// Stops the helper workers when dropped, including through unwinding.
+struct StopOnDrop(Arc<crate::parallel::ParallelSearch>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
 use crate::{
     Move, Osaval02SearchAdapter, PieceKind, Position, RuntimeProfile, RuntimeProofCounters, Side,
     TimePlan,
@@ -1092,7 +1101,7 @@ impl SearchEngine {
         let workers = workers.min(crate::parallel::MAX_WORKERS);
         let parallel = Arc::new(crate::parallel::ParallelSearch::new());
         self.active_parallel = Some(Arc::clone(&parallel));
-        let result = std::thread::scope(|scope| {
+        let caught = std::thread::scope(|scope| {
             for _ in 1..workers {
                 let helper = self.fork_for_worker();
                 let root = position.clone();
@@ -1103,14 +1112,23 @@ impl SearchEngine {
                     crate::parallel::run_helper(helper, root, parallel, cancellation, hard_limit);
                 });
             }
-            let search = self.search_managed_observed(position, plan, cancellation, |info, _| {
-                callback(info);
-            });
+            // A panicking controller must still stop the helpers, or the scoped join
+            // would wait forever; the panic is re-raised after the join for the
+            // protocol layer's own failure handling.
+            let search = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _stop_on_drop = StopOnDrop(Arc::clone(&parallel));
+                self.search_managed_observed(position, plan, cancellation, |info, _| {
+                    callback(info);
+                })
+            }));
             parallel.stop();
             search
         });
         self.active_parallel = None;
-        result
+        match caught {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Per-worker engine state: shared immutable evaluators and table, private
@@ -1227,11 +1245,12 @@ impl SearchEngine {
                 return Err(());
             }
             let first = parallel.claim_full_window();
-            if !first {
-                parallel.wait_until_primed();
-                if context.check_termination().is_err() {
-                    return Err(());
-                }
+            if !first && !parallel.wait_until_primed() {
+                // The primer died before publishing; abandon this attempt.
+                return Err(());
+            }
+            if context.check_termination().is_err() {
+                return Err(());
             }
             let claim_alpha = parallel.current_alpha();
             let Some(stat) = self.search_root_move(
@@ -1261,12 +1280,18 @@ impl SearchEngine {
             &mut own,
             context,
         )?;
-        // First strict maximum in claim order matches serial tie-breaking.
+        // Highest score wins; exact ties resolve to the smallest move so the choice
+        // matches the serial loop's first-strict-maximum over canonical move order.
         let best = own
             .iter()
             .fold(None::<&RootMoveStat>, |best, stat| match (best, stat) {
                 (_, Some(stat)) => match best {
-                    Some(best) if best.score >= stat.score => Some(best),
+                    Some(best)
+                        if best.score > stat.score
+                            || (best.score == stat.score && best.movement <= stat.movement) =>
+                    {
+                        Some(best)
+                    }
                     _ => Some(stat),
                 },
                 (best, None) => best,
@@ -1387,6 +1412,7 @@ impl SearchEngine {
         if depth == 0 {
             return None;
         }
+        let nodes_before = context.nodes;
         let mut position = root.clone();
         let undo = position.make_generated_move(movement);
         let a1_previous = self.a1_push(movement, &position);
@@ -1416,7 +1442,7 @@ impl SearchEngine {
             movement,
             score: -child.score,
             depth,
-            nodes: context.nodes,
+            nodes: context.nodes.saturating_sub(nodes_before),
             pv,
         })
     }

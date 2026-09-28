@@ -110,7 +110,9 @@ impl TranspositionTable {
     }
 
     fn shard_slot(&self, hash: u64) -> (usize, usize) {
-        let total = u64::try_from(self.total_entry_count()).unwrap_or(u64::MAX);
+        let total = u64::try_from(self.total_entry_count())
+            .unwrap_or(u64::MAX)
+            .max(1);
         let slot = usize::try_from(hash % total).unwrap_or_default();
         let shard = (self.shards.len().saturating_sub(1)).min(slot / self.per_shard);
         (shard, slot - shard * self.per_shard)

@@ -1174,7 +1174,10 @@ mod tests {
         session.send("setoption name Threads value 2");
         session.send("position startpos moves 7g7f 3c3d");
         session.send("go nodes 20000 depth 4");
-        assert!(session.wait_for("bestmove "));
+        assert!(
+            session.wait_for_within("bestmove ", Duration::from_secs(30)),
+            "parallel completion under load"
+        );
         assert_eq!(session.bestmove_count(), 1);
         assert!(
             session
