@@ -13,9 +13,9 @@ use std::{
 };
 
 use open_shogi_core::{
-    CancellationToken, Position, PurePlayingEvaluator, SearchConfig, SearchEngine, SearchOutcome,
-    SearchTermination, TimeManager, TimePlan, is_mate_score, parse_sfen, parse_usi_move,
-    probe_worker_basis, to_usi_move, usable_logical_cpus,
+    AutoWorkerPolicy, CancellationToken, Position, PurePlayingEvaluator, SearchConfig,
+    SearchEngine, SearchOutcome, SearchTermination, TimeManager, TimePlan, is_mate_score,
+    parse_sfen, parse_usi_move, probe_worker_basis, to_usi_move, usable_logical_cpus,
 };
 
 use crate::{
@@ -129,9 +129,9 @@ struct PureSession<'a> {
     /// A held `go ponder` request. Invariant: set only while no worker is active.
     pending_ponder: Option<GoParameters>,
     /// Cross-move clock state (extension cooldown) shared with the search worker, and
-    /// sticky automatic worker sizing.
+    /// the sticky automatic worker plan.
     time_manager: Arc<std::sync::Mutex<TimeManager>>,
-    auto_workers: usize,
+    auto_workers: AutoWorkerPolicy,
 }
 
 /// Run USI with an immutable validated pure model and no alternate evaluator.
@@ -199,7 +199,7 @@ fn session_loop(
         worker: None,
         pending_ponder: None,
         time_manager: Arc::new(std::sync::Mutex::new(TimeManager::default())),
-        auto_workers: probe_worker_basis().automatic_workers().get(),
+        auto_workers: AutoWorkerPolicy::new(&probe_worker_basis()),
     };
     loop {
         let event = session
@@ -318,6 +318,10 @@ impl PureSession<'_> {
                 self.position = Position::startpos();
                 self.history_initial = self.position.clone();
                 self.history_moves.clear();
+                self.time_manager
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .reset_spend_history();
             }
             UsiCommand::PositionStartpos { moves } => {
                 self.finish(FinishPolicy::Supersede)?;
@@ -367,6 +371,10 @@ impl PureSession<'_> {
             UsiCommand::GameOver { .. } => {
                 self.finish(FinishPolicy::Supersede)?;
                 self.pending_ponder = None;
+                self.time_manager
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .reset_spend_history();
             }
             UsiCommand::Quit => {
                 self.finish(FinishPolicy::Supersede)?;
@@ -433,19 +441,14 @@ impl PureSession<'_> {
         }
     }
 
-    /// Worker count for this search: manual when overridden, otherwise the automatic
-    /// topology/load plan smoothed by hysteresis so jitter cannot thrash worker counts
-    /// between moves. Evaluated only here, at a search boundary.
+    /// Worker count for this search: manual when overridden, otherwise the sticky
+    /// automatic plan (topology baseline banded by external load with this session's
+    /// own previous search subtracted). Evaluated only here, at a search boundary.
     fn workers_for_search(&mut self) -> (usize, String) {
         if !self.options.auto_threads {
             return (self.options.threads, "manual".to_owned());
         }
-        let basis = probe_worker_basis();
-        let automatic = basis.automatic_workers().get();
-        if automatic.abs_diff(self.auto_workers) >= 2 {
-            self.auto_workers = automatic;
-        }
-        (self.auto_workers, basis.describe())
+        self.auto_workers.next_workers(&probe_worker_basis())
     }
 
     fn start_search(&mut self, parameters: &GoParameters) -> Result<(), String> {

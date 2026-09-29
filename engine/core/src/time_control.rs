@@ -209,19 +209,29 @@ pub struct TimeManager {
     extension_cooldown: u8,
 }
 
-/// Live-clock spending plan: target `remaining / CLOCK_RUNWAY_MOVES`, a fraction that
-/// decays geometrically and can never reach zero. Extensions are capped both relative to
-/// the target and as a fraction of the remaining clock, so no single move can consume a
-/// large slice of a sudden-death clock.
-const CLOCK_RUNWAY_MOVES: u64 = 64;
-const CLOCK_SPEND_FACTOR_NUM: u64 = 9;
+/// Live-clock spending plan: a fraction of the remaining clock that decays
+/// geometrically and can never reach zero. The fraction itself ramps up as the clock
+/// drains: the normal target is `remaining / 64 * 9 / 10` — a 64-move geometric runway
+/// shrunk by one tenth, i.e. `27/1920` of the clock — rising linearly to `1/12`
+/// (`160/1920`) at `CLOCK_EMERGENCY_FLOOR_MS` after `CLOCK_EMERGENCY_MS`, and holding
+/// there below it, so the engine progressively stops hoarding as time becomes dangerous
+/// instead of switching regimes at a hard threshold. Extensions are capped both
+/// relative to the target and as a fraction of the remaining clock, so no single move
+/// can consume a large slice of a sudden-death clock.
 const CLOCK_EXTENSION_CAP_MULT: u64 = 5;
 const CLOCK_EXTENSION_FRACTION: u64 = 8;
 const CLOCK_COOLDOWN_EXTENSION_MULT: u64 = 3;
+/// Remaining time where the spend fraction starts ramping up from the normal `27/1920`;
+/// the ramp is continuous here by construction.
 const CLOCK_EMERGENCY_MS: u64 = 20_000;
-/// Extra conservatism below the emergency threshold: target `remaining / 12`, hard cap
-/// `remaining / 6`, so the engine always has several moves of runway left.
-const CLOCK_EMERGENCY_RUNWAY: u64 = 12;
+/// Remaining time at which the spend fraction reaches `1/12` and stays there.
+const CLOCK_EMERGENCY_FLOOR_MS: u64 = 5_000;
+/// Ramp span: `CLOCK_EMERGENCY_MS - CLOCK_EMERGENCY_FLOOR_MS`.
+const CLOCK_EMERGENCY_SPAN_MS: u64 = CLOCK_EMERGENCY_MS - CLOCK_EMERGENCY_FLOOR_MS;
+/// Target-fraction numerators over `CLOCK_FRACTION_SCALE = 1920`.
+const CLOCK_FRACTION_SCALE: u64 = 1_920;
+const CLOCK_NORMAL_FRACTION: u64 = 27;
+const CLOCK_EMERGENCY_FRACTION: u64 = 160;
 
 impl TimeManager {
     /// Constructs a validated manager.
@@ -259,6 +269,13 @@ impl TimeManager {
         } else {
             self.extension_cooldown.saturating_sub(1)
         };
+    }
+
+    /// Drops all cross-move state, leaving the validated configuration intact. Match
+    /// boundaries (new game, game over, a fresh browser session) must call this so a
+    /// previous match's extension cooldown cannot leak into the next one.
+    pub const fn reset_spend_history(&mut self) {
+        self.extension_cooldown = 0;
     }
 
     /// Allocates soft and hard monotonic durations for the side to move.
@@ -401,12 +418,39 @@ impl TimeManager {
             };
         }
 
-        // Emergency regime: a dangerously low clock gets a short decisive target with a
-        // proportional hard cap and no saving floor.
-        if remaining > 0 && remaining <= CLOCK_EMERGENCY_MS {
-            let allocated = (remaining / 6).max(1);
+        // Emergency regime: as the clock drains below CLOCK_EMERGENCY_MS, the spend
+        // fraction ramps smoothly toward remaining/12, so the engine stops hoarding
+        // exactly as fast as its situation becomes dangerous — no discontinuity at the
+        // threshold, and the absolute extension cap below never loosens. The fraction
+        // stays one scaled division (no quantization), so adjacent clocks differ by at
+        // most rounding.
+        if remaining > 0 {
+            let drained = CLOCK_EMERGENCY_MS
+                .saturating_sub(remaining)
+                .min(CLOCK_EMERGENCY_SPAN_MS);
+            // remaining * fraction(remaining) in one scaled division; the product is
+            // far below u64 range for every accepted clock.
+            let scaled = remaining.saturating_mul(
+                CLOCK_NORMAL_FRACTION * CLOCK_EMERGENCY_SPAN_MS
+                    + (CLOCK_EMERGENCY_FRACTION - CLOCK_NORMAL_FRACTION) * drained,
+            ) / (CLOCK_FRACTION_SCALE * CLOCK_EMERGENCY_SPAN_MS);
+            let target = scaled
+                .saturating_add(increment.saturating_mul(3) / 4)
+                .saturating_add(byoyomi.saturating_mul(3) / 4)
+                .max(1);
+            let extension_multiple = if self.extension_cooldown > 0 {
+                CLOCK_COOLDOWN_EXTENSION_MULT
+            } else {
+                CLOCK_EXTENSION_CAP_MULT
+            };
+            // Two absolute caps: extension headroom relative to the target, and a fraction of
+            // the remaining clock no single move may consume even in a critical position.
+            let extension_cap = (target.saturating_mul(extension_multiple) / 2)
+                .min(remaining.saturating_div(CLOCK_EXTENSION_FRACTION));
+            let available = remaining.saturating_add(byoyomi);
+            let allocated = extension_cap.max(target).min(available);
             let hard = allocated.saturating_sub(margin.min(allocated.saturating_sub(1)));
-            let soft = (remaining / CLOCK_EMERGENCY_RUNWAY).min(hard).max(1);
+            let soft = target.min(hard);
             return TimePlan {
                 mode: TimeControlMode::Clock,
                 max_depth,
@@ -420,33 +464,16 @@ impl TimeManager {
                 stability: self.config.stability,
             };
         }
-
-        let share = remaining.saturating_mul(CLOCK_SPEND_FACTOR_NUM) / CLOCK_RUNWAY_MOVES / 10;
-        let target = share
-            .saturating_add(increment.saturating_mul(3) / 4)
-            .saturating_add(byoyomi.saturating_mul(3) / 4)
-            .max(1);
-        let extension_multiple = if self.extension_cooldown > 0 {
-            CLOCK_COOLDOWN_EXTENSION_MULT
-        } else {
-            CLOCK_EXTENSION_CAP_MULT
-        };
-        // Two absolute caps: extension headroom relative to the target, and a fraction of
-        // the remaining clock no single move may consume even in a critical position.
-        let extension_cap = (target.saturating_mul(extension_multiple) / 2)
-            .min(remaining.saturating_div(CLOCK_EXTENSION_FRACTION));
-        let available = remaining.saturating_add(byoyomi);
-        let allocated = extension_cap.max(target).min(available);
-        let hard = allocated.saturating_sub(margin.min(allocated.saturating_sub(1)));
-        let soft = target.min(hard);
+        // A zero base clock cannot manufacture time, with or without increment or
+        // byoyomi income: every positive-clock branch returned above.
         TimePlan {
             mode: TimeControlMode::Clock,
             max_depth,
             max_nodes: request.nodes,
-            soft_limit: Some(Duration::from_millis(soft)),
-            hard_limit: Some(Duration::from_millis(hard)),
-            allocated_hard_limit: Some(Duration::from_millis(allocated)),
-            safety_margin: Duration::from_millis(allocated.saturating_sub(hard)),
+            soft_limit: Some(Duration::ZERO),
+            hard_limit: Some(Duration::ZERO),
+            allocated_hard_limit: Some(Duration::ZERO),
+            safety_margin: Duration::ZERO,
             min_spend: None,
             allow_stable_early_stop: true,
             stability: self.config.stability,
@@ -703,12 +730,14 @@ mod tests {
                 && late.soft_limit.unwrap() + Duration::from_millis(1) >= half_early,
             "targets are a fixed fraction of the remaining clock"
         );
-        // The emergency regime takes over below 20 seconds.
+        // The emergency ramp raises the fraction from 27/1920 toward 1/12 below 20s:
+        // at 15s the target is 15000 * 1070000 / 28800000, and the hard cap stays
+        // within an eighth of the clock.
         let low = manager
             .plan(Side::Black, clock_request(15_000), 64)
             .unwrap();
-        assert_eq!(low.soft_limit, Some(Duration::from_millis(15_000 / 12)));
-        assert!(low.hard_limit.unwrap() <= Duration::from_millis(15_000 / 6));
+        assert_eq!(low.soft_limit, Some(Duration::from_millis(557)));
+        assert!(low.hard_limit.unwrap() <= Duration::from_millis(15_000 / 8));
         // A zero clock never manufactures time, with or without increment.
         for request in [
             clock_request(0),
@@ -743,6 +772,170 @@ mod tests {
         }
         let recovered = manager.plan(Side::Black, request, 64).unwrap();
         assert_eq!(recovered.hard_limit.unwrap(), free_cap);
+    }
+
+    #[test]
+    fn emergency_transition_is_continuous_across_the_whole_clock() {
+        let manager = TimeManager::default();
+        let mut previous: Option<(u64, u64)> = None;
+        for remaining in 1..=120_000_u64 {
+            let plan = manager
+                .plan(Side::Black, clock_request(remaining), 64)
+                .unwrap();
+            let soft = plan.soft_limit.unwrap().as_millis() as u64;
+            let hard = plan.hard_limit.unwrap().as_millis() as u64;
+            assert!(
+                soft <= hard,
+                "{remaining} ms: soft {soft} above hard {hard}"
+            );
+            assert!(
+                hard * 8 <= remaining.max(8),
+                "{remaining} ms: hard cap {hard} exceeds an eighth of the clock"
+            );
+            if let Some((previous_soft, previous_hard)) = previous {
+                assert!(
+                    soft.abs_diff(previous_soft) <= 2,
+                    "soft target jumps {previous_soft} -> {soft} at {remaining} ms"
+                );
+                assert!(
+                    hard.abs_diff(previous_hard) <= 4,
+                    "hard cap jumps {previous_hard} -> {hard} at {remaining} ms"
+                );
+            }
+            previous = Some((soft, hard));
+        }
+        // The historical cliff: crossing the old threshold must be imperceptible.
+        let above = manager
+            .plan(Side::Black, clock_request(20_001), 64)
+            .unwrap();
+        let below = manager
+            .plan(Side::Black, clock_request(20_000), 64)
+            .unwrap();
+        assert_eq!(above.soft_limit, below.soft_limit);
+        assert!(
+            above
+                .hard_limit
+                .unwrap()
+                .as_millis()
+                .abs_diff(below.hard_limit.unwrap().as_millis())
+                <= 2
+        );
+    }
+
+    #[test]
+    fn clock_fractions_at_the_documented_sample_points() {
+        let manager = TimeManager::default();
+        // remaining -> soft target, from the 27/1920 -> 160/1920 ramp over 20s..5s.
+        for (remaining, expected_soft) in [
+            (60_000, 843),
+            (30_000, 421),
+            (21_000, 295),
+            (20_001, 281),
+            (20_000, 281),
+            (15_000, 557),
+            (10_000, 602),
+            (5_000, 416),
+            (2_000, 166),
+        ] {
+            let plan = manager
+                .plan(Side::Black, clock_request(remaining), 64)
+                .unwrap();
+            assert_eq!(
+                plan.soft_limit.unwrap(),
+                Duration::from_millis(expected_soft),
+                "{remaining} ms soft target"
+            );
+        }
+    }
+
+    #[test]
+    fn low_clock_cooldown_still_tightens_the_extension_cap() {
+        let mut manager = TimeManager::default();
+        let plan = manager
+            .plan(Side::Black, clock_request(10_000), 64)
+            .unwrap();
+        let free_cap = plan.hard_limit.unwrap();
+        manager.observe_spend(&plan, Duration::from_millis(5_000));
+        let cooled = manager
+            .plan(Side::Black, clock_request(10_000), 64)
+            .unwrap();
+        assert!(
+            cooled.hard_limit.unwrap() < free_cap,
+            "a spent extension cools even a dangerously low clock"
+        );
+    }
+
+    #[test]
+    fn clock_survives_a_full_game_of_mixed_positions() {
+        // Deterministic whole-game simulation over the plan arithmetic: quiet moves
+        // spend the soft target, volatile and tactically critical moves spend the hard
+        // cap. The clock must never flag while the critical moves keep their extensions.
+        for (initial, expected_moves) in [(180_000_u64, 100), (600_000, 200)] {
+            let mut manager = TimeManager::default();
+            let mut remaining = initial;
+            let mut moves = 0_u32;
+            let mut critical_spends = 0_u32;
+            while moves < 1_000 {
+                let plan = manager
+                    .plan(Side::Black, clock_request(remaining), 64)
+                    .unwrap();
+                let soft = plan.soft_limit.unwrap().as_millis() as u64;
+                let hard = plan.hard_limit.unwrap().as_millis() as u64;
+                let critical = moves % 9 == 4;
+                let volatile = moves % 7 == 2;
+                let spent = if critical || volatile { hard } else { soft };
+                assert!(spent <= remaining, "move {moves} spent past the flag");
+                remaining -= spent;
+                manager.observe_spend(&plan, Duration::from_millis(spent));
+                moves += 1;
+                if critical {
+                    critical_spends += 1;
+                    // Even a cooled critical move reserves extension headroom above the
+                    // quiet target; the safety margin may consume part of it, but the
+                    // allocation itself always exceeds the soft target.
+                    assert!(
+                        plan.allocated_hard_limit.unwrap() > plan.soft_limit.unwrap(),
+                        "move {moves} lost its extension headroom"
+                    );
+                }
+                if remaining < 1_000 {
+                    break;
+                }
+            }
+            assert!(
+                moves >= expected_moves,
+                "{initial} ms clock lasted only {moves} moves"
+            );
+            assert!(
+                critical_spends > 10,
+                "simulation never exercised extensions"
+            );
+        }
+    }
+
+    #[test]
+    fn fischer_clock_earns_income_and_survives_the_same_way() {
+        let mut manager = TimeManager::default();
+        let mut remaining = 60_000_u64;
+        for moves in 0..300 {
+            let request = TimeControl {
+                black_time_ms: Some(remaining),
+                black_increment_ms: Some(5_000),
+                casual: false,
+                ..TimeControl::casual()
+            };
+            let plan = manager.plan(Side::Black, request, 64).unwrap();
+            let soft = plan.soft_limit.unwrap().as_millis() as u64;
+            let spent = if moves % 11 == 5 {
+                plan.hard_limit.unwrap().as_millis() as u64
+            } else {
+                soft
+            };
+            assert!(spent <= remaining + 5_000, "move {moves} overshot income");
+            remaining = remaining + 5_000 - spent;
+            manager.observe_spend(&plan, Duration::from_millis(spent));
+            assert!(remaining > 0, "fischer clock flagged on move {moves}");
+        }
     }
 
     #[test]

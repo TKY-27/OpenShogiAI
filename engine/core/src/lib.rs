@@ -149,7 +149,7 @@ pub use secure_file::{
     target_os = "android"
 )))]
 pub use secure_file_portable::{AnchoredFile, StableFileIdentity};
-pub use threads::{WorkerBasis, probe_worker_basis, usable_logical_cpus};
+pub use threads::{AutoWorkerPolicy, WorkerBasis, probe_worker_basis, usable_logical_cpus};
 pub use time_control::{
     CASUAL_HARD_MAX_MS, MAX_CLOCK_MS, MAX_MOVE_TIME_MS, MAX_SAFETY_MARGIN_MS,
     MAX_TIME_CONTROL_DEPTH, MAX_TIME_CONTROL_NODES, StabilityPolicy, TIME_CONTROL_SCHEMA,

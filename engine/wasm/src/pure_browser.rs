@@ -283,6 +283,10 @@ pub struct BrowserEngine {
     computation: Option<Arc<open_shogi_core::ComputationModel>>,
     computation_enabled: bool,
     play: Option<PlaySession>,
+    /// Cross-move play-clock state (extension cooldown), the same core semantics the
+    /// native USI session keeps. Match-clock searches feed their real spend back here;
+    /// `reset`/`restore` drop it; analysis never touches it.
+    play_clock: TimeManager,
     analysis: Option<AnalysisService>,
     analysis_identity: Option<(String, String)>,
     analysis_side: Option<Side>,
@@ -306,6 +310,7 @@ impl BrowserEngine {
             computation: None,
             computation_enabled: false,
             play: None,
+            play_clock: TimeManager::default(),
             analysis: None,
             analysis_identity: None,
             analysis_side: None,
@@ -334,6 +339,7 @@ impl BrowserEngine {
         };
         self.initial_sfen = to_sfen(&position);
         self.game = Game::new(position);
+        self.play_clock.reset_spend_history();
         self.clear_analysis();
         self.snapshot_json()
     }
@@ -363,6 +369,7 @@ impl BrowserEngine {
         }
         initial_sfen.clone_into(&mut self.initial_sfen);
         self.game = game;
+        self.play_clock.reset_spend_history();
         self.clear_analysis();
         self.snapshot_json()
     }
@@ -533,12 +540,14 @@ impl BrowserEngine {
     /// Runs a play search using the shared versioned time-control request.
     ///
     /// Infinite work belongs to the separate analysis service and is rejected here.
+    /// Match-clock searches use and update the cross-move play-clock state, exactly
+    /// like the native USI session; non-clock requests leave it untouched.
     ///
     /// # Errors
     ///
     /// Returns an error for invalid state, request, limits, evaluator, or serialization.
     pub fn search_time_control_json(
-        &self,
+        &mut self,
         profile: &str,
         evaluator: &str,
         multi_pv: u8,
@@ -558,7 +567,7 @@ impl BrowserEngine {
         let request: BrowserTimeControl =
             serde_json::from_str(time_control_json).map_err(|error| error.to_string())?;
         let request = request.into_core()?;
-        let plan = browser_time_plan(self.game.position(), request, profile)?;
+        let plan = browser_time_plan(&self.play_clock, self.game.position(), request, profile)?;
         let mode = time_control_mode_name(plan.mode);
 
         let config = SearchConfig {
@@ -575,6 +584,7 @@ impl BrowserEngine {
         let mut engine = self.search_engine(config, evaluator)?;
         let result = engine.search_managed(self.game.position(), plan, &CancellationToken::new());
         ensure_search_success(&result)?;
+        self.observe_play_spend(&plan, result.elapsed);
         let runtime_proof = self.runtime_proof(&engine, &result)?;
         let lines = Self::multi_pv_lines(&result, multi_pv);
         let mut response = SearchResponse::new(
@@ -614,7 +624,7 @@ impl BrowserEngine {
         let request: BrowserTimeControl =
             serde_json::from_str(time_control_json).map_err(|e| e.to_string())?;
         let request = request.into_core()?;
-        let plan = browser_time_plan(self.game.position(), request, profile)?;
+        let plan = browser_time_plan(&self.play_clock, self.game.position(), request, profile)?;
         if plan.mode != TimeControlMode::Clock {
             return Err("cooperative play requires the remaining game clock".into());
         }
@@ -729,6 +739,10 @@ impl BrowserEngine {
         session.result = result;
         session.updates = updates;
         session.done = true;
+        // Feed the real search spend back into the cross-move clock state so the next
+        // move's extension cooldown matches native USI behavior. The adjusted plan is
+        // what the search actually ran against.
+        self.observe_play_spend(&plan, session.result.elapsed);
         let response = session.envelope();
         self.play = Some(session);
         response
@@ -942,6 +956,14 @@ impl BrowserEngine {
         self.analysis_identity = None;
         self.analysis_side = None;
         self.analysis_profile = None;
+    }
+
+    /// Feeds a completed search's spend into the cross-move play-clock state. Only
+    /// match-clock searches carry spending information; fixed budgets do not.
+    fn observe_play_spend(&mut self, plan: &TimePlan, spent: Duration) {
+        if plan.mode == TimeControlMode::Clock {
+            self.play_clock.observe_spend(plan, spent);
+        }
     }
     fn model_summary(&self) -> serde_json::Value {
         self.model
@@ -1570,6 +1592,7 @@ fn duration_ns(duration: Duration) -> u64 {
 }
 
 fn browser_time_plan(
+    clock: &TimeManager,
     position: &Position,
     request: TimeControl,
     profile: BrowserSearchProfile,
@@ -1592,8 +1615,9 @@ fn browser_time_plan(
             profile.max_depth()
         ));
     }
-    let mut plan =
-        TimeManager::default().plan_for_position(position, request, profile.max_depth())?;
+    // The caller owns the cross-move play-clock state; a fresh manager here would
+    // silently reset the extension cooldown between match moves.
+    let mut plan = clock.plan_for_position(position, request, profile.max_depth())?;
     if plan.mode == TimeControlMode::Clock && request.depth.is_none() {
         // A quality preset is a resource choice, not a minimum/maximum thinking duration.
         plan.max_depth = open_shogi_core::MAX_TIME_CONTROL_DEPTH;
@@ -1781,7 +1805,7 @@ impl WasmBrowserEngine {
     /// # Errors
     /// Returns the underlying protocol, state, model or search validation error.
     pub fn search_with_time_control(
-        &self,
+        &mut self,
         profile: &str,
         evaluator: &str,
         multi_pv: u8,
@@ -1925,8 +1949,13 @@ mod tests {
             casual: false,
             ..TimeControl::casual()
         };
-        let plan =
-            browser_time_plan(&Position::startpos(), request, BrowserSearchProfile::Eco).unwrap();
+        let plan = browser_time_plan(
+            &TimeManager::default(),
+            &Position::startpos(),
+            request,
+            BrowserSearchProfile::Eco,
+        )
+        .unwrap();
         assert_eq!(plan.max_nodes, Some(1_500));
         assert_eq!(plan.max_depth, 5);
         assert!(plan.hard_limit.is_none());
@@ -1935,7 +1964,13 @@ mod tests {
             ..request
         };
         assert!(
-            browser_time_plan(&Position::startpos(), excessive, BrowserSearchProfile::Eco).is_err()
+            browser_time_plan(
+                &TimeManager::default(),
+                &Position::startpos(),
+                excessive,
+                BrowserSearchProfile::Eco
+            )
+            .is_err()
         );
     }
 
@@ -2177,5 +2212,162 @@ mod tests {
                 .analysis_start_json("eco", "pure_learned", &request.to_string())
                 .is_err()
         );
+    }
+
+    fn clock_request_json(remaining: u64) -> String {
+        json!({"schema": open_shogi_core::TIME_CONTROL_SCHEMA, "blackTimeMs": remaining,
+            "whiteTimeMs": remaining, "casual": false})
+        .to_string()
+    }
+
+    fn plan_for_clock(browser: &BrowserEngine, remaining: u64) -> open_shogi_core::TimePlan {
+        let request: BrowserTimeControl =
+            serde_json::from_str(&clock_request_json(remaining)).unwrap();
+        browser_time_plan(
+            &browser.play_clock,
+            browser.game.position(),
+            request.into_core().unwrap(),
+            BrowserSearchProfile::Balanced,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn play_clock_cooldown_persists_across_moves_and_decays() {
+        let mut browser = loaded();
+        let first = plan_for_clock(&browser, 120_000);
+        let free_cap = first.hard_limit.unwrap();
+        // A move that materially exceeds its soft target cools the next move, exactly
+        // like the native USI session feeding observe_spend.
+        browser.observe_play_spend(&first, first.soft_limit.unwrap() * 3);
+        let second = plan_for_clock(&browser, 120_000);
+        assert!(
+            second.hard_limit.unwrap() < free_cap,
+            "an over-soft spend must cool the following move"
+        );
+        // The following play move really receives the cooled cap through the public
+        // play surface, not just through the internal manager.
+        let envelope: Value = serde_json::from_str(
+            &browser
+                .play_start_json("balanced", "pure_learned", 1, &clock_request_json(120_000))
+                .unwrap(),
+        )
+        .unwrap();
+        let reported = envelope["timing"]["hardLimitMs"].as_f64().unwrap();
+        assert!(
+            (reported - second.hard_limit.unwrap().as_secs_f64() * 1_000.0).abs() < 0.01,
+            "the following play move must receive the cooled cap"
+        );
+        // The cooldown decays with normal moves: three under-target spends later, the
+        // free cap is back.
+        for _ in 0..3 {
+            browser.observe_play_spend(&second, Duration::from_millis(10));
+        }
+        let recovered = plan_for_clock(&browser, 120_000);
+        assert_eq!(recovered.hard_limit.unwrap(), free_cap);
+    }
+
+    #[test]
+    fn reset_and_restore_drop_stale_play_clock_state() {
+        let mut browser = loaded();
+        let base = plan_for_clock(&browser, 120_000);
+        let free_cap = base.hard_limit.unwrap();
+        browser.observe_play_spend(&base, base.soft_limit.unwrap() * 3);
+        assert!(plan_for_clock(&browser, 120_000).hard_limit.unwrap() < free_cap);
+        browser.reset(None).unwrap();
+        assert_eq!(
+            plan_for_clock(&browser, 120_000).hard_limit.unwrap(),
+            free_cap
+        );
+        // A restored session is a fresh match too.
+        browser.observe_play_spend(&base, base.soft_limit.unwrap() * 3);
+        assert!(plan_for_clock(&browser, 120_000).hard_limit.unwrap() < free_cap);
+        let initial = snapshot(&browser)["initialSfen"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        browser.restore(&initial, "[]").unwrap();
+        assert_eq!(
+            plan_for_clock(&browser, 120_000).hard_limit.unwrap(),
+            free_cap
+        );
+    }
+
+    #[test]
+    fn byoyomi_and_fixed_budgets_are_immune_to_the_cooldown() {
+        let mut browser = loaded();
+        let base = plan_for_clock(&browser, 120_000);
+        browser.observe_play_spend(&base, base.soft_limit.unwrap() * 3);
+        // Pure byoyomi is a per-move budget whose plan never carries over: cooldown
+        // must not change it.
+        let byoyomi: BrowserTimeControl = serde_json::from_str(
+            &json!({"schema": open_shogi_core::TIME_CONTROL_SCHEMA, "byoyomiMs": 5_000,
+                "casual": false})
+            .to_string(),
+        )
+        .unwrap();
+        let byo_plan = browser_time_plan(
+            &browser.play_clock,
+            browser.game.position(),
+            byoyomi.into_core().unwrap(),
+            BrowserSearchProfile::Balanced,
+        )
+        .unwrap();
+        assert_eq!(byo_plan.soft_limit, Some(Duration::from_millis(3_750)));
+        assert_eq!(byo_plan.hard_limit, Some(Duration::from_millis(4_950)));
+        // Fixed move times bypass the clock state entirely.
+        let fixed: BrowserTimeControl = serde_json::from_str(
+            &json!({"schema": open_shogi_core::TIME_CONTROL_SCHEMA, "movetimeMs": 2_000,
+                "casual": false})
+            .to_string(),
+        )
+        .unwrap();
+        let fixed_plan = browser_time_plan(
+            &browser.play_clock,
+            browser.game.position(),
+            fixed.into_core().unwrap(),
+            BrowserSearchProfile::Balanced,
+        )
+        .unwrap();
+        assert_eq!(fixed_plan.soft_limit, Some(Duration::from_millis(1_950)));
+        assert_eq!(fixed_plan.hard_limit, Some(Duration::from_millis(1_950)));
+    }
+
+    #[test]
+    fn real_play_run_keeps_normal_clock_behavior_and_analysis_stays_independent() {
+        let mut browser = loaded();
+        // A naturally completed play search spends about its soft target, so the next
+        // plan equals a fresh manager's plan: the wiring never invents a cooldown.
+        browser
+            .play_start_json("balanced", "pure_learned", 1, &clock_request_json(120_000))
+            .unwrap();
+        let final_json = browser
+            .play_run_observed(&CancellationToken::new(), |_| {})
+            .unwrap();
+        let result: Value = serde_json::from_str(&final_json).unwrap();
+        assert_eq!(result["done"], true);
+        let next = plan_for_clock(&browser, 120_000);
+        let fresh = plan_for_clock(&loaded(), 120_000);
+        assert_eq!(next.soft_limit, fresh.soft_limit);
+        assert_eq!(next.hard_limit, fresh.hard_limit);
+        // Analysis uses its own node/depth plans and never sees the match-clock state.
+        let root = snapshot(&browser)["sfen"].as_str().unwrap().to_owned();
+        let hash = fixture().1.clone();
+        let request = json!({"schema":ANALYSIS_SCHEMA,"positionSfen":root,
+            "modelHash":hash,"evaluatorConfigHash":hash, "featureSchemaHash":hash,
+            "evaluationSemanticsHash":hash, "searchOptionsHash":hash, "openingProfileHash":hash, "multiPv":1});
+        browser
+            .analysis_start_json("eco", "pure_learned", &request.to_string())
+            .unwrap();
+        let step: Value = serde_json::from_str(
+            &browser
+                .analysis_step_json(
+                    &json!({"schema":ANALYSIS_SCHEMA,"nodes":100,"maxDepth":1,"timestampMs":10})
+                        .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(step["event"], "updates");
     }
 }
