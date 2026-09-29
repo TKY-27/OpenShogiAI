@@ -498,9 +498,21 @@ impl UsiSession {
     }
 
     fn start_search(&mut self, parameters: &GoParameters) -> Result<(), String> {
+        // Validate the whole request before superseding an active search: a rejected
+        // go must leave the previous search alive to publish its bestmove, or USI's
+        // one-completion-per-go contract breaks with no recovery step.
+        let plan = TimeManager::default().plan_for_position(
+            &self.position,
+            time_control(parameters, self.options.safety_margin_ms),
+            if parameters.infinite {
+                MAX_DEPTH
+            } else {
+                self.options.max_depth
+            },
+        )?;
+        self.ensure_model_ready()?;
         self.cancel_active(true);
         self.pending_ponder = None;
-        self.ensure_model_ready()?;
         if self.position.move_number() <= self.options.opening_max_plies
             && let Some(choice) = self.opening_book.as_ref().and_then(|book| {
                 book.select(
@@ -539,15 +551,6 @@ impl UsiSession {
         let model_semantics = self.options.model_semantics;
         let runtime_profile = self.options.runtime_profile;
         let expected_model_sha256 = self.options.expected_model_sha256.clone();
-        let plan = TimeManager::default().plan_for_position(
-            &position,
-            time_control(parameters, self.options.safety_margin_ms),
-            if parameters.infinite {
-                MAX_DEPTH
-            } else {
-                self.options.max_depth
-            },
-        )?;
         let completion_gate = parameters
             .infinite
             .then(|| Arc::new(CompletionGate::default()));

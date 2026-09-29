@@ -620,6 +620,9 @@ impl BrowserEngine {
         multi_pv: u8,
         time_control_json: &str,
     ) -> Result<String, String> {
+        if self.game.end().is_some() {
+            return Err("the game has already ended".to_owned());
+        }
         if self.play.as_ref().is_some_and(|session| !session.done) {
             return Err("a play session is already active".into());
         }

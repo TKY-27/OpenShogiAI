@@ -856,6 +856,35 @@ mod tests {
     }
 
     #[test]
+    fn zero_soft_targets_never_arm_the_cooldown() {
+        // A one-millisecond byoyomi period (soft clamps to zero) and the exhausted
+        // zero-clock plan carry no extension semantics: real spend on them must not
+        // cool the next real clock.
+        let mut manager = TimeManager::default();
+        let tiny = manager
+            .plan(
+                Side::Black,
+                TimeControl {
+                    byoyomi_ms: Some(1),
+                    casual: false,
+                    ..TimeControl::casual()
+                },
+                64,
+            )
+            .unwrap();
+        assert_eq!(tiny.soft_limit, Some(Duration::ZERO));
+        manager.observe_spend(&tiny, Duration::from_millis(1));
+        let reference = TimeManager::default();
+        let next = manager
+            .plan(Side::Black, clock_request(120_000), 64)
+            .unwrap();
+        let fresh = reference
+            .plan(Side::Black, clock_request(120_000), 64)
+            .unwrap();
+        assert_eq!(next.hard_limit, fresh.hard_limit);
+    }
+
+    #[test]
     fn low_clock_cooldown_still_tightens_the_extension_cap() {
         let mut manager = TimeManager::default();
         let plan = manager

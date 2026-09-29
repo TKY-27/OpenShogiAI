@@ -453,8 +453,9 @@ impl PureSession<'_> {
     }
 
     fn start_search(&mut self, parameters: &GoParameters) -> Result<(), String> {
-        self.finish(FinishPolicy::Supersede)?;
-        self.pending_ponder = None;
+        // Validate the request before superseding an active search: a rejected go
+        // must leave the previous search alive to publish its bestmove, or USI's
+        // one-completion-per-go contract breaks with no recovery step.
         let plan = match self
             .time_manager
             .lock()
@@ -470,6 +471,8 @@ impl PureSession<'_> {
                 return Ok(());
             }
         };
+        self.finish(FinishPolicy::Supersede)?;
+        self.pending_ponder = None;
         let (workers, basis) = self.workers_for_search();
         let entries = hash_entries(self.options.hash_megabytes);
         // One fresh engine per accepted request: the transposition table is rebuilt

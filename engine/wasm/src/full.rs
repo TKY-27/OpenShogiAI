@@ -14,8 +14,8 @@ use open_shogi_core::{
     NeuralQuantization, OpeningBookChoice, OpeningBookV2, OpeningPolicy, OpeningProfile,
     Osaval02Evaluator, Osaval02History, Osaval02Identity, PieceKind, Position, RepetitionOutcome,
     RuntimeProofCounters, SearchConfig, SearchEngine, SearchLimits, SearchResult, SearchStats,
-    SearchTermination, Side, Square, TimeControl, TimeControlMode, TimeManager, parse_sfen,
-    parse_usi_move, to_sfen, to_usi_move,
+    SearchTermination, Side, Square, TimeControl, TimeControlMode, TimeManager, TimePlan,
+    parse_sfen, parse_usi_move, to_sfen, to_usi_move,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -241,6 +241,10 @@ pub struct BrowserEngine {
     opening_book_summary: Option<OpeningBookSummary>,
     opening_policy: OpeningPolicy,
     opening_max_plies: u32,
+    /// Cross-move match-clock state (extension cooldown), the same core semantics the
+    /// native USI session keeps; match-clock searches feed their real spend back here
+    /// and `reset`/`restore` drop it. Analysis never touches it.
+    play_clock: TimeManager,
     analysis: Option<AnalysisService>,
     analysis_identity: Option<(String, String)>,
     analysis_side: Option<Side>,
@@ -266,6 +270,7 @@ impl BrowserEngine {
             opening_book_summary: None,
             opening_policy: OpeningPolicy::default(),
             opening_max_plies: 40,
+            play_clock: TimeManager::default(),
             analysis: None,
             analysis_identity: None,
             analysis_side: None,
@@ -294,6 +299,7 @@ impl BrowserEngine {
         };
         self.initial_sfen = to_sfen(&position);
         self.game = Game::new(position);
+        self.play_clock.reset_spend_history();
         self.snapshot_json()
     }
 
@@ -322,6 +328,7 @@ impl BrowserEngine {
         }
         initial_sfen.clone_into(&mut self.initial_sfen);
         self.game = game;
+        self.play_clock.reset_spend_history();
         self.snapshot_json()
     }
 
@@ -536,7 +543,7 @@ impl BrowserEngine {
     ///
     /// Returns an error for invalid state, request, limits, evaluator, or serialization.
     pub fn search_time_control_json(
-        &self,
+        &mut self,
         profile: &str,
         evaluator: &str,
         multi_pv: u8,
@@ -565,7 +572,9 @@ impl BrowserEngine {
                 profile.max_nodes()
             ));
         }
-        let mut plan = TimeManager::default().plan_for_position(
+        // The engine owns the cross-match play-clock state; a fresh manager here would
+        // silently reset the extension cooldown between match moves.
+        let mut plan = self.play_clock.plan_for_position(
             self.game.position(),
             request,
             profile.max_depth(),
@@ -599,6 +608,9 @@ impl BrowserEngine {
         };
         let mut engine = self.search_engine(config, evaluator)?;
         let result = engine.search_managed(self.game.position(), plan, &CancellationToken::new());
+        // The wall-clock spend is real even when the search failed afterwards; native
+        // USI observes before its failure checks too.
+        self.observe_play_spend(&plan, result.elapsed);
         let runtime_proof = self.runtime_proof(&engine, evaluator, result.stats);
         let lines = Self::multi_pv_lines(&result, multi_pv);
         let response = SearchResponse::new(
@@ -611,6 +623,14 @@ impl BrowserEngine {
             runtime_proof,
         );
         serde_json::to_string(&response).map_err(|error| error.to_string())
+    }
+
+    /// Feeds a completed search's spend into the cross-match play-clock state.
+    /// Only match-clock searches carry spending information; fixed budgets do not.
+    fn observe_play_spend(&mut self, plan: &TimePlan, spent: Duration) {
+        if plan.mode == TimeControlMode::Clock {
+            self.play_clock.observe_spend(plan, spent);
+        }
     }
 
     /// Starts infinite logical analysis for a canonical root.
@@ -1862,7 +1882,7 @@ impl WasmBrowserEngine {
 
     #[wasm_bindgen(js_name = searchWithTimeControl)]
     pub fn search_with_time_control(
-        &self,
+        &mut self,
         profile: &str,
         evaluator: &str,
         multi_pv: u8,
@@ -1916,6 +1936,7 @@ impl WasmBrowserEngine {
 
 #[cfg(test)]
 mod tests {
+    use super::BrowserTimeControl;
     use std::io::Write as _;
 
     use flate2::{Compression, write::GzEncoder};
@@ -2040,8 +2061,42 @@ mod tests {
     }
 
     #[test]
+    fn match_clock_cooldown_persists_across_moves_in_the_bundled_runtime() {
+        // The shipped browser runtime is this handcrafted build: a match-clock search
+        // that spends beyond its soft target must cool the next move's extension cap
+        // here exactly like the native USI session, and a reset must clear it.
+        let mut engine = BrowserEngine::new();
+        let clock_request = |remaining: u64| {
+            serde_json::json!({
+                "schema": open_shogi_core::TIME_CONTROL_SCHEMA,
+                "blackTimeMs": remaining,
+                "whiteTimeMs": remaining,
+                "casual": false,
+            })
+        };
+        let plan = |engine: &BrowserEngine, remaining: u64| {
+            let request: BrowserTimeControl =
+                serde_json::from_str(&clock_request(remaining).to_string()).unwrap();
+            engine
+                .play_clock
+                .plan_for_position(engine.game.position(), request.into_core().unwrap(), 64)
+                .unwrap()
+        };
+        let first = plan(&engine, 120_000);
+        let free_cap = first.hard_limit.unwrap();
+        engine.observe_play_spend(&first, first.soft_limit.unwrap() * 3);
+        let cooled = plan(&engine, 120_000);
+        assert!(
+            cooled.hard_limit.unwrap() < free_cap,
+            "an over-soft spend must cool the following match move"
+        );
+        engine.reset(None).unwrap();
+        assert_eq!(plan(&engine, 120_000).hard_limit.unwrap(), free_cap);
+    }
+
+    #[test]
     fn shared_time_control_schema_conforms_at_the_wasm_boundary() {
-        let engine = BrowserEngine::new();
+        let mut engine = BrowserEngine::new();
         let request = serde_json::json!({
             "schema": open_shogi_core::TIME_CONTROL_SCHEMA,
             "nodes": 750,
