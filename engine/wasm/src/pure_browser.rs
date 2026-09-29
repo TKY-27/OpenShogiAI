@@ -1957,8 +1957,10 @@ mod tests {
         assert_eq!(start["done"], false);
         assert_eq!(start["result"]["outcome"], "cancelled_before_evaluation");
         assert_eq!(start["result"]["runtimeProof"]["learned_eval_calls"], 0);
-        assert_eq!(start["timing"]["targetMs"], 6_000.0);
-        assert_eq!(start["timing"]["hardLimitMs"], 17_950.0);
+        // Resource-aware sudden-death plan: target = remaining*9/64/10, extension
+        // headroom capped at 2.5x target, margin scaled by the allowance.
+        assert_eq!(start["timing"]["targetMs"], 8_437.0);
+        assert_eq!(start["timing"]["hardLimitMs"], 20_842.0);
         let cancelled: Value = serde_json::from_str(&browser.play_stop_json().unwrap()).unwrap();
         assert_eq!(cancelled["done"], true);
         assert_eq!(cancelled["result"]["bestMove"], start["result"]["bestMove"]);
@@ -2027,7 +2029,7 @@ mod tests {
                     let session = browser.play.as_ref().unwrap();
                     assert_eq!(
                         session.plan.soft_limit,
-                        Some(Duration::from_millis(remaining / 100))
+                        Some(Duration::from_millis(remaining * 9 / 64 / 10))
                     );
                     assert_eq!(session.plan.max_depth, 64);
                     assert_eq!(session.engine.config().quiescence_depth, 4);

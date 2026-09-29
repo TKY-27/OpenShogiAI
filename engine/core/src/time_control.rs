@@ -395,7 +395,7 @@ impl TimeManager {
                 hard_limit: Some(Duration::from_millis(hard)),
                 allocated_hard_limit: Some(Duration::from_millis(byoyomi)),
                 safety_margin: Duration::from_millis(byoyomi.saturating_sub(hard)),
-                min_spend: Some(Duration::from_millis(byoyomi / 2.min(hard))),
+                min_spend: Some(Duration::from_millis((byoyomi / 2).min(hard))),
                 allow_stable_early_stop: true,
                 stability: self.config.stability,
             };

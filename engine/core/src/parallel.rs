@@ -81,8 +81,8 @@ impl ParallelSearch {
     }
 
     /// Publishes one root iteration for partitioned search. The claim order is the
-    /// previous iteration's root ranking (expensive moves first) plus any missing legal
-    /// moves in canonical order.
+    /// previous iteration's best-score-first ranking plus any missing legal moves in
+    /// canonical order.
     pub(crate) fn begin_iteration(
         &self,
         depth: u8,
@@ -117,21 +117,28 @@ impl ParallelSearch {
         epoch
     }
 
-    /// Claims the next unsearched root move of the current iteration.
+    /// Claims the next unsearched root move of the current iteration. The cursor lives
+    /// under the iteration lock so a claim can never straddle `begin_iteration` and
+    /// consume a slot of the epoch it was not issued for.
     pub(crate) fn claim(&self) -> Option<(u64, usize, Move)> {
-        if self.is_stopped() {
+        let iteration = self.iteration.lock().ok()?;
+        if self.is_stopped() || iteration.epoch == 0 {
             return None;
         }
-        let (epoch, moves) = {
-            let iteration = self.iteration.lock().ok()?;
-            if iteration.epoch == 0 {
-                return None;
-            }
-            (iteration.epoch, iteration.moves.clone())
-        };
         let index = self.cursor.fetch_add(1, Ordering::AcqRel);
-        let movement = moves.get(index).copied()?;
-        Some((epoch, index, movement))
+        let movement = iteration.moves.get(index).copied()?;
+        Some((iteration.epoch, index, movement))
+    }
+
+    /// Window parameters of `epoch`, but only while it is still the current iteration.
+    /// A claim from an already-replaced epoch is simply dropped: its slot belonged to an
+    /// iteration nobody waits on anymore.
+    pub(crate) fn window_of(&self, epoch: u64) -> Option<(u8, i32, i32)> {
+        let iteration = self.iteration.lock().ok()?;
+        if iteration.epoch != epoch {
+            return None;
+        }
+        Some((iteration.depth, iteration.alpha, iteration.beta))
     }
 
     /// Window parameters of the current iteration.
@@ -202,13 +209,15 @@ impl ParallelSearch {
 
     /// Scouts must not run before the first full-window search raised the shared alpha;
     /// otherwise a widened aspiration window would put every worker into a full search.
-    pub(crate) fn wait_until_primed(&self) {
+    /// Returns false if the primer disappeared (panic, stop) and priming never happened.
+    pub(crate) fn wait_until_primed(&self) -> bool {
         while !self.primed.load(Ordering::Acquire) {
-            if self.is_stopped() {
-                return;
+            if self.is_stopped() || !self.helpers_alive() {
+                return self.primed.load(Ordering::Acquire);
             }
             std::thread::sleep(ITERATION_POLL);
         }
+        true
     }
 
     /// Exact scores raise the shared alpha so later claims search narrower windows.
@@ -241,8 +250,7 @@ impl ParallelSearch {
         let current = self
             .iteration
             .lock()
-            .map(|iteration| iteration.epoch)
-            .unwrap_or(seen_epoch);
+            .map_or(seen_epoch, |iteration| iteration.epoch);
         if current == seen_epoch {
             std::thread::sleep(ITERATION_POLL);
         }
@@ -283,48 +291,57 @@ pub(crate) fn run_helper(
     };
     let mut prepared_epoch = 0_u64;
     while !parallel.is_stopped() && !cancellation.is_cancelled() {
-        let Some((epoch, depth, _alpha, beta)) = parallel.iteration_window() else {
-            parallel.wait_for_work(0);
+        let Some((claim_epoch, index, movement)) = parallel.claim() else {
+            let seen = parallel
+                .iteration_window()
+                .map_or(0, |(epoch, _, _, _)| epoch);
+            parallel.wait_for_work(seen);
             continue;
         };
-        if epoch != prepared_epoch && engine.prepare_worker_root(&root).is_err() {
+        // The claim's epoch is authoritative: honoring it (or dropping it when the
+        // iteration already moved past) can never consume a live slot without a result.
+        let Some((depth, _alpha, beta)) = parallel.window_of(claim_epoch) else {
+            continue;
+        };
+        if claim_epoch != prepared_epoch && engine.prepare_worker_root(&root).is_err() {
             parallel.stop();
             return;
         }
-        prepared_epoch = epoch;
-        let Some((claim_epoch, index, movement)) = parallel.claim() else {
-            parallel.wait_for_work(epoch);
-            continue;
-        };
-        if claim_epoch != epoch {
-            continue;
-        }
+        prepared_epoch = claim_epoch;
         let first = parallel.claim_full_window();
-        if !first {
-            parallel.wait_until_primed();
-            if parallel.is_stopped() || cancellation.is_cancelled() {
+        if !first && !parallel.wait_until_primed() {
+            return;
+        }
+        let search = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.search_root_move_detached(
+                &root,
+                movement,
+                depth,
+                parallel.current_alpha(),
+                beta,
+                first,
+                limits,
+                &cancellation,
+            )
+        }));
+        if first {
+            // The priming search ended (published, failed, time, cancellation or
+            // panic): unblock the scouts so they observe the stop flag.
+            parallel.mark_primed();
+        }
+        match search {
+            Ok(Some(stat)) => {
+                parallel.raise_alpha(stat.score);
+                parallel.publish(claim_epoch, index, stat);
+            }
+            // A panic leaves this worker's engine state unbalanced. Stop the whole
+            // search: surviving helpers never exit on their own, so the controller's
+            // drain must not wait on them for a search that cannot complete cleanly.
+            Err(_) => {
+                parallel.stop();
                 return;
             }
-        }
-        if let Some(stat) = engine.search_root_move_detached(
-            &root,
-            movement,
-            depth,
-            parallel.current_alpha(),
-            beta,
-            first,
-            limits,
-            &cancellation,
-        ) {
-            parallel.raise_alpha(stat.score);
-            if first {
-                parallel.mark_primed();
-            }
-            parallel.publish(epoch, index, stat);
-        } else if first {
-            // The priming search failed (time or cancellation): unblock the scouts so
-            // they observe the stop flag instead of waiting forever.
-            parallel.mark_primed();
+            Ok(None) => {}
         }
     }
 }

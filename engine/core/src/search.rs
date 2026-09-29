@@ -10,6 +10,16 @@ use std::{
 use web_time::Instant;
 
 use crate::transposition::{Bound, TranspositionHit, TranspositionTable};
+
+/// Stops the helper workers when dropped, including through unwinding.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct StopOnDrop(Arc<crate::parallel::ParallelSearch>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
 use crate::{
     Move, Osaval02SearchAdapter, PieceKind, Position, RuntimeProfile, RuntimeProofCounters, Side,
     TimePlan,
@@ -1092,29 +1102,54 @@ impl SearchEngine {
         let workers = workers.min(crate::parallel::MAX_WORKERS);
         let parallel = Arc::new(crate::parallel::ParallelSearch::new());
         self.active_parallel = Some(Arc::clone(&parallel));
-        let result = std::thread::scope(|scope| {
+        let caught = std::thread::scope(|scope| {
             for _ in 1..workers {
                 let helper = self.fork_for_worker();
                 let root = position.clone();
                 let parallel = Arc::clone(&parallel);
+                let stop_watcher = Arc::clone(&parallel);
                 let cancellation = cancellation.clone();
                 let hard_limit = plan.hard_limit;
                 scope.spawn(move || {
-                    crate::parallel::run_helper(helper, root, parallel, cancellation, hard_limit);
+                    // Any helper panic — anywhere in its body — stops the whole
+                    // search: survivors never exit on their own, so the controller
+                    // must observe a stop rather than wait on a wounded worker.
+                    let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::parallel::run_helper(
+                            helper,
+                            root,
+                            parallel,
+                            cancellation,
+                            hard_limit,
+                        );
+                    }));
+                    if survived.is_err() {
+                        stop_watcher.stop();
+                    }
                 });
             }
-            let search = self.search_managed_observed(position, plan, cancellation, |info, _| {
-                callback(info);
-            });
+            // A panicking controller must still stop the helpers, or the scoped join
+            // would wait forever; the panic is re-raised after the join for the
+            // protocol layer's own failure handling.
+            let search = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _stop_on_drop = StopOnDrop(Arc::clone(&parallel));
+                self.search_managed_observed(position, plan, cancellation, |info, _| {
+                    callback(info);
+                })
+            }));
             parallel.stop();
             search
         });
         self.active_parallel = None;
-        result
+        match caught {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Per-worker engine state: shared immutable evaluators and table, private
     /// heuristics, accumulator stack and statistics.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn fork_for_worker(&self) -> Self {
         let mut worker = Self::empty(self.config, Arc::clone(&self.clock));
         worker.computation.clone_from(&self.computation);
@@ -1142,6 +1177,7 @@ impl SearchEngine {
         clippy::too_many_arguments,
         reason = "the partition merge needs the iteration identity, window and buffers"
     )]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn collect_partition_results(
         &mut self,
         position: &Position,
@@ -1206,6 +1242,7 @@ impl SearchEngine {
 
     /// One root iteration: `negamax` when serial, partitioned workers with a shared
     /// rising alpha when parallel, merged into the same root evidence either way.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn search_root_iteration(
         &mut self,
         position: &Position,
@@ -1227,11 +1264,12 @@ impl SearchEngine {
                 return Err(());
             }
             let first = parallel.claim_full_window();
-            if !first {
-                parallel.wait_until_primed();
-                if context.check_termination().is_err() {
-                    return Err(());
-                }
+            if !first && !parallel.wait_until_primed() {
+                // The primer died before publishing; abandon this attempt.
+                return Err(());
+            }
+            if context.check_termination().is_err() {
+                return Err(());
             }
             let claim_alpha = parallel.current_alpha();
             let Some(stat) = self.search_root_move(
@@ -1261,12 +1299,19 @@ impl SearchEngine {
             &mut own,
             context,
         )?;
-        // First strict maximum in claim order matches serial tie-breaking.
+        // Highest score wins; exact ties resolve to the smallest move, which is
+        // deterministic but not identical to the serial loop's heuristic-order
+        // first-strict-maximum (both stay within genuinely tied-best moves).
         let best = own
             .iter()
             .fold(None::<&RootMoveStat>, |best, stat| match (best, stat) {
                 (_, Some(stat)) => match best {
-                    Some(best) if best.score >= stat.score => Some(best),
+                    Some(best)
+                        if best.score > stat.score
+                            || (best.score == stat.score && best.movement <= stat.movement) =>
+                    {
+                        Some(best)
+                    }
                     _ => Some(stat),
                 },
                 (best, None) => best,
@@ -1374,6 +1419,7 @@ impl SearchEngine {
         clippy::too_many_arguments,
         reason = "the claim's move, window and worker role are passed explicitly"
     )]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn search_root_move(
         &mut self,
         root: &Position,
@@ -1387,6 +1433,7 @@ impl SearchEngine {
         if depth == 0 {
             return None;
         }
+        let nodes_before = context.nodes;
         let mut position = root.clone();
         let undo = position.make_generated_move(movement);
         let a1_previous = self.a1_push(movement, &position);
@@ -1416,7 +1463,7 @@ impl SearchEngine {
             movement,
             score: -child.score,
             depth,
-            nodes: context.nodes,
+            nodes: context.nodes.saturating_sub(nodes_before),
             pv,
         })
     }
@@ -1719,9 +1766,13 @@ impl SearchEngine {
                     context.termination = Some(SearchTermination::Stable);
                     break;
                 }
-                // The learned change predictor may save work, but cannot bypass the common
-                // adaptive policy or the recursively checked absolute deadline.
-                if adaptive_stop || controller_stop {
+                // The learned change predictor may save work, but cannot bypass the
+                // common adaptive policy, the per-move spending floor, or the
+                // recursively checked absolute deadline.
+                let floored = managed
+                    .and_then(|plan| plan.min_spend)
+                    .is_none_or(|floor| elapsed >= floor);
+                if (adaptive_stop || controller_stop) && floored {
                     context.termination = Some(SearchTermination::Stable);
                     break;
                 }
@@ -3682,6 +3733,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn parallel_search_keeps_controller_exact_node_limits_and_a_legal_move() {
+        // `result.nodes` counts the controller only; the guarantee is the controller's
+        // own budget staying exact, not a total across helpers.
         let position = Position::startpos();
         let plan = TimeManager::default()
             .plan(

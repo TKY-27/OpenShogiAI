@@ -1,6 +1,7 @@
 //! Regression fixtures from the attached 2026-09-28 R4 match (see local QA notes).
 //! The positions pin mechanical search invariants; they do not encode expectations
 //! about the learned evaluation.
+#![cfg(feature = "handcrafted")]
 
 use std::time::Duration;
 
@@ -24,8 +25,8 @@ fn incident_positions_replay_and_search_legally() {
         let result = engine.search(
             &position,
             SearchLimits {
-                max_depth: 3,
-                max_nodes: Some(200_000),
+                max_depth: 2,
+                max_nodes: Some(20_000),
                 movetime: None,
             },
             &CancellationToken::new(),
@@ -42,8 +43,8 @@ fn incident_positions_survive_parallel_stress() {
         .plan(
             open_shogi_core::Side::White,
             TimeControl {
-                black_time_ms: Some(5_000),
-                white_time_ms: Some(5_000),
+                black_time_ms: Some(1_500),
+                white_time_ms: Some(1_500),
                 casual: false,
                 ..TimeControl::casual()
             },

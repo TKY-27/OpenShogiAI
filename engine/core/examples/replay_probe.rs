@@ -119,15 +119,34 @@ fn main() {
     println!("# static cp {}", inference["cp"]);
 
     for depth in &arguments.depths {
-        let result = engine.search(
-            &root,
-            SearchLimits {
-                max_depth: *depth,
-                max_nodes: arguments.nodes.or(Some(200_000_000)),
-                movetime: None,
-            },
-            &CancellationToken::new(),
-        );
+        let result = if arguments.workers > 1 {
+            let request = TimeControl {
+                depth: Some(*depth),
+                nodes: arguments.nodes,
+                casual: false,
+                ..TimeControl::casual()
+            };
+            let plan = TimeManager::default()
+                .plan(root.side_to_move(), request, 64)
+                .unwrap_or_else(|error| die(error));
+            engine.search_parallel_managed_with_callback(
+                &root,
+                plan,
+                &CancellationToken::new(),
+                arguments.workers,
+                |_| {},
+            )
+        } else {
+            engine.search(
+                &root,
+                SearchLimits {
+                    max_depth: *depth,
+                    max_nodes: arguments.nodes.or(Some(200_000_000)),
+                    movetime: None,
+                },
+                &CancellationToken::new(),
+            )
+        };
         report(&format!("depth<{depth}"), &result);
     }
     for movetime in &arguments.movetimes {

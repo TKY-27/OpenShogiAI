@@ -137,17 +137,34 @@ def shogihome_handshake(engine: EngineSession) -> None:
     if identity is None or "pure_learned" not in identity:
         raise ProtocolError(f"engine identity does not advertise the pure profile: {identity!r}")
     joined = "\n".join(options)
+    threads_line = next(
+        (line for line in options if line.startswith("option name Threads type spin")),
+        None,
+    )
+    threads_max = 0
+    if threads_line is not None:
+        suffix = threads_line.rsplit(" max ", 1)[-1].strip()
+        try:
+            threads_max = int(suffix)
+        except ValueError:
+            threads_max = 0
     for expected in (
         "option name USI_Hash type spin default 32 min 1 max 1024",
         "option name USI_Ponder type check default false",
-        "option name Threads type spin default 1 min 1 max 1",
+        "option name AutoThreads type check default true",
         "option name RuntimeProfile type combo default pure_learned var pure_learned",
     ):
         if expected not in joined:
             raise ProtocolError(f"missing advertised option: {expected!r}")
+    if threads_line is None or not 1 <= threads_max:
+        raise ProtocolError(
+            "missing usable Threads spin range "
+            f"(expected 'option name Threads type spin default 1 min 1 max N', got {threads_line!r})"
+        )
     engine.send("setoption name USI_Hash value 32")
     engine.send("setoption name USI_Ponder value false")
-    engine.send("setoption name Threads value 1")
+    engine.send("setoption name AutoThreads value false")
+    engine.send(f"setoption name Threads value {min(1, threads_max)}")
     engine.send("setoption name RuntimeProfile value pure_learned")
     engine.send("setoption name NotAnOsaiOption value 7")
     engine.send("isready")

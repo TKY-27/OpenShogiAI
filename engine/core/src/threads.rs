@@ -98,19 +98,17 @@ fn physical_core_count() -> Option<usize> {
         let (key, value) = line.split_once(':')?;
         let key = key.trim();
         let value = value.trim();
-        match key {
-            "physical id" => physical_id = value.to_owned(),
-            "core id" => core_id = value.to_owned(),
-            "processor" => {
-                if !physical_id.is_empty() && !core_id.is_empty() {
-                    saw_topology = true;
-                    cores.insert((physical_id.clone(), core_id.clone()));
-                }
+        match (key, !physical_id.is_empty() && !core_id.is_empty()) {
+            ("physical id", _) => value.clone_into(&mut physical_id),
+            ("core id", _) => value.clone_into(&mut core_id),
+            ("processor", true) => {
+                saw_topology = true;
+                cores.insert((physical_id.clone(), core_id.clone()));
             }
             _ => {}
         }
     }
-    (saw_topology && !cores.is_empty()).then(|| cores.len())
+    (saw_topology && !cores.is_empty()).then_some(cores.len())
 }
 
 #[cfg(not(unix))]
