@@ -6,8 +6,9 @@
 use std::process::exit;
 
 use open_shogi_core::{
-    CancellationToken, Position, PurePlayingEvaluator, SearchConfig, SearchEngine, SearchLimits,
-    TimeControl, TimeManager, parse_sfen, parse_usi_move, to_sfen, to_usi_move,
+    CancellationToken, Move, Phase10VEvaluator, Position, PurePlayingEvaluator, SearchConfig,
+    SearchEngine, SearchLimits, TimeControl, TimeManager, parse_sfen, parse_usi_move, to_sfen,
+    to_usi_move,
 };
 use std::sync::Arc;
 
@@ -26,6 +27,11 @@ struct Arguments {
     nodes: Option<u64>,
     workers: usize,
     initial: Option<String>,
+    /// Walk the whole game, comparing the incremental accumulator chain against a full
+    /// refresh at every position (Case C evidence).
+    parity: bool,
+    /// Print the search statistics block (qsearch, TT, inference counters).
+    stats: bool,
 }
 
 fn parse_list(value: &str) -> Vec<u64> {
@@ -47,6 +53,8 @@ fn arguments() -> Arguments {
         nodes: None,
         workers: 1,
         initial: None,
+        parity: false,
+        stats: false,
     };
     while let Some(name) = options.next() {
         let mut value = || {
@@ -60,6 +68,8 @@ fn arguments() -> Arguments {
             "--model-format" => parsed.format = value(),
             "--moves" => parsed.moves = value(),
             "--initial" => parsed.initial = Some(value()),
+            "--parity" => parsed.parity = true,
+            "--stats" => parsed.stats = true,
             "--depths" => {
                 parsed.depths = parse_list(&value())
                     .into_iter()
@@ -99,6 +109,10 @@ fn main() {
         root.make_move(movement)
             .unwrap_or_else(|error| die(format!("illegal {token}: {error}")));
         moves.push(movement);
+    }
+    if arguments.parity {
+        parity_walk(&model, &initial, &moves);
+        return;
     }
     let mut engine = model
         .search_engine(
@@ -147,7 +161,7 @@ fn main() {
                 &CancellationToken::new(),
             )
         };
-        report(&format!("depth<{depth}"), &result);
+        report(&format!("depth<{depth}"), &result, arguments.stats);
     }
     for movetime in &arguments.movetimes {
         let request = TimeControl {
@@ -176,11 +190,66 @@ fn main() {
                 );
             },
         );
-        report(&format!("movetime<{movetime}"), &result);
+        report(&format!("movetime<{movetime}"), &result, arguments.stats);
     }
 }
 
-fn report(label: &str, result: &open_shogi_core::SearchResult) {
+/// Case C evidence: at every position of the game, compare the side-to-move cp from the
+/// incremental accumulator chain against a full feature-scan refresh of the same model.
+fn parity_walk(model: &PurePlayingEvaluator, initial: &Position, moves: &[Move]) {
+    let PurePlayingEvaluator::Osaval03(evaluator) = model else {
+        die("parity walk requires the OSAVAL03 format");
+    };
+    let mut position = initial.clone();
+    let Ok(state) = evaluator.accumulator(&position) else {
+        die("start position has no kings");
+    };
+    let mut state = state;
+    let mut worst_absolute: f64 = 0.0;
+    let mut worst_ply: usize = 0;
+    let mut mismatches = 0_u64;
+    for (ply, movement) in moves.iter().enumerate() {
+        let after = {
+            let mut next = position.clone();
+            next.make_move(*movement)
+                .unwrap_or_else(|error| die(format!("illegal move {ply}: {error}")));
+            next
+        };
+        let mut incremental = state.clone();
+        if evaluator
+            .update_accumulator(&mut incremental, *movement, &after)
+            .is_err()
+        {
+            die(format!("incremental update rejected move {ply}"));
+        }
+        let refreshed = evaluator
+            .accumulator(&after)
+            .unwrap_or_else(|error| die(format!("refresh failed at {ply}: {error}")));
+        let incremental_cp = evaluator.infer_accumulator(&incremental).unwrap().cp;
+        let refreshed_cp = evaluator.infer_accumulator(&refreshed).unwrap().cp;
+        let absolute = (f64::from(incremental_cp) - f64::from(refreshed_cp)).abs();
+        if absolute > worst_absolute {
+            worst_absolute = absolute;
+            worst_ply = ply + 1;
+        }
+        if incremental_cp != refreshed_cp {
+            mismatches += 1;
+            println!(
+                "# mismatch ply {ply} move {} incremental {incremental_cp} refreshed {refreshed_cp}",
+                to_usi_move(*movement)
+            );
+        }
+        position = after;
+        state = refreshed;
+    }
+    println!(
+        "# parity positions {} exact {} worst_abs_cp {worst_absolute} at ply {worst_ply}",
+        moves.len(),
+        moves.len() - mismatches as usize,
+    );
+}
+
+fn report(label: &str, result: &open_shogi_core::SearchResult, stats: bool) {
     println!(
         "{} termination {:?} outcome {:?} depth {} seldepth {} score {} best {} nodes {} ms {}",
         label,
@@ -203,6 +272,20 @@ fn report(label: &str, result: &open_shogi_core::SearchResult) {
             .collect::<Vec<_>>()
             .join(" ")
     );
+    if stats {
+        let s = &result.stats;
+        println!(
+            "  stats tt_probes {} tt_hits {} tt_collisions {} beta_cutoffs {} qnodes {} learned_evals {} infer_errors {} fallbacks {}",
+            s.tt_probes,
+            s.tt_hits,
+            s.tt_collisions,
+            s.beta_cutoffs,
+            s.qnodes,
+            s.learned_eval_calls,
+            s.osaval02_inference_errors,
+            s.fallback_count,
+        );
+    }
     let mut stats = result.root_moves.clone();
     stats.sort_by(|left, right| right.score.cmp(&left.score));
     for stat in stats.iter().take(8) {
