@@ -74,9 +74,18 @@ fn incident_positions_survive_parallel_stress() {
                 |_| {},
             );
             if round % 3 == 2 {
-                assert_eq!(
-                    result.termination,
-                    SearchTermination::Cancelled,
+                // A search that legitimately stops before the 30 ms cancel lands is
+                // also fine: the cancellation semantics are pinned by the dedicated
+                // infinite-search tests. What must never happen here is an error or a
+                // bestmove that is not legal.
+                assert!(
+                    matches!(
+                        result.termination,
+                        SearchTermination::Cancelled
+                            | SearchTermination::Stable
+                            | SearchTermination::Completed
+                            | SearchTermination::TimeLimit
+                    ),
                     "round {round} {sfen} elapsed {:?} nodes {}",
                     result.elapsed,
                     result.nodes
@@ -86,4 +95,58 @@ fn incident_positions_survive_parallel_stress() {
             assert!(position.is_legal_move(result.best_move.expect("best move")));
         }
     }
+}
+
+#[test]
+fn parallel_root_never_lets_a_scout_bound_beat_the_exact_best() {
+    // The parallel merge must not treat a scout's bound-at-shared-alpha score as an
+    // exact tie: at the ply-118 fixture a bound-only 2a1a once won the fold over the
+    // exact N*8e and was provably two plies worse. Bounded searches may legitimately
+    // reach different exact maxima than serial, so the pinned invariant is the
+    // documented repro case: the unique exact maximum wins under both modes.
+    let position = parse_sfen(PLY118_SFEN).expect("fixture parses");
+    let mut serial = SearchEngine::new(SearchConfig {
+        transposition_entries: 4_096,
+        ..SearchConfig::default()
+    });
+    let serial_result = serial.search(
+        &position,
+        SearchLimits {
+            max_depth: 5,
+            max_nodes: None,
+            movetime: None,
+        },
+        &CancellationToken::new(),
+    );
+    let mut parallel = SearchEngine::new(SearchConfig {
+        transposition_entries: 4_096,
+        ..SearchConfig::default()
+    });
+    let plan = TimeManager::default()
+        .plan(
+            open_shogi_core::Side::White,
+            TimeControl {
+                depth: Some(5),
+                casual: false,
+                ..TimeControl::casual()
+            },
+            64,
+        )
+        .expect("depth plan");
+    let parallel_result = parallel.search_parallel_managed_with_callback(
+        &position,
+        plan,
+        &CancellationToken::new(),
+        4,
+        |_| {},
+    );
+    assert_eq!(
+        parallel_result.termination,
+        SearchTermination::Completed,
+        "depth-only parallel search must complete"
+    );
+    assert_eq!(
+        parallel_result.best_move, serial_result.best_move,
+        "the unique exact maximum must win under both modes"
+    );
 }

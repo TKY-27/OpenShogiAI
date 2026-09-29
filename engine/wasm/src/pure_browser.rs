@@ -498,6 +498,9 @@ impl BrowserEngine {
         if self.game.end().is_some() {
             return Err("the game has already ended".to_owned());
         }
+        if self.play.as_ref().is_some_and(|session| !session.done) {
+            return Err("a play session is already active".into());
+        }
         if !(1..=3).contains(&multi_pv) {
             return Err("multi-PV count must be between 1 and 3".to_owned());
         }
@@ -556,6 +559,9 @@ impl BrowserEngine {
         if self.game.end().is_some() {
             return Err("the game has already ended".to_owned());
         }
+        if self.play.as_ref().is_some_and(|session| !session.done) {
+            return Err("a play session is already active".into());
+        }
         if !(1..=3).contains(&multi_pv) {
             return Err("multi-PV count must be between 1 and 3".to_owned());
         }
@@ -583,8 +589,10 @@ impl BrowserEngine {
         };
         let mut engine = self.search_engine(config, evaluator)?;
         let result = engine.search_managed(self.game.position(), plan, &CancellationToken::new());
-        ensure_search_success(&result)?;
+        // The wall-clock spend is real even when the search fails afterwards; native
+        // USI observes before its failure checks too.
         self.observe_play_spend(&plan, result.elapsed);
+        ensure_search_success(&result)?;
         let runtime_proof = self.runtime_proof(&engine, &result)?;
         let lines = Self::multi_pv_lines(&result, multi_pv);
         let mut response = SearchResponse::new(
@@ -723,6 +731,10 @@ impl BrowserEngine {
                 }
             },
         );
+        // The wall-clock spend is real even when the search fails afterwards; native
+        // USI observes before its failure checks too. The adjusted plan is what the
+        // search actually ran against.
+        self.observe_play_spend(&plan, result.elapsed);
         ensure_search_success(&result)?;
         if let Some(error) = progress_error {
             return Err(error);
@@ -739,10 +751,6 @@ impl BrowserEngine {
         session.result = result;
         session.updates = updates;
         session.done = true;
-        // Feed the real search spend back into the cross-move clock state so the next
-        // move's extension cooldown matches native USI behavior. The adjusted plan is
-        // what the search actually ran against.
-        self.observe_play_spend(&plan, session.result.elapsed);
         let response = session.envelope();
         self.play = Some(session);
         response

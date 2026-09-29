@@ -85,6 +85,9 @@ impl AutoWorkerPolicy {
             searched: false,
         };
         policy.workers = policy.next_workers(basis).0;
+        // The constructor's probe is not a search: the first real search boundary must
+        // still subtract nothing.
+        policy.searched = false;
         policy
     }
 
@@ -319,6 +322,17 @@ mod tests {
         assert_eq!(policy.next_workers(&basis(24, Some(12), Some(11.0))).0, 11);
         // Even a load equal to our whole worker count changes nothing.
         assert_eq!(policy.next_workers(&basis(24, Some(12), Some(11.9))).0, 11);
+    }
+
+    #[test]
+    fn first_search_treats_pre_existing_load_as_fully_external() {
+        // Session construction on a quiet host, then a build saturates the machine
+        // before the first go: nothing of ours has run, so the raw load decides and
+        // the plan must hit the one-worker floor instead of subtracting a search that
+        // never happened.
+        let mut policy = AutoWorkerPolicy::new(&basis(24, Some(12), None));
+        assert_eq!(policy.current_workers(), 11);
+        assert_eq!(policy.next_workers(&basis(24, Some(12), Some(23.0))).0, 1);
     }
 
     #[test]

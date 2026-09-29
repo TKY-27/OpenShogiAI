@@ -50,7 +50,7 @@ struct IterationState {
     alpha: i32,
     beta: i32,
     moves: Vec<Move>,
-    results: Vec<Option<RootMoveStat>>,
+    results: Vec<Option<(RootMoveStat, bool)>>,
 }
 
 impl ParallelSearch {
@@ -170,21 +170,23 @@ impl ParallelSearch {
         ))
     }
 
-    /// Publishes a completed root-move result. Late results for a replaced iteration are
-    /// dropped.
-    pub(crate) fn publish(&self, epoch: u64, index: usize, stat: RootMoveStat) {
+    /// Publishes a completed root-move result. The boolean records whether the score
+    /// is exact; a scout that was not re-searched only bounded its move at the shared
+    /// alpha, and the merge must not let such an entry win a score tie. Late results
+    /// for a replaced iteration are dropped.
+    pub(crate) fn publish(&self, epoch: u64, index: usize, stat: RootMoveStat, exact: bool) {
         let Ok(mut iteration) = self.iteration.lock() else {
             return;
         };
         if iteration.epoch == epoch
             && let Some(slot) = iteration.results.get_mut(index)
         {
-            *slot = Some(stat);
+            *slot = Some((stat, exact));
         }
     }
 
     /// Clone of a published result, for the controller's merge pass.
-    pub(crate) fn result(&self, epoch: u64, index: usize) -> Option<RootMoveStat> {
+    pub(crate) fn result(&self, epoch: u64, index: usize) -> Option<(RootMoveStat, bool)> {
         let iteration = self.iteration.lock().ok()?;
         if iteration.epoch != epoch {
             return None;
@@ -285,16 +287,17 @@ impl Drop for HelperGuard<'_> {
 
 /// Test-only, single-permit injection of a helper inference failure (the escalation
 /// path is unreachable with valid models, so the regression test arms one claim).
-#[cfg(test)]
+/// The only caller lives in the handcrafted-gated search tests.
+#[cfg(all(test, feature = "handcrafted"))]
 static INJECT_HELPER_EVALUATION_FAILURE: AtomicBool = AtomicBool::new(false);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "handcrafted"))]
 pub(crate) fn inject_helper_evaluation_failure() {
     INJECT_HELPER_EVALUATION_FAILURE.store(true, Ordering::SeqCst);
 }
 
 /// Consumes the injection permit; true exactly once per arming.
-#[cfg(test)]
+#[cfg(all(test, feature = "handcrafted"))]
 pub(crate) fn take_helper_evaluation_failure_injection() -> bool {
     INJECT_HELPER_EVALUATION_FAILURE.swap(false, Ordering::SeqCst)
 }
@@ -335,7 +338,10 @@ pub(crate) fn run_helper(
             continue;
         };
         if claim_epoch != prepared_epoch && engine.prepare_worker_root(&root).is_err() {
-            parallel.stop();
+            // A helper that cannot even prepare its root (repetition/history/accumulator
+            // validation) cannot produce trustworthy output either: fail closed instead
+            // of draining into a fallback bestmove.
+            parallel.fail_evaluation();
             return;
         }
         prepared_epoch = claim_epoch;
@@ -361,9 +367,9 @@ pub(crate) fn run_helper(
             parallel.mark_primed();
         }
         match search {
-            Ok((Some(stat), _)) => {
+            Ok((Some((stat, exact)), _)) => {
                 parallel.raise_alpha(stat.score);
-                parallel.publish(claim_epoch, index, stat);
+                parallel.publish(claim_epoch, index, stat, exact);
             }
             // A panic leaves this worker's engine state unbalanced. Stop the whole
             // search: surviving helpers never exit on their own, so the controller's

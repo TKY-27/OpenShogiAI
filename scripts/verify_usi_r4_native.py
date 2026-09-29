@@ -156,10 +156,11 @@ def shogihome_handshake(engine: EngineSession) -> None:
     ):
         if expected not in joined:
             raise ProtocolError(f"missing advertised option: {expected!r}")
-    if threads_line is None or not 1 <= threads_max:
+    if threads_line is None or not threads_max >= 1:
         raise ProtocolError(
             "missing usable Threads spin range "
-            f"(expected 'option name Threads type spin default 1 min 1 max N', got {threads_line!r})"
+            "(expected 'option name Threads type spin default 1 min 1 max N', "
+            f"got {threads_line!r})"
         )
     engine.send("setoption name USI_Hash value 32")
     engine.send("setoption name USI_Ponder value false")

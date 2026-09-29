@@ -1193,11 +1193,11 @@ impl SearchEngine {
         epoch: u64,
         iteration_beta: i32,
         move_count: usize,
-        own: &mut [Option<RootMoveStat>],
+        own: &mut [Option<(RootMoveStat, bool)>],
         context: &mut SearchContext<'_>,
     ) -> Result<(), ()> {
         let parallel = self.active_parallel.clone().ok_or(())?;
-        let adopt = |own: &mut [Option<RootMoveStat>],
+        let adopt = |own: &mut [Option<(RootMoveStat, bool)>],
                      parallel: &crate::parallel::ParallelSearch| {
             for (slot, index) in own.iter_mut().zip(0..move_count) {
                 if slot.is_none()
@@ -1250,6 +1250,10 @@ impl SearchEngine {
 
     /// One root iteration: `negamax` when serial, partitioned workers with a shared
     /// rising alpha when parallel, merged into the same root evidence either way.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "claim loop, merge and tie-break semantics stay one coherent unit"
+    )]
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn search_root_iteration(
         &mut self,
@@ -1266,7 +1270,7 @@ impl SearchEngine {
             return self.negamax(&mut position.clone(), depth, alpha, beta, 0, context);
         };
         let move_count = parallel.move_count(epoch);
-        let mut own: Vec<Option<RootMoveStat>> = vec![None; move_count];
+        let mut own: Vec<Option<(RootMoveStat, bool)>> = vec![None; move_count];
         while let Some((claim_epoch, index, movement)) = parallel.claim() {
             if claim_epoch != epoch || context.check_termination().is_err() {
                 return Err(());
@@ -1280,7 +1284,7 @@ impl SearchEngine {
                 return Err(());
             }
             let claim_alpha = parallel.current_alpha();
-            let Some(stat) = self.search_root_move(
+            let Some((stat, exact)) = self.search_root_move(
                 position,
                 movement,
                 depth,
@@ -1295,8 +1299,8 @@ impl SearchEngine {
             if first {
                 parallel.mark_primed();
             }
-            parallel.publish(epoch, index, stat.clone());
-            own[index] = Some(stat);
+            parallel.publish(epoch, index, stat.clone(), exact);
+            own[index] = Some((stat, exact));
         }
         self.collect_partition_results(
             position,
@@ -1307,27 +1311,47 @@ impl SearchEngine {
             &mut own,
             context,
         )?;
-        // Highest score wins; exact ties resolve to the smallest move, which is
+        // Highest score wins; on equal scores an exact search beats a scout bound
+        // whose true value can be lower (the serial loop only ever keeps exact
+        // scores), and remaining exact ties resolve to the smallest move, which is
         // deterministic but not identical to the serial loop's heuristic-order
         // first-strict-maximum (both stay within genuinely tied-best moves).
         let best = own
             .iter()
-            .fold(None::<&RootMoveStat>, |best, stat| match (best, stat) {
-                (_, Some(stat)) => match best {
-                    Some(best)
-                        if best.score > stat.score
-                            || (best.score == stat.score && best.movement <= stat.movement) =>
-                    {
-                        Some(best)
-                    }
-                    _ => Some(stat),
-                },
-                (best, None) => best,
+            .fold(None::<&(RootMoveStat, bool)>, |best, entry| {
+                let Some(inner) = entry else {
+                    return best;
+                };
+                let (stat, exact) = inner;
+                let Some((best_stat, best_exact)) = best else {
+                    return Some(inner);
+                };
+                if best_stat.score != stat.score {
+                    return if best_stat.score > stat.score {
+                        best
+                    } else {
+                        Some(inner)
+                    };
+                }
+                // Equal scores: an exact search beats a scout bound, whose true value
+                // can be lower than the shared alpha it matched; remaining exact ties
+                // resolve to the smallest move, which is deterministic but not
+                // identical to the serial loop's heuristic-order first-strict-maximum
+                // (both stay within genuinely tied-best moves).
+                match (*best_exact, *exact) {
+                    (true, false) => best,
+                    (false, true) => Some(inner),
+                    _ if best_stat.movement <= stat.movement => best,
+                    _ => Some(inner),
+                }
             })
             .cloned()
+            .map(|(stat, _)| stat)
             .ok_or(())?;
         context.root_moves.clear();
-        context.root_moves.extend(own.into_iter().flatten());
+        context
+            .root_moves
+            .extend(own.into_iter().flatten().map(|(stat, _)| stat));
         context.complete_root_iteration(depth);
         context.root_partial = Some(NodeValue {
             score: best.score,
@@ -1416,11 +1440,11 @@ impl SearchEngine {
         first_move: bool,
         limits: SearchLimits,
         cancellation: &CancellationToken,
-    ) -> (Option<RootMoveStat>, bool) {
+    ) -> (Option<(RootMoveStat, bool)>, bool) {
         let clock = Arc::clone(&self.clock);
         let mut context = SearchContext::new(limits, cancellation, clock.now(), clock.as_ref());
         context.parallel = self.active_parallel.clone();
-        #[cfg(test)]
+        #[cfg(all(test, feature = "handcrafted"))]
         if crate::parallel::take_helper_evaluation_failure_injection() {
             return (None, true);
         }
@@ -1432,7 +1456,10 @@ impl SearchEngine {
     }
 
     /// Searches one root move with the current shared window so the published score is
-    /// exact (or a bound above the shared alpha) and mergeable across workers.
+    /// exact (or a bound above the shared alpha) and mergeable across workers. The
+    /// boolean reports whether the score is exact: full-window searches are, scouts
+    /// that were not re-searched only recorded a bound at the shared alpha, whose true
+    /// value can be lower.
     #[expect(
         clippy::too_many_arguments,
         reason = "the claim's move, window and worker role are passed explicitly"
@@ -1447,7 +1474,7 @@ impl SearchEngine {
         beta: i32,
         first_move: bool,
         context: &mut SearchContext<'_>,
-    ) -> Option<RootMoveStat> {
+    ) -> Option<(RootMoveStat, bool)> {
         if depth == 0 {
             return None;
         }
@@ -1457,18 +1484,29 @@ impl SearchEngine {
         let a1_previous = self.a1_push(movement, &position);
         // PVS discipline: exactly one full-window search per iteration (serial gives it
         // to the first move); every other move scouts zero-window against the shared
-        // alpha and re-searches only when it beats alpha.
-        let child = if first_move {
-            self.negamax(&mut position, depth - 1, -beta, -alpha, 1, context)
-        } else {
-            let scout = self.negamax(&mut position, depth - 1, -alpha - 1, -alpha, 1, context);
-            match scout {
-                Ok(value) if -value.score > alpha && -value.score < beta => {
-                    self.negamax(&mut position, depth - 1, -beta, -alpha, 1, context)
+        // alpha and re-searches only when it beats alpha. With PVS disabled the serial
+        // loop searches every move against the current window instead.
+        let (child, re_searched) =
+            if first_move || !self.config.enable_pvs || !self.config.enable_alpha_beta {
+                let window = if self.config.enable_alpha_beta {
+                    (-beta, -alpha)
+                } else {
+                    (-INFINITY, INFINITY)
+                };
+                (
+                    self.negamax(&mut position, depth - 1, window.0, window.1, 1, context),
+                    false,
+                )
+            } else {
+                let scout = self.negamax(&mut position, depth - 1, -alpha - 1, -alpha, 1, context);
+                match scout {
+                    Ok(value) if -value.score > alpha && -value.score < beta => (
+                        self.negamax(&mut position, depth - 1, -beta, -alpha, 1, context),
+                        true,
+                    ),
+                    other => (other, false),
                 }
-                other => other,
-            }
-        };
+            };
         position.unmake_move(undo);
         self.a1_pop(a1_previous);
         let Ok(child) = child else {
@@ -1477,13 +1515,17 @@ impl SearchEngine {
         let mut pv = Vec::with_capacity(child.pv.len() + 1);
         pv.push(movement);
         pv.extend(child.pv.iter().copied());
-        Some(RootMoveStat {
-            movement,
-            score: -child.score,
-            depth,
-            nodes: context.nodes.saturating_sub(nodes_before),
-            pv,
-        })
+        let exact = first_move || re_searched;
+        Some((
+            RootMoveStat {
+                movement,
+                score: -child.score,
+                depth,
+                nodes: context.nodes.saturating_sub(nodes_before),
+                pv,
+            },
+            exact,
+        ))
     }
 
     #[expect(
@@ -1720,6 +1762,7 @@ impl SearchEngine {
                 let iteration = loop {
                     // An aspiration retry replaces incomplete/bounded root evidence from
                     // the previous attempt; duplicate candidates are not separate moves.
+                    let accepted_root_moves = context.last_completed_root_moves.clone();
                     context.root_moves.clear();
                     if let Some(parallel) = self.active_parallel.clone() {
                         let ranked = context
@@ -1734,12 +1777,19 @@ impl SearchEngine {
                     let Ok(value) = result else {
                         break None;
                     };
-                    if aspiration && value.score <= alpha {
-                        alpha = -INFINITY;
-                        continue;
-                    }
-                    if aspiration && value.score >= beta {
-                        beta = INFINITY;
+                    if aspiration && (value.score <= alpha || value.score >= beta) {
+                        if value.score <= alpha {
+                            alpha = -INFINITY;
+                        } else {
+                            beta = INFINITY;
+                        }
+                        // The rejected attempt already replaced the root evidence;
+                        // restore the last accepted snapshot so an interruption during
+                        // the retry reports one consistent iteration.
+                        context.root_moves.clone_from(&accepted_root_moves);
+                        context
+                            .last_completed_root_moves
+                            .clone_from(&accepted_root_moves);
                         continue;
                     }
                     break Some(value);
@@ -3739,10 +3789,14 @@ mod tests {
                 nodes: 5,
                 pv: vec![claimed],
             },
+            true,
         );
         assert_eq!(parallel.claim().expect("second claim").2, second);
         assert!(parallel.claim().is_none(), "queue drains");
-        assert_eq!(parallel.result(epoch, index).expect("mergeable").score, 11);
+        assert_eq!(
+            parallel.result(epoch, index).expect("mergeable").0.score,
+            11
+        );
         // A replaced iteration drops late publishes.
         parallel.begin_iteration(5, -10, 10, vec![first], &[first]);
         assert!(parallel.result(epoch, index).is_none());
