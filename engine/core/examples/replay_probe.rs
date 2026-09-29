@@ -6,9 +6,8 @@
 use std::process::exit;
 
 use open_shogi_core::{
-    CancellationToken, Move, Phase10VEvaluator, Position, PurePlayingEvaluator, SearchConfig,
-    SearchEngine, SearchLimits, TimeControl, TimeManager, parse_sfen, parse_usi_move, to_sfen,
-    to_usi_move,
+    CancellationToken, Move, Position, PurePlayingEvaluator, SearchConfig, SearchEngine,
+    SearchLimits, TimeControl, TimeManager, parse_sfen, parse_usi_move, to_sfen, to_usi_move,
 };
 use std::sync::Arc;
 
@@ -207,7 +206,7 @@ fn parity_walk(model: &PurePlayingEvaluator, initial: &Position, moves: &[Move])
     let mut state = state;
     let mut worst_absolute: f64 = 0.0;
     let mut worst_ply: usize = 0;
-    let mut mismatches = 0_u64;
+    let mut mismatches = 0_usize;
     for (ply, movement) in moves.iter().enumerate() {
         let after = {
             let mut next = position.clone();
@@ -245,7 +244,7 @@ fn parity_walk(model: &PurePlayingEvaluator, initial: &Position, moves: &[Move])
     println!(
         "# parity positions {} exact {} worst_abs_cp {worst_absolute} at ply {worst_ply}",
         moves.len(),
-        moves.len() - mismatches as usize,
+        moves.len() - mismatches,
     );
 }
 

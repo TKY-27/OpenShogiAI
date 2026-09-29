@@ -31,6 +31,9 @@ pub(crate) struct ParallelSearch {
     stop: AtomicBool,
     /// Helper liveness; the controller waits on missing results only while this is > 0.
     alive_helpers: AtomicUsize,
+    /// Set by a helper whose inference failed: the search cannot produce trustworthy
+    /// output, so the controller must fail closed instead of publishing a fallback.
+    evaluation_failed: AtomicBool,
     cursor: AtomicUsize,
     shared_alpha: AtomicI32,
     /// Set once the iteration's full-window search has published a real alpha; scouts
@@ -55,6 +58,7 @@ impl ParallelSearch {
         Self {
             stop: AtomicBool::new(false),
             alive_helpers: AtomicUsize::new(0),
+            evaluation_failed: AtomicBool::new(false),
             cursor: AtomicUsize::new(0),
             shared_alpha: AtomicI32::new(-i32::MAX),
             primed: AtomicBool::new(false),
@@ -73,6 +77,17 @@ impl ParallelSearch {
     /// The controller finished (or is cancelling): every helper must exit.
     pub(crate) fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+    }
+
+    /// Records that a helper's inference failed; the whole search must fail closed.
+    pub(crate) fn fail_evaluation(&self) {
+        self.evaluation_failed.store(true, Ordering::Release);
+        self.stop();
+    }
+
+    #[must_use]
+    pub(crate) fn evaluation_failed(&self) -> bool {
+        self.evaluation_failed.load(Ordering::Acquire)
     }
 
     #[must_use]
@@ -268,6 +283,22 @@ impl Drop for HelperGuard<'_> {
     }
 }
 
+/// Test-only, single-permit injection of a helper inference failure (the escalation
+/// path is unreachable with valid models, so the regression test arms one claim).
+#[cfg(test)]
+static INJECT_HELPER_EVALUATION_FAILURE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn inject_helper_evaluation_failure() {
+    INJECT_HELPER_EVALUATION_FAILURE.store(true, Ordering::SeqCst);
+}
+
+/// Consumes the injection permit; true exactly once per arming.
+#[cfg(test)]
+pub(crate) fn take_helper_evaluation_failure_injection() -> bool {
+    INJECT_HELPER_EVALUATION_FAILURE.swap(false, Ordering::SeqCst)
+}
+
 /// One helper worker: claims root moves of the current iteration until the queue drains
 /// or the controller stops the search. Takes ownership because the worker owns its
 /// engine and coordination handle outright.
@@ -330,7 +361,7 @@ pub(crate) fn run_helper(
             parallel.mark_primed();
         }
         match search {
-            Ok(Some(stat)) => {
+            Ok((Some(stat), _)) => {
                 parallel.raise_alpha(stat.score);
                 parallel.publish(claim_epoch, index, stat);
             }
@@ -341,7 +372,14 @@ pub(crate) fn run_helper(
                 parallel.stop();
                 return;
             }
-            Ok(None) => {}
+            // Inference failure: the search cannot produce trustworthy output, so it
+            // must fail closed instead of draining into a fallback bestmove. Deadline
+            // and cancellation Nones keep claiming — the controller owns that stop.
+            Ok((None, true)) => {
+                parallel.fail_evaluation();
+                return;
+            }
+            Ok((None, false)) => {}
         }
     }
 }

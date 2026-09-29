@@ -259,11 +259,14 @@ impl TimeManager {
     }
 
     /// Reports the wall-clock spend of a completed move. A move that spent well beyond
-    /// its soft target engages the extension cooldown for the next few moves.
+    /// its soft target engages the extension cooldown for the next few moves. A zero
+    /// soft target carries no extension semantics — a one-millisecond byoyomi period or
+    /// a stalled cooperative start must not cool a real clock — so only positive
+    /// targets qualify.
     pub fn observe_spend(&mut self, plan: &TimePlan, spent: Duration) {
-        let extended = plan
-            .soft_limit
-            .is_some_and(|soft| spent.as_millis() > soft.as_millis() * 6 / 5);
+        let extended = plan.soft_limit.is_some_and(|soft| {
+            soft.as_millis() > 0 && spent.as_millis() > soft.as_millis() * 6 / 5
+        });
         self.extension_cooldown = if extended {
             3
         } else {
@@ -774,6 +777,10 @@ mod tests {
         assert_eq!(recovered.hard_limit.unwrap(), free_cap);
     }
 
+    fn ms(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    }
+
     #[test]
     fn emergency_transition_is_continuous_across_the_whole_clock() {
         let manager = TimeManager::default();
@@ -782,8 +789,8 @@ mod tests {
             let plan = manager
                 .plan(Side::Black, clock_request(remaining), 64)
                 .unwrap();
-            let soft = plan.soft_limit.unwrap().as_millis() as u64;
-            let hard = plan.hard_limit.unwrap().as_millis() as u64;
+            let soft = ms(plan.soft_limit.unwrap());
+            let hard = ms(plan.hard_limit.unwrap());
             assert!(
                 soft <= hard,
                 "{remaining} ms: soft {soft} above hard {hard}"
@@ -879,8 +886,8 @@ mod tests {
                 let plan = manager
                     .plan(Side::Black, clock_request(remaining), 64)
                     .unwrap();
-                let soft = plan.soft_limit.unwrap().as_millis() as u64;
-                let hard = plan.hard_limit.unwrap().as_millis() as u64;
+                let soft = ms(plan.soft_limit.unwrap());
+                let hard = ms(plan.hard_limit.unwrap());
                 let critical = moves % 9 == 4;
                 let volatile = moves % 7 == 2;
                 let spent = if critical || volatile { hard } else { soft };
@@ -925,9 +932,9 @@ mod tests {
                 ..TimeControl::casual()
             };
             let plan = manager.plan(Side::Black, request, 64).unwrap();
-            let soft = plan.soft_limit.unwrap().as_millis() as u64;
+            let soft = ms(plan.soft_limit.unwrap());
             let spent = if moves % 11 == 5 {
-                plan.hard_limit.unwrap().as_millis() as u64
+                ms(plan.hard_limit.unwrap())
             } else {
                 soft
             };

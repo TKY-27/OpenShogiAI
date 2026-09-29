@@ -102,6 +102,9 @@ impl OutputAuthority {
     where
         F: FnOnce() -> String,
     {
+        // The generation check and the send happen under one lock hold: a supersede
+        // that advances the generation can never interleave between the check and the
+        // write, so a stale worker's line cannot land after a newer request is accepted.
         let current = self
             .generation
             .lock()

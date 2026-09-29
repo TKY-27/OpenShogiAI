@@ -1142,7 +1142,15 @@ impl SearchEngine {
         });
         self.active_parallel = None;
         match caught {
-            Ok(result) => result,
+            Ok(mut result) => {
+                // A helper's inference failure must surface as EvaluationError so the
+                // adapter layer fails closed instead of publishing a fallback move.
+                if parallel.evaluation_failed() {
+                    result.termination = SearchTermination::EvaluationError;
+                    result.outcome = SearchOutcome::EvaluationError;
+                }
+                result
+            }
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }
@@ -1391,7 +1399,9 @@ impl SearchEngine {
     }
 
     /// Helper-side root-move search with a private context bound to this search's
-    /// coordination state.
+    /// coordination state. The boolean reports whether the search ended without a
+    /// result because inference itself failed — the one `None` cause a helper must
+    /// escalate instead of treating as its deadline.
     #[expect(
         clippy::too_many_arguments,
         reason = "helpers pass the claim's identity, window, limits and token explicitly"
@@ -1406,11 +1416,19 @@ impl SearchEngine {
         first_move: bool,
         limits: SearchLimits,
         cancellation: &CancellationToken,
-    ) -> Option<RootMoveStat> {
+    ) -> (Option<RootMoveStat>, bool) {
         let clock = Arc::clone(&self.clock);
         let mut context = SearchContext::new(limits, cancellation, clock.now(), clock.as_ref());
         context.parallel = self.active_parallel.clone();
-        self.search_root_move(root, movement, depth, alpha, beta, first_move, &mut context)
+        #[cfg(test)]
+        if crate::parallel::take_helper_evaluation_failure_injection() {
+            return (None, true);
+        }
+        let stat =
+            self.search_root_move(root, movement, depth, alpha, beta, first_move, &mut context);
+        let evaluation_failed =
+            stat.is_none() && context.termination == Some(SearchTermination::EvaluationError);
+        (stat, evaluation_failed)
     }
 
     /// Searches one root move with the current shared window so the published score is
@@ -3758,6 +3776,56 @@ mod tests {
         assert_eq!(result.termination, SearchTermination::NodeLimit);
         assert_eq!(result.nodes, 1_000);
         assert!(position.is_legal_move(result.best_move.expect("best move")));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn helper_inference_failure_fails_closed_without_hanging() {
+        // A helper whose inference fails returns no result without cancelling. Before
+        // the escalation fix the controller waited on that helper forever on a
+        // deadline-less plan (go depth N), and a deadline plan silently published a
+        // fallback bestmove. Both must instead fail closed, promptly.
+        let deadline_less = TimeManager::default()
+            .plan(
+                Side::Black,
+                crate::TimeControl {
+                    depth: Some(4),
+                    casual: false,
+                    ..crate::TimeControl::casual()
+                },
+                64,
+            )
+            .expect("depth plan");
+        let deadline = TimeManager::default()
+            .plan(
+                Side::Black,
+                crate::TimeControl {
+                    movetime_ms: Some(2_000),
+                    casual: false,
+                    ..crate::TimeControl::casual()
+                },
+                64,
+            )
+            .expect("movetime plan");
+        for plan in [deadline_less, deadline] {
+            crate::parallel::inject_helper_evaluation_failure();
+            let started = std::time::Instant::now();
+            let mut engine = SearchEngine::new(SearchConfig::default());
+            let result = engine.search_parallel_managed_with_callback(
+                &Position::startpos(),
+                plan,
+                &CancellationToken::new(),
+                3,
+                |_| {},
+            );
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(30),
+                "search must not hang on a failed helper: {elapsed:?}"
+            );
+            assert_eq!(result.termination, SearchTermination::EvaluationError);
+            assert_eq!(result.outcome, SearchOutcome::EvaluationError);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

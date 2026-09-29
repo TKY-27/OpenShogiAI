@@ -62,6 +62,9 @@ const LOAD_UNLOAD_SATURATION: f64 = 0.75;
 pub struct AutoWorkerPolicy {
     workers: usize,
     band: LoadBand,
+    /// Whether at least one search boundary has passed. Until then none of our searches
+    /// has contributed to the load average, so nothing may be subtracted for one.
+    searched: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,13 +75,14 @@ enum LoadBand {
 }
 
 impl AutoWorkerPolicy {
-    /// Initializes the plan from the first probe. The initial band is baseline so a
-    /// first probe that lands in the deadband keeps the topology plan.
+    /// Initializes the plan from the first probe, treating the whole observed load as
+    /// external because no search of ours has run yet.
     #[must_use]
     pub fn new(basis: &WorkerBasis) -> Self {
         let mut policy = Self {
             workers: 1,
             band: LoadBand::Baseline,
+            searched: false,
         };
         policy.workers = policy.next_workers(basis).0;
         policy
@@ -96,7 +100,8 @@ impl AutoWorkerPolicy {
     pub fn next_workers(&mut self, basis: &WorkerBasis) -> (usize, String) {
         let baseline = basis.automatic_workers().get();
         let busy = baseline.div_ceil(2).max(1);
-        let saturation = external_saturation(basis, self.workers);
+        let own = if self.searched { self.workers } else { 0 };
+        let saturation = external_saturation(basis, own);
         self.band = match saturation {
             None => LoadBand::Baseline,
             Some(value) if value >= LOAD_SATURATED_SATURATION => LoadBand::Saturated,
@@ -114,6 +119,7 @@ impl AutoWorkerPolicy {
             LoadBand::Busy => busy,
             LoadBand::Saturated => 1,
         };
+        self.searched = true;
         let label = match saturation {
             Some(value) => format!("{} external {value:.2}", basis.describe()),
             None => basis.describe(),
@@ -361,6 +367,7 @@ mod tests {
         // A superseded session's worker count cannot make the subtraction go negative
         // and freeze the plan at one worker forever.
         let mut policy = AutoWorkerPolicy::new(&basis(8, None, None));
+        policy.searched = true;
         policy.workers = 64;
         assert_eq!(policy.next_workers(&basis(8, None, Some(7.5))).0, 7);
     }

@@ -14,8 +14,9 @@ use std::{
 
 use open_shogi_core::{
     AutoWorkerPolicy, CancellationToken, Position, PurePlayingEvaluator, SearchConfig,
-    SearchEngine, SearchOutcome, SearchTermination, TimeManager, TimePlan, is_mate_score,
-    parse_sfen, parse_usi_move, probe_worker_basis, to_usi_move, usable_logical_cpus,
+    SearchEngine, SearchOutcome, SearchTermination, TimeControlMode, TimeManager, TimePlan,
+    is_mate_score, parse_sfen, parse_usi_move, probe_worker_basis, to_usi_move,
+    usable_logical_cpus,
 };
 
 use crate::{
@@ -600,10 +601,15 @@ fn run_search(
         engine.search_parallel_managed_with_callback(root, plan, cancellation, workers, |info| {
             completion.line(|| format_search_info(info));
         });
-    time_manager
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .observe_spend(&plan, result.elapsed);
+    // Only match-clock searches carry spending information for the cross-move cooldown;
+    // depth/node/infinite/casual searches leave the clock state untouched, exactly like
+    // the browser adapter's play paths.
+    if plan.mode == TimeControlMode::Clock {
+        time_manager
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe_spend(&plan, result.elapsed);
+    }
     if result.termination == SearchTermination::EvaluationError {
         return Err("pure-only inference failed; no bestmove is available".to_owned());
     }
