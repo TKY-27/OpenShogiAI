@@ -248,8 +248,10 @@ impl UsiSession {
                         "go ponder held without pondering; ponderhit starts the search and stop discards it (USI_Ponder must stay false)",
                     );
                 } else if let Err(error) = self.start_search(&parameters) {
+                    // A rejected search is a recoverable diagnostic, exactly like a
+                    // rejected option or position: the session stays alive and answers
+                    // later commands (including quit).
                     self.send_error(&error);
-                    return false;
                 }
             }
             UsiCommand::GoMate { .. } => self.sink.send("checkmate notimplemented"),
@@ -258,7 +260,6 @@ impl UsiSession {
                     pending.apply_clock_override(&clocks);
                     if let Err(error) = self.start_search(&pending) {
                         self.send_error(&error);
-                        return false;
                     }
                 }
                 None => self.send_error("ponderhit without a held go ponder"),
@@ -1097,6 +1098,28 @@ mod tests {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
         writeln!(encoder, "{}", serde_json::to_string(&record).unwrap()).unwrap();
         encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn rejected_search_is_a_recoverable_diagnostic() {
+        // A `go` whose values cannot form a plan (infinite combined with clocks) must
+        // be answered with a diagnostic and keep the session alive, exactly like a
+        // rejected option: the next isready is answered and quit still works.
+        let sink = Arc::new(MemorySink::default());
+        let mut session = UsiSession::new(sink.clone());
+        assert!(session.process_line("position startpos"));
+        assert!(session.process_line("go infinite wtime 30000 btime 30000"));
+        assert!(
+            sink.lines()
+                .iter()
+                .any(|line| line.contains("info string error") && line.contains("infinite"))
+        );
+        assert!(!sink.lines().iter().any(|line| line.starts_with("bestmove")));
+        assert!(session.process_line("isready"));
+        assert!(sink.lines().iter().any(|line| line == "readyok"));
+        assert!(session.process_line("go movetime 100"));
+        // Quit terminates the protocol loop by contract.
+        assert!(!session.process_line("quit"));
     }
 
     #[test]

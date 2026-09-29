@@ -5,7 +5,8 @@
 //! shared for the pure runtime because its scores depend on repetition history a
 //! position-only table cannot represent, so the root iteration is the parallel unit:
 //! every worker — the controller included — claims root moves of the current depth and
-//! searches them against one shared alpha. Exact scores raise that alpha for everyone;
+//! searches them against one shared alpha. Published scores (exact or a sound bound)
+//! raise that alpha for everyone;
 //! a fail-low against an older, lower alpha can never become the best move. The
 //! controller merges published results into the same root evidence a serial iteration
 //! produces, and joins the helpers (scoped threads) after setting the stop flag.

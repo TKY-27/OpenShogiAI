@@ -1337,7 +1337,9 @@ impl SearchEngine {
                 // can be lower than the shared alpha it matched; remaining exact ties
                 // resolve to the smallest move, which is deterministic but not
                 // identical to the serial loop's heuristic-order first-strict-maximum
-                // (both stay within genuinely tied-best moves).
+                // (both stay within genuinely tied-best moves). A strictly higher
+                // bound still wins outright, exactly like the serial loop keeps a
+                // scout bound over a lower exact score.
                 match (*best_exact, *exact) {
                     (true, false) => best,
                     (false, true) => Some(inner),
@@ -1515,7 +1517,11 @@ impl SearchEngine {
         let mut pv = Vec::with_capacity(child.pv.len() + 1);
         pv.push(movement);
         pv.extend(child.pv.iter().copied());
-        let exact = first_move || re_searched;
+        // Without PVS every non-first move searched the same window as the first, and
+        // without alpha-beta every window is full: none of those results is a mere
+        // bound at the shared alpha.
+        let exact =
+            first_move || re_searched || !self.config.enable_pvs || !self.config.enable_alpha_beta;
         Some((
             RootMoveStat {
                 movement,
