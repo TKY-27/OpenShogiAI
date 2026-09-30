@@ -27,9 +27,12 @@ const CHECKSUM_BYTES: usize = 32;
 const MAX_MODEL_BYTES: usize = 64 * 1024 * 1024;
 // Bounded parameters and clipped activations keep all supported dimensions finite.
 const MAX_PARAMETER_MAGNITUDE: f32 = 1_000_000.0;
-// Table and bias are exact Q20 values. At most 81 active terms plus a bias, even
-// transient move deltas, stay far below 2^53 when scaled by 2^20. Therefore f64
-// additions/subtractions are exact and full/incremental accumulation is identical.
+// Table and bias are exact Q20 values. At most ~141 active terms per perspective
+// (81 board squares + one king-orientation feature + up to 58 hand ordinals + the
+// side-to-move feature), so even transient move deltas stay far below 2^53 when
+// scaled by 2^20. Therefore f64 additions/subtractions are exact and full/incremental
+// accumulation is identical — accumulator drift is exactly zero for any model that
+// passes the Q20 grid validation below.
 const ACCUMULATOR_SCALE: f64 = 1_048_576.0;
 const BOARD_FEATURES: usize = 17 * 17 * 28;
 const KING_OFFSET: usize = BOARD_FEATURES;
@@ -63,6 +66,38 @@ pub struct Phase10VIdentity {
 pub struct Phase10VInference {
     pub cp: i32,
     pub wdl_logits: [f32; 3],
+}
+
+/// Comparison of a chained incremental accumulator against an independent full-refresh
+/// accumulator of the same model and position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AccumulatorParity {
+    /// Both accumulators carry the same position (the chain never diverged).
+    pub positions_match: bool,
+    /// King-square bookkeeping matches (a king move rebuilds its perspective).
+    pub kings_match: bool,
+    /// Largest absolute element drift between the two accumulator value sets.
+    pub max_value_drift: f64,
+    /// Value elements beyond `VALUE_TOLERANCE`, in either perspective.
+    pub drifted_elements: usize,
+}
+
+impl AccumulatorParity {
+    /// Tolerance for reassociated floating-point sums. For every model that passes the
+    /// Q20 grid validation at load time the f64 accumulation of f32-valued weights is
+    /// exact (see the scale bound on `ACCUMULATOR_SCALE`), so chained incremental and
+    /// full-refresh accumulators agree bit for bit and the observed drift is 0. The
+    /// tolerance is the safety net for future arithmetic changes, not the primary
+    /// guarantee. Missing or duplicated features surface as that feature's weight —
+    /// for the released R4 bytes the smallest per-feature maximum weight is ~5e-2,
+    /// five orders of magnitude above this bound, so nothing real can hide here.
+    pub const VALUE_TOLERANCE: f64 = 1e-6;
+
+    /// Whether the incremental chain stayed within the implementation's arithmetic.
+    #[must_use]
+    pub fn within_tolerance(&self) -> bool {
+        self.positions_match && self.kings_match && self.drifted_elements == 0
+    }
 }
 
 /// A rejected or unreadable OSAVAL03 artifact.
@@ -440,6 +475,49 @@ impl Phase10VEvaluator {
         Ok(self.infer_owned_accumulator(state))
     }
 
+    /// Compares a chained incremental accumulator against an independent full-refresh
+    /// accumulator. Position and king bookkeeping must match exactly; accumulator
+    /// values are reassociated floating-point sums, so they are compared against
+    /// `AccumulatorParity::VALUE_TOLERANCE`. The public diagnostic surface for the
+    /// replay probe's differential-update parity walk.
+    /// # Errors
+    /// Rejects accumulators produced by different model bytes or dimensions.
+    pub fn accumulator_parity(
+        &self,
+        incremental: &Phase10VAccumulator,
+        refreshed: &Phase10VAccumulator,
+    ) -> Result<AccumulatorParity, Phase10VError> {
+        self.validate_accumulator(incremental)?;
+        self.validate_accumulator(refreshed)?;
+        if incremental.artifact_digest != refreshed.artifact_digest {
+            return Err(Phase10VError::IncompatibleAccumulator);
+        }
+        let positions_match = incremental.position == refreshed.position;
+        let kings_match = incremental.kings == refreshed.kings;
+        let mut max_value_drift = 0.0_f64;
+        let mut drifted_elements = 0_usize;
+        for (incremental_values, refreshed_values) in
+            incremental.values.iter().zip(refreshed.values.iter())
+        {
+            if incremental_values.len() != refreshed_values.len() {
+                return Err(Phase10VError::IncompatibleAccumulator);
+            }
+            for (left, right) in incremental_values.iter().zip(refreshed_values.iter()) {
+                let drift = (left - right).abs();
+                max_value_drift = max_value_drift.max(drift);
+                if drift > AccumulatorParity::VALUE_TOLERANCE {
+                    drifted_elements += 1;
+                }
+            }
+        }
+        Ok(AccumulatorParity {
+            positions_match,
+            kings_match,
+            max_value_drift,
+            drifted_elements,
+        })
+    }
+
     fn validate_accumulator(&self, state: &Phase10VAccumulator) -> Result<(), Phase10VError> {
         if state.artifact_digest != self.artifact_digest
             || state
@@ -704,6 +782,7 @@ fn board_feature(square: usize, piece: crate::Piece, king: usize, perspective: S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Move;
 
     fn fixture(width: usize) -> Vec<u8> {
         let mut bytes = PHASE10V_MODEL_MAGIC.to_vec();
@@ -1027,5 +1106,113 @@ mod tests {
         assert_eq!(result.score, 0);
         assert_eq!(result.best_move, None);
         assert_eq!(result.stats.learned_eval_calls, 0);
+    }
+
+    /// The search's differential-update chain: every move applies the incremental
+    /// update to the running state (never reset to a refresh) and an independent
+    /// full refresh is the comparison target, so divergences that only appear from
+    /// the second chained move onward are caught, including king-move perspective
+    /// rebuilds, promotions, captures and drops.
+    #[test]
+    fn chained_incremental_updates_track_the_full_refresh_within_arithmetic_tolerance() {
+        let mut model = Phase10VEvaluator::from_bytes(&fixture(256)).unwrap();
+        // Deterministic non-trivial weights: reassociation error becomes real, while a
+        // missing or duplicated feature still exceeds it by orders of magnitude.
+        let pattern = |index: usize, scale: f32| {
+            scale * f32::from(i16::try_from(index % 13).unwrap_or(0) - 6) / 6.0
+        };
+        for (index, value) in model.table.iter_mut().enumerate() {
+            *value = pattern(index, 0.05);
+        }
+        for (index, value) in model.bias.iter_mut().enumerate() {
+            *value = f64::from(pattern(index, 0.01));
+        }
+        for (index, value) in model.hidden_weight.iter_mut().enumerate() {
+            *value = pattern(index, 0.02);
+        }
+        for (index, value) in model.head_weight.iter_mut().enumerate() {
+            *value = pattern(index, 2.0);
+        }
+        model.head_bias = [0.5, 0.25, -0.25, -0.5];
+
+        let mut position = Position::startpos();
+        let mut chained = model.accumulator(&position).unwrap();
+        let mut exercised = (0_usize, 0_usize, 0_usize, 0_usize); // king, promotion, capture, drop
+        for ply in 0..160_u32 {
+            let moves = position.legal_moves();
+            if moves.is_empty() {
+                break;
+            }
+            let is_king_move = |movement: &Move| {
+                matches!(movement, Move::Normal { from, .. }
+                    if position.piece_at(*from).is_some_and(|piece| piece.kind == PieceKind::King))
+            };
+            let is_capture = |movement: &Move| matches!(movement, Move::Normal { to, .. } if position.piece_at(*to).is_some());
+            let movement = if ply % 9 == 4 {
+                moves.iter().find(|movement| is_king_move(movement))
+            } else if ply % 5 == 2 {
+                moves
+                    .iter()
+                    .find(|movement| matches!(movement, Move::Drop { .. }))
+            } else if ply % 3 == 1 {
+                moves
+                    .iter()
+                    .find(|movement| matches!(movement, Move::Normal { promote: true, .. }))
+                    .or_else(|| moves.iter().find(|movement| is_capture(movement)))
+            } else {
+                None
+            }
+            .copied()
+            .unwrap_or(moves[0]);
+            match movement {
+                Move::Normal { promote: true, .. } => exercised.1 += 1,
+                Move::Normal { to, .. } if position.piece_at(to).is_some() => exercised.2 += 1,
+                Move::Drop { .. } => exercised.3 += 1,
+                Move::Normal { .. } => {}
+            }
+            if is_king_move(&movement) {
+                exercised.0 += 1;
+            }
+            let before_state = chained.clone();
+            let mut after = position.clone();
+            after.make_move(movement).unwrap();
+            // The returned snapshot must restore the parent bit-exactly: the search's
+            // undo path relies on it instead of inverse floating-point operations.
+            let parent = model
+                .update_accumulator(&mut chained, movement, &after)
+                .unwrap_or_else(|error| panic!("ply {ply} update rejected: {error:?}"));
+            assert_eq!(parent, before_state, "ply {ply} snapshot must be exact");
+            let refreshed = model.accumulator(&after).unwrap();
+            let parity = model
+                .accumulator_parity(&chained, &refreshed)
+                .unwrap_or_else(|error| panic!("ply {ply} parity rejected: {error:?}"));
+            assert!(parity.within_tolerance(), "ply {ply} drifted: {parity:?}");
+            let incremental_output = model.infer_accumulator(&chained).unwrap();
+            let refreshed_output = model.infer_accumulator(&refreshed).unwrap();
+            assert!(
+                (incremental_output.cp - refreshed_output.cp).abs() <= 1,
+                "ply {ply} cp divergence: {} vs {}",
+                incremental_output.cp,
+                refreshed_output.cp
+            );
+            for (incremental_logit, refreshed_logit) in incremental_output
+                .wdl_logits
+                .iter()
+                .zip(refreshed_output.wdl_logits.iter())
+            {
+                let drift = (incremental_logit - refreshed_logit).abs();
+                assert!(
+                    // The probe's output gate: a f32 logit drift of 1e-3, the same
+                    // bound the replay probe asserts on real models.
+                    drift <= 1.0e-3,
+                    "ply {ply} wdl logit drift {drift}"
+                );
+            }
+            position = after;
+        }
+        assert!(
+            exercised.0 > 0 && exercised.1 > 0 && exercised.2 > 0 && exercised.3 > 0,
+            "the walk must exercise king moves, promotions, captures and drops: {exercised:?}"
+        );
     }
 }

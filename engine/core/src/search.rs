@@ -268,6 +268,44 @@ pub struct SearchStats {
     pub fallback_count: u64,
 }
 
+impl SearchStats {
+    /// Sums another worker's counters into this one. `mate_plies` is a length, not a
+    /// volume, so it stays the controller's value; every counted quantity adds up so
+    /// published totals cover all workers exactly once.
+    pub fn accumulate(&mut self, other: &Self) {
+        self.tt_probes = self.tt_probes.saturating_add(other.tt_probes);
+        self.tt_hits = self.tt_hits.saturating_add(other.tt_hits);
+        self.tt_collisions = self.tt_collisions.saturating_add(other.tt_collisions);
+        self.beta_cutoffs = self.beta_cutoffs.saturating_add(other.beta_cutoffs);
+        self.candidate_moves = self.candidate_moves.saturating_add(other.candidate_moves);
+        self.pruned_moves = self.pruned_moves.saturating_add(other.pruned_moves);
+        self.qnodes = self.qnodes.saturating_add(other.qnodes);
+        self.mate_nodes = self.mate_nodes.saturating_add(other.mate_nodes);
+        self.neural_inference_calls = self
+            .neural_inference_calls
+            .saturating_add(other.neural_inference_calls);
+        self.neural_inference_time = self
+            .neural_inference_time
+            .saturating_add(other.neural_inference_time);
+        self.osaval02_inference_errors = self
+            .osaval02_inference_errors
+            .saturating_add(other.osaval02_inference_errors);
+        self.learned_eval_calls = self
+            .learned_eval_calls
+            .saturating_add(other.learned_eval_calls);
+        self.handcrafted_eval_calls = self
+            .handcrafted_eval_calls
+            .saturating_add(other.handcrafted_eval_calls);
+        self.residual_eval_calls = self
+            .residual_eval_calls
+            .saturating_add(other.residual_eval_calls);
+        self.composite_eval_calls = self
+            .composite_eval_calls
+            .saturating_add(other.composite_eval_calls);
+        self.fallback_count = self.fallback_count.saturating_add(other.fallback_count);
+    }
+}
+
 /// A completed iterative-deepening update.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchInfo {
@@ -522,6 +560,20 @@ impl SearchEngine {
     }
 
     fn empty(config: SearchConfig, clock: Arc<dyn MonotonicClock>) -> Self {
+        Self::empty_with_transposition_table(
+            config,
+            clock,
+            Arc::new(TranspositionTable::new(config.transposition_entries)),
+        )
+    }
+
+    /// Engine state with a caller-owned transposition table, so a worker fork can share
+    /// its controller's table without first allocating one that is immediately replaced.
+    fn empty_with_transposition_table(
+        config: SearchConfig,
+        clock: Arc<dyn MonotonicClock>,
+        transposition_table: Arc<TranspositionTable>,
+    ) -> Self {
         Self {
             config,
             computation: None,
@@ -548,7 +600,7 @@ impl SearchEngine {
             root_osaval02_policy: Vec::new(),
             #[cfg(feature = "handcrafted")]
             neural_mode: NeuralEvaluationMode::PureValue,
-            transposition_table: Arc::new(TranspositionTable::new(config.transposition_entries)),
+            transposition_table,
             active_parallel: None,
             killers: vec![[None; 2]; MAX_SEARCH_PLY],
             history: vec![0; 2 * MOVE_BUCKETS],
@@ -1087,6 +1139,19 @@ impl SearchEngine {
     /// Parallel managed search with `workers` total workers. The calling engine is the
     /// controller and publishes every iteration and the final result; helpers are scoped
     /// threads sharing this engine's transposition table, always joined before return.
+    ///
+    /// One `go` obeys one shared absolute deadline and one shared node budget: the
+    /// deadline is anchored before any worker starts, so preparation and worker-creation
+    /// time count toward the response, and nothing a helper does can revive a spent
+    /// budget. Creation failures degrade to the workers that did start — a helper thread
+    /// that cannot be spawned never aborts the search — while a controller panic before
+    /// the search stops every started helper through the scope-local guard.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the controller's or callback's panic (with its payload) after every
+    /// started helper has been stopped and joined; helper panics are contained to
+    /// failing the search instead of propagating.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn search_parallel_managed_with_callback(
         &mut self,
@@ -1100,49 +1165,90 @@ impl SearchEngine {
             return self.search_managed_with_callback(position, plan, cancellation, callback);
         }
         let workers = workers.min(crate::parallel::MAX_WORKERS);
-        let parallel = Arc::new(crate::parallel::ParallelSearch::new());
+        // The deadline anchors at go acceptance of the parallel path, before any worker
+        // exists: setup and creation time are part of the host response window.
+        let deadline = plan.hard_limit.map(|limit| self.clock.now() + limit);
+        let parallel = Arc::new(crate::parallel::ParallelSearch::new(
+            Arc::clone(&self.clock),
+            deadline,
+            plan.max_nodes,
+        ));
         self.active_parallel = Some(Arc::clone(&parallel));
-        let caught = std::thread::scope(|scope| {
-            for _ in 1..workers {
-                let helper = self.fork_for_worker();
-                let root = position.clone();
-                let parallel = Arc::clone(&parallel);
-                let stop_watcher = Arc::clone(&parallel);
-                let cancellation = cancellation.clone();
-                let hard_limit = plan.hard_limit;
-                scope.spawn(move || {
-                    // Any helper panic — anywhere in its body — stops the whole
-                    // search: survivors never exit on their own, so the controller
-                    // must observe a stop rather than wait on a wounded worker.
-                    let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::parallel::run_helper(
-                            helper,
-                            root,
-                            parallel,
-                            cancellation,
-                            hard_limit,
-                        );
-                    }));
-                    if survived.is_err() {
-                        stop_watcher.stop();
-                    }
-                });
-            }
-            // A panicking controller must still stop the helpers, or the scoped join
-            // would wait forever; the panic is re-raised after the join for the
-            // protocol layer's own failure handling.
-            let search = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Catching around the whole scope keeps the unwind path recoverable: a panic in
+        // the creation loop still runs the scope's guard drops (stopping every started
+        // helper before the implicit join) and then lets the wrapper release
+        // `active_parallel` before the panic resumes.
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            std::thread::scope(|scope| {
+                // The stop guard lives inside the scope and before the first fork: any panic
+                // in the creation loop must release already-running helpers before the
+                // scope's implicit join waits on them, or the unwind would deadlock.
                 let _stop_on_drop = StopOnDrop(Arc::clone(&parallel));
-                self.search_managed_observed(position, plan, cancellation, |info, _| {
-                    callback(info);
-                })
-            }));
-            parallel.stop();
-            search
-        });
+                for helper_index in 1..workers {
+                    #[cfg(test)]
+                    // Injection over an already-running helper is the whole point of
+                    // this seam (see the fork-panic regression below).
+                    assert!(
+                        !crate::parallel::take_fork_panic_injection(helper_index),
+                        "injected helper fork failure"
+                    );
+                    let helper = self.fork_for_worker();
+                    let root = position.clone();
+                    let parallel = Arc::clone(&parallel);
+                    let stop_watcher = Arc::clone(&parallel);
+                    let cancellation = cancellation.clone();
+                    let spawned = crate::parallel::spawn_helper_thread(
+                        scope,
+                        helper_index,
+                        format!("oshogi-helper-{helper_index}"),
+                        move || {
+                            // Any helper panic — anywhere in its body — stops the whole
+                            // search: survivors never exit on their own, so the controller
+                            // must observe a stop rather than wait on a wounded worker.
+                            let survived =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    crate::parallel::run_helper(
+                                        helper,
+                                        root,
+                                        parallel,
+                                        cancellation,
+                                    );
+                                }));
+                            if survived.is_err() {
+                                stop_watcher.stop();
+                            }
+                        },
+                    );
+                    if spawned.is_err() {
+                        // Explicit creation failure: keep the helpers that did start and
+                        // let the controller drain the rest itself — the search still
+                        // publishes its own bestmove instead of unwinding into the
+                        // protocol layer.
+                        break;
+                    }
+                }
+                // A panicking controller must still stop the helpers, or the scoped join
+                // would wait forever; the panic is re-raised after the join for the
+                // protocol layer's own failure handling.
+                let search = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.search_managed_observed(position, plan, cancellation, |info, _| {
+                        callback(info);
+                    })
+                }));
+                parallel.stop();
+                search
+            })
+        }));
         self.active_parallel = None;
         match caught {
-            Ok(mut result) => {
+            Ok(Ok(mut result)) => {
+                // Every helper has joined: their flushed totals are exact now, including
+                // cancelled and abandoned claims. Published counters cover all workers'
+                // work exactly once — the controller's share is already in the result.
+                let (helper_nodes, helper_stats) = parallel.drain_helper_work();
+                result.nodes = result.nodes.saturating_add(helper_nodes);
+                result.stats.accumulate(&helper_stats);
+                result.nps = nodes_per_second(result.nodes, result.elapsed);
                 // A helper's inference failure must surface as EvaluationError so the
                 // adapter layer fails closed instead of publishing a fallback move.
                 if parallel.evaluation_failed() {
@@ -1151,15 +1257,23 @@ impl SearchEngine {
                 }
                 result
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            // Both panic shapes — the controller/callback panic caught inside the scope
+            // and a creation-loop panic caught around it — resume with their payload.
+            Ok(Err(payload)) | Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 
     /// Per-worker engine state: shared immutable evaluators and table, private
-    /// heuristics, accumulator stack and statistics.
+    /// heuristics, accumulator stack and statistics. The transposition table is the
+    /// controller's shared instance from the start, so forking allocates only the
+    /// worker-private heuristics — never a throwaway table of the configured size.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn fork_for_worker(&self) -> Self {
-        let mut worker = Self::empty(self.config, Arc::clone(&self.clock));
+        let mut worker = Self::empty_with_transposition_table(
+            self.config,
+            Arc::clone(&self.clock),
+            Arc::clone(&self.transposition_table),
+        );
         worker.computation.clone_from(&self.computation);
         worker.computation_enabled = self.computation_enabled;
         worker.phase10v.clone_from(&self.phase10v);
@@ -1168,9 +1282,6 @@ impl SearchEngine {
         worker.a1_game_checks.clone_from(&self.a1_game_checks);
         worker.pure_history_rejected = self.pure_history_rejected;
         worker.osaval02.clone_from(&self.osaval02);
-        worker
-            .transposition_table
-            .clone_from(&self.transposition_table);
         #[cfg(feature = "handcrafted")]
         {
             worker.neural.clone_from(&self.neural);
@@ -1271,13 +1382,18 @@ impl SearchEngine {
         };
         let move_count = parallel.move_count(epoch);
         let mut own: Vec<Option<(RootMoveStat, bool)>> = vec![None; move_count];
+        #[cfg(test)]
+        crate::parallel::gate_controller_on_helper_claim(&parallel);
         while let Some((claim_epoch, index, movement)) = parallel.claim() {
             if claim_epoch != epoch || context.check_termination().is_err() {
                 return Err(());
             }
             let first = parallel.claim_full_window();
             if !first && !parallel.wait_until_primed() {
-                // The primer died before publishing; abandon this attempt.
+                // The primer died before publishing, or the search-wide deadline
+                // passed while waiting: record the actual cause on the context so the
+                // published termination is honest before abandoning this attempt.
+                let _ = context.check_termination();
                 return Err(());
             }
             if context.check_termination().is_err() {
@@ -1446,9 +1562,25 @@ impl SearchEngine {
         let clock = Arc::clone(&self.clock);
         let mut context = SearchContext::new(limits, cancellation, clock.now(), clock.as_ref());
         context.parallel = self.active_parallel.clone();
+        context.helper = true;
         #[cfg(all(test, feature = "handcrafted"))]
         if crate::parallel::take_helper_evaluation_failure_injection() {
             return (None, true);
+        }
+        #[cfg(test)]
+        if first_move {
+            // Regression seam: park the primer the way a long inference would, still
+            // observing stop and cancellation, so the controller's primer wait must be
+            // released by the search-wide deadline or an explicit stop.
+            while crate::parallel::primer_gate_armed()
+                && !cancellation.is_cancelled()
+                && !self
+                    .active_parallel
+                    .as_ref()
+                    .is_some_and(|parallel| parallel.is_stopped())
+            {
+                std::thread::sleep(crate::parallel::ITERATION_POLL);
+            }
         }
         let stat =
             self.search_root_move(root, movement, depth, alpha, beta, first_move, &mut context);
@@ -1868,6 +2000,10 @@ impl SearchEngine {
 
         let elapsed = context.elapsed();
         let termination = context.termination.unwrap_or(SearchTermination::Completed);
+        // Ordering invariant: the root static evaluation runs before the depth loop can
+        // publish any partition, so a parallel search that reached the iteration loop
+        // already carries >= 1 inference in the controller stats that classify the
+        // outcome here; the pre-evaluation outcomes always describe zero node visits.
         let outcome = if termination == SearchTermination::EvaluationError {
             SearchOutcome::EvaluationError
         } else if context.stats.neural_inference_calls > 0
@@ -1891,7 +2027,7 @@ impl SearchEngine {
             elapsed,
             nps: nodes_per_second(context.nodes, elapsed),
             pv: completed.pv,
-            root_moves: context.last_completed_root_moves,
+            root_moves: std::mem::take(&mut context.last_completed_root_moves),
             stats: context.stats,
             termination,
             outcome,
@@ -2590,6 +2726,24 @@ pub(crate) struct SearchContext<'a> {
     stable_iterations: u8,
     /// Present while this context drives (or serves) an active parallel search.
     parallel: Option<Arc<crate::parallel::ParallelSearch>>,
+    /// True for a helper's per-claim context: its totals flush into the shared helper
+    /// accounting on drop, including through unwinding, so cancelled and abandoned
+    /// claims still count as work actually performed.
+    helper: bool,
+    /// Unused node credit granted from the shared budget pool.
+    node_credit: u64,
+}
+
+impl Drop for SearchContext<'_> {
+    fn drop(&mut self) {
+        let Some(parallel) = self.parallel.as_ref() else {
+            return;
+        };
+        if self.helper {
+            parallel.record_helper_work(self.nodes, &self.stats);
+        }
+        parallel.return_nodes(self.node_credit);
+    }
 }
 
 impl<'a> SearchContext<'a> {
@@ -2615,6 +2769,8 @@ impl<'a> SearchContext<'a> {
             previous_score: None,
             stable_iterations: 0,
             parallel: None,
+            helper: false,
+            node_credit: 0,
         }
     }
 
@@ -2688,11 +2844,48 @@ impl<'a> SearchContext<'a> {
     fn enter_node(&mut self, ply: usize, quiescence: bool) -> Result<(), ()> {
         self.check_termination()?;
         self.nodes += 1;
+        #[cfg(test)]
+        if self.helper
+            && crate::parallel::helper_panic_node_injection() == self.nodes
+            && crate::parallel::consume_helper_panic_injection()
+        {
+            panic!("injected helper worker panic mid-search");
+        }
+        // Shared parallel node budget: local credit is spent first; the shared counter
+        // is touched only once per reservation unit, never per node.
+        if self.node_credit == 0
+            && self
+                .parallel
+                .as_ref()
+                .is_some_and(|parallel| parallel.budgeted())
+        {
+            let parallel = self.parallel.clone().expect("parallel checked above");
+            self.reserve_node_credit(&parallel);
+            if self.termination == Some(SearchTermination::NodeLimit) {
+                return Err(());
+            }
+        }
+        self.node_credit = self.node_credit.saturating_sub(1);
         if quiescence {
             self.stats.qnodes = self.stats.qnodes.saturating_add(1);
         }
         self.seldepth = self.seldepth.max(u8::try_from(ply).unwrap_or(u8::MAX));
         Ok(())
+    }
+
+    /// Tops up the local node credit from the shared budget pool. An empty grant means
+    /// every worker's combined reservations reached the declared budget: the search
+    /// stops with `NodeLimit`, exactly as an exhausted per-worker limit would.
+    fn reserve_node_credit(&mut self, parallel: &crate::parallel::ParallelSearch) {
+        let Some(budget) = parallel.node_budget() else {
+            return;
+        };
+        let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(budget);
+        let granted = parallel.grant_nodes(chunk);
+        self.node_credit = self.node_credit.saturating_add(granted);
+        if granted == 0 {
+            self.termination = Some(SearchTermination::NodeLimit);
+        }
     }
 
     fn check_termination(&mut self) -> Result<(), ()> {
@@ -2703,13 +2896,25 @@ impl<'a> SearchContext<'a> {
             self.termination = Some(SearchTermination::Cancelled);
             return Err(());
         }
-        if self
-            .parallel
-            .as_ref()
-            .is_some_and(|parallel| parallel.is_stopped())
-        {
-            self.termination = Some(SearchTermination::Cancelled);
-            return Err(());
+        if let Some(parallel) = self.parallel.as_ref() {
+            if parallel.is_stopped() {
+                self.termination = Some(SearchTermination::Cancelled);
+                return Err(());
+            }
+            // The search-wide absolute deadline: one `go`'s workers, iterations and
+            // waits all obey the same instant, so no claim or wait can extend the
+            // response time past it.
+            if parallel.deadline_exceeded() {
+                self.termination = Some(SearchTermination::TimeLimit);
+                return Err(());
+            }
+            // A drained shared node budget is a search-wide condition: claims abandoned
+            // by budget death never publish, so the collect wait must observe the latch
+            // here instead of waiting on a helper that can never fill its slot.
+            if parallel.budget_exhausted() {
+                self.termination = Some(SearchTermination::NodeLimit);
+                return Err(());
+            }
         }
         if self
             .limits
@@ -2820,17 +3025,29 @@ fn make_info(
     context: &SearchContext<'_>,
     elapsed: Duration,
 ) -> SearchInfo {
+    // Iteration reports cover every worker's completed work: helper claims flush their
+    // exact totals into the shared accounting, so the published evidence never counts
+    // only the controller's share of a parallel iteration.
+    let (helper_nodes, helper_stats) = context
+        .parallel
+        .as_ref()
+        .map_or((0, SearchStats::default()), |parallel| {
+            parallel.helper_work_snapshot()
+        });
+    let nodes = context.nodes.saturating_add(helper_nodes);
+    let mut stats = context.stats;
+    stats.accumulate(&helper_stats);
     SearchInfo {
         best_move: value.pv.first().copied(),
         score: value.score,
         depth,
         seldepth: context.seldepth,
-        nodes: context.nodes,
+        nodes,
         elapsed,
-        nps: nodes_per_second(context.nodes, elapsed),
+        nps: nodes_per_second(nodes, elapsed),
         pv: value.pv.clone(),
         root_moves: context.last_completed_root_moves.clone(),
-        stats: context.stats,
+        stats,
     }
 }
 
@@ -3775,7 +3992,11 @@ mod tests {
 
     #[test]
     fn parallel_iteration_claims_and_publishes_partition_work() {
-        let parallel = crate::parallel::ParallelSearch::new();
+        let parallel = crate::parallel::ParallelSearch::new(
+            Arc::new(SystemMonotonicClock::default()),
+            None,
+            None,
+        );
         let first = crate::parse_usi_move("7g7f").unwrap();
         let second = crate::parse_usi_move("3c3d").unwrap();
         parallel.begin_iteration(4, -10, 10, vec![first], &[first, second]);
@@ -3811,8 +4032,10 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn parallel_search_keeps_controller_exact_node_limits_and_a_legal_move() {
-        // `result.nodes` counts the controller only; the guarantee is the controller's
-        // own budget staying exact, not a total across helpers.
+        // `result.nodes` is the exact total across every worker: the shared budget's
+        // reservation unit bounds the overshoot, and a partial grant is returned, so
+        // the visited total can also undershoot the declared budget by up to the
+        // workers' last reservations (see NODE_RESERVATION_CHUNK).
         let position = Position::startpos();
         let plan = TimeManager::default()
             .plan(
@@ -3834,7 +4057,12 @@ mod tests {
             |_| {},
         );
         assert_eq!(result.termination, SearchTermination::NodeLimit);
-        assert_eq!(result.nodes, 1_000);
+        let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(1_000);
+        assert!(
+            (1_000 - 4 * chunk..=1_000).contains(&result.nodes),
+            "the shared total must respect the declared budget: {}",
+            result.nodes
+        );
         assert!(position.is_legal_move(result.best_move.expect("best move")));
     }
 
@@ -4219,6 +4447,625 @@ mod pure_history_tests {
                 .search(&root, limits(), &CancellationToken::new())
                 .termination,
             SearchTermination::EvaluationError
+        );
+    }
+}
+
+/// Parallel-search regressions that need real helper threads. The fixture engine keeps
+/// these tests runnable under every feature configuration.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod parallel_runtime_tests {
+    use super::*;
+    use crate::parallel::{
+        arm_controller_claim_gate, arm_primer_gate, inject_fork_panic_on,
+        inject_helper_panic_at_nodes, inject_helper_spawn_failure_on,
+    };
+    use crate::{Osaval02Evaluator, Side, TimeControl, TimeManager};
+    use std::io::Read;
+
+    const CHILD_ENV: &str = "OPEN_SHOGI_CORE_PARALLEL_CHILD";
+
+    /// Serializes the tests that arm process-wide injection permits; `cargo test` runs
+    /// tests on several threads and a leaked permit would panic an innocent test.
+    static SEAM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn hold_seams() -> std::sync::MutexGuard<'static, ()> {
+        SEAM_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn fixture_engine(entries: usize) -> (SearchEngine, String) {
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../../../tests/fixtures/osaval02/pure-history.osaval02.gz")[..],
+        )
+        .read_to_end(&mut bytes)
+        .unwrap();
+        let model = Arc::new(Osaval02Evaluator::from_bytes(&bytes).unwrap());
+        let hash = model.identity().artifact_sha256.clone();
+        let engine = SearchEngine::with_pure_learned(
+            SearchConfig {
+                transposition_entries: entries,
+                ..SearchConfig::default()
+            },
+            model,
+            &hash,
+        )
+        .unwrap();
+        (engine, hash)
+    }
+
+    fn plan(side: Side, control: TimeControl) -> TimePlan {
+        TimeManager::default()
+            .plan(side, control, 64)
+            .expect("test plan")
+    }
+
+    fn movetime_plan(millis: u64) -> TimePlan {
+        plan(
+            Side::Black,
+            TimeControl {
+                movetime_ms: Some(millis),
+                casual: false,
+                ..TimeControl::casual()
+            },
+        )
+    }
+
+    fn depth_plan(depth: u8) -> TimePlan {
+        plan(
+            Side::Black,
+            TimeControl {
+                depth: Some(depth),
+                casual: false,
+                ..TimeControl::casual()
+            },
+        )
+    }
+
+    fn nodes_plan(nodes: u64) -> TimePlan {
+        plan(
+            Side::Black,
+            TimeControl {
+                nodes: Some(nodes),
+                casual: false,
+                ..TimeControl::casual()
+            },
+        )
+    }
+
+    #[test]
+    fn helper_claim_flushes_its_exact_visited_nodes_into_the_shared_totals() {
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(1_024);
+        // Budget 50 with the minimum reservation unit: the claim stops as soon as the
+        // shared pool is drained, so the flushed total is exact to one boundary node.
+        let parallel = Arc::new(crate::parallel::ParallelSearch::new(
+            Arc::new(SystemMonotonicClock::default()),
+            None,
+            Some(50),
+        ));
+        engine.set_active_parallel(Arc::clone(&parallel));
+        let movement = position.legal_moves()[0];
+        parallel.begin_iteration(2, -INFINITY, INFINITY, vec![movement], &[movement]);
+        let cancellation = CancellationToken::new();
+        let (stat, failed) = engine.search_root_move_detached(
+            &position,
+            movement,
+            2,
+            -INFINITY,
+            INFINITY,
+            true,
+            SearchLimits {
+                max_depth: 0,
+                max_nodes: None,
+                movetime: None,
+            },
+            &cancellation,
+        );
+        assert!(!failed, "a budgeted claim is not an inference failure");
+        let (flushed_nodes, flushed_stats) = parallel.helper_work_snapshot();
+        let stat = stat.expect("the claim finished inside the tiny budget");
+        assert_eq!(
+            flushed_nodes, stat.0.nodes,
+            "the published per-claim nodes and the flushed total must agree exactly"
+        );
+        assert!(
+            flushed_stats.learned_eval_calls > 0,
+            "helper inference counts must reach the shared totals"
+        );
+
+        // The same claim against an already-drained budget visits no node at all.
+        let (mut engine, _hash) = fixture_engine(1_024);
+        let parallel = Arc::new(crate::parallel::ParallelSearch::new(
+            Arc::new(SystemMonotonicClock::default()),
+            None,
+            None,
+        ));
+        engine.set_active_parallel(Arc::clone(&parallel));
+        parallel.begin_iteration(2, -INFINITY, INFINITY, vec![movement], &[movement]);
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let (stat, failed) = engine.search_root_move_detached(
+            &position,
+            movement,
+            2,
+            -INFINITY,
+            INFINITY,
+            true,
+            SearchLimits {
+                max_depth: 0,
+                max_nodes: None,
+                movetime: None,
+            },
+            &cancelled,
+        );
+        assert!(stat.is_none() && !failed);
+        let (flushed_nodes, flushed_stats) = parallel.helper_work_snapshot();
+        assert_eq!(
+            flushed_nodes, 0,
+            "no node was visited, none may be reported"
+        );
+        assert_eq!(
+            flushed_stats,
+            SearchStats::default(),
+            "a zero-work claim must not fabricate statistics"
+        );
+    }
+
+    #[test]
+    fn exhausted_shared_budget_counts_the_cancelled_claim_as_work() {
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(1_024);
+        let parallel = Arc::new(crate::parallel::ParallelSearch::new(
+            Arc::new(SystemMonotonicClock::default()),
+            None,
+            Some(50),
+        ));
+        engine.set_active_parallel(Arc::clone(&parallel));
+        let movement = position.legal_moves()[0];
+        parallel.begin_iteration(2, -INFINITY, INFINITY, vec![movement], &[movement]);
+        // A depth that cannot finish inside 50 nodes: the claim is cancelled mid-tree,
+        // publishes nothing, and its visited nodes must still be accounted for.
+        let (stat, failed) = engine.search_root_move_detached(
+            &position,
+            movement,
+            6,
+            -INFINITY,
+            INFINITY,
+            true,
+            SearchLimits {
+                max_depth: 0,
+                max_nodes: None,
+                movetime: None,
+            },
+            &CancellationToken::new(),
+        );
+        assert!(stat.is_none(), "the budgeted claim cannot complete");
+        assert!(!failed);
+        let (flushed_nodes, _stats) = parallel.helper_work_snapshot();
+        let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(50);
+        assert!(
+            (50..=50 + chunk + 1).contains(&flushed_nodes),
+            "cancelled work must be reported exactly: budget 50, flushed {flushed_nodes}"
+        );
+    }
+
+    #[test]
+    fn parallel_search_shares_one_node_budget_across_all_workers() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        let budget = 1_000_u64;
+        let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(budget);
+        let bound = 4 * chunk;
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            nodes_plan(budget),
+            &CancellationToken::new(),
+            4,
+            |_| {},
+        );
+        assert_eq!(result.termination, SearchTermination::NodeLimit);
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+        assert!(
+            (budget - bound..=budget + bound).contains(&result.nodes),
+            "published nodes must be the shared total within the declared reservation \
+             overshoot: budget {budget}, bound ±{bound}, published {}",
+            result.nodes
+        );
+    }
+
+    #[test]
+    fn helper_dominated_search_publishes_helper_work_and_valid_proof() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, hash) = fixture_engine(4_096);
+        // The controller waits for a helper claim, so the first iteration's primer and
+        // its inference counts come from a helper and must reach the published evidence.
+        arm_controller_claim_gate();
+        let mut last_info: Option<SearchInfo> = None;
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            depth_plan(3),
+            &CancellationToken::new(),
+            2,
+            |info| last_info = Some(info.clone()),
+        );
+        assert_eq!(result.termination, SearchTermination::Completed);
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+        let last_info = last_info.expect("a completed search reports iterations");
+        assert!(
+            last_info.nodes > 0,
+            "iteration reports must cover helper work, not only the controller"
+        );
+        assert!(
+            result.nodes >= last_info.nodes,
+            "the final total covers every claim the iteration reports saw"
+        );
+        assert!(
+            result.stats.learned_eval_calls > 0,
+            "helper inferences must be integrated into the published statistics"
+        );
+        let proof = engine.runtime_proof(result.stats, hash);
+        assert!(
+            proof.valid_pure_search(&result),
+            "integrated statistics must keep the pure proof self-consistent"
+        );
+    }
+
+    #[test]
+    fn helper_primer_wait_respects_the_shared_deadline() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        // Deterministic primer role: the controller waits for a helper claim; that
+        // helper becomes the primer and then parks like an uninterruptible inference.
+        arm_controller_claim_gate();
+        arm_primer_gate();
+        let releaser = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(3));
+            crate::parallel::release_primer_gate();
+        });
+        let started = std::time::Instant::now();
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            movetime_plan(250),
+            &CancellationToken::new(),
+            2,
+            |_| {},
+        );
+        let elapsed = started.elapsed();
+        crate::parallel::release_primer_gate();
+        releaser.join().expect("releaser joins");
+        assert_eq!(
+            result.termination,
+            SearchTermination::TimeLimit,
+            "the search-wide deadline must end a search parked on its primer"
+        );
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+        assert!(
+            elapsed < Duration::from_millis(2_000),
+            "the controller must abandon the primer wait at the deadline, not wait for \
+             the helper: {elapsed:?}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "the deadline genuinely governed: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn cancellation_releases_a_parked_primer_promptly() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        arm_controller_claim_gate();
+        arm_primer_gate();
+        let cancellation = CancellationToken::new();
+        let stopper_cancellation = cancellation.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            stopper_cancellation.cancel();
+        });
+        let started = std::time::Instant::now();
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            plan(
+                Side::Black,
+                TimeControl {
+                    infinite: true,
+                    casual: false,
+                    ..TimeControl::casual()
+                },
+            ),
+            &cancellation,
+            2,
+            |_| {},
+        );
+        let elapsed = started.elapsed();
+        crate::parallel::release_primer_gate();
+        stopper.join().expect("stopper joins");
+        assert_eq!(result.termination, SearchTermination::Cancelled);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "cancellation must reach a parked primer wait: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn shared_deadline_binds_every_helper_claim() {
+        let _seams = hold_seams();
+        // Before the shared deadline every helper claim restarted its own full movetime,
+        // multiplying the response time by the claim count; the whole search must now
+        // finish within one deadline window plus the join margin.
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        let started = std::time::Instant::now();
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            movetime_plan(200),
+            &CancellationToken::new(),
+            2,
+            |_| {},
+        );
+        let elapsed = started.elapsed();
+        assert_eq!(result.termination, SearchTermination::TimeLimit);
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+        assert!(
+            elapsed < Duration::from_millis(700),
+            "no claim may restart the budget: {elapsed:?}"
+        );
+        assert!(elapsed >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn minimal_movetime_keeps_a_parallel_search_usable() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        let started = std::time::Instant::now();
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            movetime_plan(1),
+            &CancellationToken::new(),
+            4,
+            |_| {},
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a 1 ms budget must not wedge four workers"
+        );
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+    }
+
+    #[test]
+    fn helper_spawn_failure_degrades_to_the_workers_that_started() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        // The first helper's thread creation fails after none started; the second
+        // failure lands with one helper already running.
+        inject_helper_spawn_failure_on(2);
+        let (mut engine, _hash) = fixture_engine(4_096);
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            depth_plan(2),
+            &CancellationToken::new(),
+            3,
+            |_| {},
+        );
+        assert_eq!(result.termination, SearchTermination::Completed);
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+        // The engine must be fully reusable after the degraded search.
+        let again = engine.search(
+            &position,
+            SearchLimits {
+                max_depth: 2,
+                ..SearchLimits::default()
+            },
+            &CancellationToken::new(),
+        );
+        assert!(position.is_legal_move(again.best_move.expect("best move")));
+    }
+
+    #[test]
+    fn controller_callback_panic_stops_helpers_and_leaves_the_engine_usable() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.search_parallel_managed_with_callback(
+                &position,
+                depth_plan(3),
+                &CancellationToken::new(),
+                2,
+                |info| {
+                    assert!(info.depth == 0, "injected controller callback panic");
+                },
+            );
+        }));
+        assert!(
+            panic.is_err(),
+            "the controller panic must surface, not vanish"
+        );
+        crate::parallel::release_primer_gate();
+        // The unwind path released `active_parallel`: the engine still searches.
+        let again = engine.search(
+            &position,
+            SearchLimits {
+                max_depth: 2,
+                ..SearchLimits::default()
+            },
+            &CancellationToken::new(),
+        );
+        assert!(position.is_legal_move(again.best_move.expect("best move")));
+    }
+
+    #[test]
+    fn helper_mid_search_panic_stops_the_search_and_counts_its_work() {
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(16_384);
+        inject_helper_panic_at_nodes(30);
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            nodes_plan(10_000),
+            &CancellationToken::new(),
+            2,
+            |_| {},
+        );
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+        assert!(
+            result.nodes >= 30,
+            "the panicked helper's visited nodes must reach the published total: {}",
+            result.nodes
+        );
+    }
+
+    /// Regression for the review-found wedge: when the shared node budget dies while a
+    /// helper still holds an unpublished claim, the controller's collect wait used to
+    /// spin forever on deadline-less plans (`go nodes N`). The exhaustion latch must
+    /// release it with `NodeLimit`.
+    #[test]
+    fn exhausted_budget_releases_the_controller_collect_wait() {
+        let position = crate::parse_sfen("4k4/9/9/9/9/9/9/9/4K4 b - 1").unwrap();
+        let moves = position.legal_moves();
+        assert!(moves.len() > 1);
+        let clock: Arc<dyn MonotonicClock> = Arc::new(SystemMonotonicClock::default());
+        let parallel = Arc::new(crate::parallel::ParallelSearch::new(
+            Arc::clone(&clock),
+            // No deadline on purpose: only the exhaustion latch can end this search.
+            None,
+            Some(8),
+        ));
+        let epoch = parallel.begin_iteration(2, -INFINITY, INFINITY, moves.clone(), &moves);
+        // Drain the pool: the final refused reservation latches the exhaustion, and
+        // every claim from now on is refused at its first node.
+        while parallel.grant_nodes(1) > 0 {}
+        assert!(
+            parallel.budget_exhausted(),
+            "the refused reservation must latch the exhaustion"
+        );
+        let (mut engine, _hash) = fixture_engine(1_024);
+        engine.set_active_parallel(Arc::clone(&parallel));
+        let mut own: Vec<Option<(RootMoveStat, bool)>> = vec![None; moves.len()];
+        let token = CancellationToken::new();
+        let worker = std::thread::spawn(move || {
+            let mut context = SearchContext::new(
+                SearchLimits {
+                    max_depth: 0,
+                    max_nodes: None,
+                    movetime: None,
+                },
+                &token,
+                Duration::ZERO,
+                clock.as_ref(),
+            );
+            context.parallel = Some(Arc::clone(&parallel));
+            let _alive = parallel.enter_helper();
+            let started = std::time::Instant::now();
+            let outcome = engine.collect_partition_results(
+                &position,
+                2,
+                epoch,
+                INFINITY,
+                moves.len(),
+                &mut own,
+                &mut context,
+            );
+            (started.elapsed(), outcome, context.termination)
+        });
+        // Bounded join so a regression fails visibly instead of hanging the suite.
+        let bound = std::time::Instant::now() + Duration::from_secs(10);
+        while !worker.is_finished() && std::time::Instant::now() < bound {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            worker.is_finished(),
+            "collect must observe shared budget exhaustion instead of waiting forever"
+        );
+        let (elapsed, outcome, termination) = worker.join().expect("collect thread joins");
+        assert!(outcome.is_err(), "an abandoned claim ends the iteration");
+        assert_eq!(termination, Some(SearchTermination::NodeLimit));
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "release is prompt: {elapsed:?}"
+        );
+    }
+
+    /// Runs `child_test` in a fresh test-binary process with a hard wall-clock bound, so
+    /// a regression that wedges the scoped join fails the suite instead of hanging it.
+    /// `expect_panic` selects the expected exit: a panic exit (101) or success.
+    fn run_child_bounded(
+        child_test: &str,
+        bound: Duration,
+        expect_panic: bool,
+    ) -> Result<(), String> {
+        let exe = std::env::current_exe().expect("test binary path");
+        let mut child = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                &format!("search::parallel_runtime_tests::{child_test}"),
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| format!("child spawn failed: {error}"))?;
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let panicked = status.code() == Some(101);
+                    if panicked == expect_panic && status.code().is_some() {
+                        return Ok(());
+                    }
+                    return Err(format!("child {child_test} exited as {status}"));
+                }
+                Ok(None) => {
+                    if started.elapsed() > bound {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!("child {child_test} exceeded {bound:?}"));
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(format!("child wait failed: {error}")),
+            }
+        }
+    }
+
+    #[test]
+    fn helper_fork_panic_with_running_helpers_stays_bounded() {
+        // The child process runs the deadline-less fork-panic scenario; before the
+        // scope-local stop guard it wedged in the scoped join and this bound failed.
+        run_child_bounded(
+            "child_fork_panic_after_a_running_helper_exits_through_the_guard",
+            Duration::from_secs(60),
+            true,
+        )
+        .expect("fork-panic child must panic, promptly");
+    }
+
+    #[test]
+    fn child_fork_panic_after_a_running_helper_exits_through_the_guard() {
+        // Meaningful only as the bounded child; in the normal suite run this returns.
+        if std::env::var(CHILD_ENV).is_err() {
+            return;
+        }
+        let _seams = hold_seams();
+        let position = Position::startpos();
+        let (mut engine, _hash) = fixture_engine(4_096);
+        // Deadline-less on purpose: a leaked helper can never exit on its own.
+        inject_fork_panic_on(2);
+        engine.search_parallel_managed_with_callback(
+            &position,
+            depth_plan(3),
+            &CancellationToken::new(),
+            3,
+            |_| {},
         );
     }
 }

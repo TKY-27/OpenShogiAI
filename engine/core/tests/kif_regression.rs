@@ -1,6 +1,9 @@
-//! Regression fixtures from the attached 2026-09-28 R4 match (see local QA notes).
-//! The positions pin mechanical search invariants; they do not encode expectations
-//! about the learned evaluation.
+//! Mechanical search regressions at the incident positions of the 2026-09-28 match
+//! (see `local/qa/kif/` and the R4 diagnosis record). These tests run the HANDCRAFTED
+//! evaluation path and pin legality, cancellation, parallel-merge and bound/tie-break
+//! invariants only. They are not a real-R4 evaluation or strength verification: R4's
+//! learned quality at these positions is diagnosed out-of-tree with the frozen model
+//! bytes (see the QA record and `replay_probe`), never by CI expectations.
 #![cfg(feature = "handcrafted")]
 
 use std::time::Duration;

@@ -121,8 +121,8 @@ fi
     echo "source_revision=$source_revision"
     echo "model_asset=osai-r4.osaval03 ($release_tag)"
     echo "model_sha256=$expected_hash"
-    echo "options=USI_Hash spin 1..1024 default 32; USI_Ponder check default false; Threads spin 1..1 default 1; RuntimeProfile combo pure_learned"
-    echo "play_policy=book-free learned play, one search worker, pondering off"
+    echo "options=USI_Hash spin 1..1024 default 32; USI_Ponder check default false; Threads spin 1..=<logical-cpus> default 1; AutoThreads check default true; RuntimeProfile combo pure_learned"
+    echo "play_policy=book-free learned play, pondering off; worker count from AutoThreads/Threads with a search-wide shared deadline and node budget"
 } > "$package_dir/PACKAGE_IDENTITY.txt"
 
 cat > "$package_dir/USAGE.txt" <<USAGE
@@ -145,9 +145,11 @@ Register in ShogiHome (1.29.0 names)
   2. Open 設定 → エンジン設定... (Settings → Engines...).
   3. Click 追加 (Add) and select the file osai-r4-usi.sh (the launcher, not the
      binary).
-  4. Keep USI_Ponder false and Threads 1; USI_Hash defaults to 32 MiB.
+  4. Keep USI_Ponder false. Threads defaults to 1; set Threads/AutoThreads for
+     multi-worker search (one shared deadline and node budget per go). USI_Hash
+     defaults to 32 MiB.
 
-The engine plays book-free learned shogi with one search worker. TT budget
+The engine plays book-free learned shogi, one search worker by default. TT budget
 (USI_Hash) is the transposition-table size, not the process's total memory.
 USAGE
 

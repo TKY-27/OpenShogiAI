@@ -2105,6 +2105,44 @@ mod tests {
     }
 
     #[test]
+    fn terminal_positions_reject_play_start_and_reset_reopens_the_game() {
+        // Terminal handling mirrors the sibling surfaces: play start on an ended game is
+        // a fail-closed rejection (the snapshot carries the terminal flag for the host),
+        // and a new game must be openable afterwards without stale session state.
+        let mut browser = loaded();
+        browser
+            .restore("4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1", "[]")
+            .unwrap();
+        assert_eq!(snapshot(&browser)["terminal"]["kind"], "no-legal-moves");
+        let rejected = browser
+            .play_start_json("balanced", "pure_learned", 1, &game_clock(180_000))
+            .unwrap_err();
+        assert!(
+            rejected.contains("the game has already ended"),
+            "{rejected}"
+        );
+        // The rejected start must leave no half-built play session behind.
+        assert!(
+            browser
+                .play_run_observed(&CancellationToken::new(), |_| {})
+                .is_err()
+        );
+        // A new game (reset) is openable and plays normally again.
+        browser.reset(None).unwrap();
+        assert_eq!(snapshot(&browser)["terminal"], Value::Null);
+        browser
+            .play_start_json("balanced", "pure_learned", 1, &game_clock(180_000))
+            .unwrap();
+        let prepared: Value = serde_json::from_str(
+            &browser
+                .play_run_observed(&CancellationToken::new(), |_| {})
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prepared["result"]["outcome"], "evaluated");
+    }
+
+    #[test]
     fn unloaded_contract_is_inspectable_but_cannot_evaluate() {
         let mut browser = BrowserEngine::new();
         let state = snapshot(&browser);

@@ -48,7 +48,15 @@ if (!isMainThread) {
         const value = prepared.done ? prepared : JSON.parse(engine.playRun());
         parentPort.postMessage({ event: 'done', value, wallMs: performance.now() - requestStarted, probes, before });
       }
-    } catch (error) { parentPort.postMessage({ event: 'error', error: String(error?.stack ?? error) }); }
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      if (request.expectError && message.includes(request.expectError)) {
+        parentPort.postMessage({ event: 'done', value: { result: null, rejected: message },
+          wallMs: 0, probes, before: JSON.parse(engine.snapshot()) });
+        return;
+      }
+      parentPort.postMessage({ event: 'error', error: String(error?.stack ?? error) });
+    }
   });
   parentPort.postMessage({ event: 'ready', initializationMs });
 } else {
@@ -87,6 +95,7 @@ if (!isMainThread) {
           updates.push(event.value);
         }
         if (event.event === 'done') {
+          if (event.value.rejected) { finish(null, { request, ...event, prepared: null, updates: [], hostWallMs: performance.now() - origin, cancelSentMs: null, cancelLatencyMs: null }); return; }
           verify(event.value.result, leafHash);
           if (event.value.result.bestMove) assert(event.before.legalMoves.some(move => move.usi === event.value.result.bestMove));
           finish(null, { request, ...event, prepared, updates, hostWallMs: performance.now() - origin,
@@ -108,9 +117,15 @@ if (!isMainThread) {
     assert(cancelled.cancelLatencyMs < 250, 'cross-thread cancellation was not promptly observed');
     const expired = await run({ profile: 'quality', remaining: 0 });
     assert.equal(expired.value.result.outcome, 'time_limit_before_evaluation');
-    const terminal = await run({ profile: 'balanced', remaining: 180_000, sfen: '4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1' });
-    assert.equal(terminal.value.result.outcome, 'no_legal_moves');
-    assert.equal(terminal.value.result.bestMove, null);
+    // Terminal positions reject play start fail-closed (the snapshot carries the
+    // terminal flag), and the worker's next request must open a new game cleanly.
+    const terminal = await run({ profile: 'balanced', remaining: 180_000, sfen: '4k4/3P1P3/4K4/9/9/9/9/9/9 w - 1', expectError: 'the game has already ended' });
+    assert(terminal.value.rejected, 'terminal play start must be rejected fail-closed');
+    assert.equal(terminal.value.result, null);
+    assert.equal(terminal.before.terminal.kind, 'no-legal-moves');
+    const afterTerminal = await run({ profile: 'balanced', nodes: 1_500, legacy: true });
+    assert.equal(afterTerminal.value.result.outcome, 'evaluated');
+    assert.equal(afterTerminal.before.terminal, null);
     const samples = [];
     for (let i = 0; i < 3; i++) {
       const plain = await run({ profile: 'balanced', nodes: 1_500, legacy: true });
@@ -131,8 +146,8 @@ if (!isMainThread) {
       leafHash, initializationMs, samples, evidence };
     writeFileSync(reportArg, JSON.stringify(report, null, 2) + '\n');
     console.log(JSON.stringify({ status: report.status, initializationMs, samples,
-      tests: evidence.map(e => ({ request: e.request, move: e.value.result.bestMove,
-        depth: e.value.result.depth, nodes: e.value.result.nodes, wallMs: e.wallMs,
-        termination: e.value.result.termination, cancelLatencyMs: e.cancelLatencyMs })) }));
+      tests: evidence.map(e => ({ request: e.request, move: e.value.result?.bestMove,
+        depth: e.value.result?.depth, nodes: e.value.result?.nodes, wallMs: e.wallMs,
+        termination: e.value.result?.termination, cancelLatencyMs: e.cancelLatencyMs })) }));
   } finally { await worker.terminate(); }
 }

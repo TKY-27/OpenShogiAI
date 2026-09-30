@@ -1222,6 +1222,61 @@ mod tests {
     }
 
     #[test]
+    fn parallel_movetime_deadline_bounds_go_to_bestmove_wall_time() {
+        // The shared deadline covers setup, worker creation, the search and the join:
+        // the whole go→bestmove window stays close to the requested movetime, and a
+        // follow-up go still completes exactly once.
+        let model = loaded_model();
+        let session = PipedSession::start(&model.engine, &model.hash);
+        session.send("setoption name AutoThreads value false");
+        session.send("setoption name Threads value 4");
+        session.send("position startpos");
+        let started = Instant::now();
+        session.send("go movetime 300");
+        assert!(
+            session.wait_for_within("bestmove ", Duration::from_secs(5)),
+            "a 300 ms parallel movetime must publish bestmove promptly"
+        );
+        let elapsed = started.elapsed();
+        assert_eq!(session.bestmove_count(), 1);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "no claim may restart the shared budget: {elapsed:?}"
+        );
+        // The session stays usable: the next parallel go answers once more.
+        session.send("position startpos moves 7g7f");
+        session.send("go movetime 200");
+        assert!(session.wait_for_bestmove_count(2));
+        session.send("quit");
+        session.finish().expect("clean exit");
+    }
+
+    #[test]
+    fn superseding_go_replaces_a_parallel_search_with_one_completion() {
+        let model = loaded_model();
+        let session = PipedSession::start(&model.engine, &model.hash);
+        session.send("setoption name AutoThreads value false");
+        session.send("setoption name Threads value 4");
+        session.send("position startpos");
+        session.send("go infinite");
+        session.send("position startpos moves 7g7f");
+        session.send("go movetime 250");
+        assert!(
+            session.wait_for_within("bestmove ", Duration::from_secs(5)),
+            "the superseding timed search completes"
+        );
+        // Let a potential orphan of the superseded infinite search show itself.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            session.bestmove_count(),
+            1,
+            "a superseded search publishes nothing; the replacement publishes once"
+        );
+        session.send("quit");
+        session.finish().expect("clean exit");
+    }
+
+    #[test]
     fn automatic_threads_advertise_their_basis() {
         let model = loaded_model();
         let session = PipedSession::start(&model.engine, &model.hash);

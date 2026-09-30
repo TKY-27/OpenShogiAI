@@ -14,18 +14,27 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
-use crate::{Move, RootMoveStat};
+use crate::{Move, RootMoveStat, SearchStats};
 
 /// Short worker wait while waiting for the next iteration to be published.
 pub(crate) const ITERATION_POLL: Duration = Duration::from_micros(200);
 
 /// Defensive upper bound on total workers (controller plus helpers) for one search.
 pub(crate) const MAX_WORKERS: usize = 128;
+
+/// Reservation unit of the shared node budget. A worker tops up its local credit in
+/// chunks of this size (bounded by the remaining budget) instead of touching shared
+/// state per node. With `W` workers the visited-node total may overshoot the declared
+/// budget by at most `W * chunk - (W - 1)` nodes, and undershoot it by at most
+/// `W * chunk` (credit reserved but unspent when the search ends); the exhaustion
+/// latch fires on the first refused reservation, so a drained pool ends the search
+/// deterministically. `SearchResult.nodes` always reports the exact visited total.
+pub(crate) const NODE_RESERVATION_CHUNK: u64 = 64;
 
 /// Coordination state for one bounded parallel search.
 pub(crate) struct ParallelSearch {
@@ -43,6 +52,31 @@ pub(crate) struct ParallelSearch {
     /// Swap-to-claim the iteration's single full-window (first-move) search.
     pub(crate) first_full_window: AtomicBool,
     iteration: Mutex<IterationState>,
+    /// The engine clock every worker shares, so one absolute deadline means the same
+    /// reading in every thread.
+    clock: Arc<dyn crate::MonotonicClock>,
+    /// Absolute end-of-search instant on the shared clock. Every worker, iteration and
+    /// wait of one `go` obeys it; nothing restarts a per-root-move budget.
+    deadline: Option<Duration>,
+    /// Total node budget shared by all workers; `None` for budgetless searches.
+    node_budget: Option<u64>,
+    /// Node credit handed out minus returned; the budget guard compares it to
+    /// `node_budget` when workers top up their local reservation. Failed or partial
+    /// grants subtract their ungrantable remainder immediately, so the counter never
+    /// accumulates phantom credit and the effective budget stays the declared one.
+    nodes_granted: AtomicU64,
+    /// Latched once a worker's reservation found the shared budget empty. The budget
+    /// is a search-wide cap: when the pool is drained, every claim after that point is
+    /// refused, so abandoned claims can leave no slot the controller would wait on —
+    /// the collect wait observes the latch and ends the search with `NodeLimit`.
+    budget_exhausted: AtomicBool,
+    /// Exact total of nodes visited by helper contexts, flushed when each per-claim
+    /// context ends (including cancelled, abandoned and unwound claims).
+    helper_nodes: AtomicU64,
+    /// Exact total of helper search statistics, flushed with the nodes.
+    helper_stats: Mutex<SearchStats>,
+    /// Total root-move claims ever made, for diagnostics and test synchronization.
+    claims: AtomicU64,
 }
 
 struct IterationState {
@@ -55,7 +89,11 @@ struct IterationState {
 }
 
 impl ParallelSearch {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(
+        clock: Arc<dyn crate::MonotonicClock>,
+        deadline: Option<Duration>,
+        node_budget: Option<u64>,
+    ) -> Self {
         Self {
             stop: AtomicBool::new(false),
             alive_helpers: AtomicUsize::new(0),
@@ -72,7 +110,115 @@ impl ParallelSearch {
                 moves: Vec::new(),
                 results: Vec::new(),
             }),
+            clock,
+            deadline,
+            node_budget,
+            nodes_granted: AtomicU64::new(0),
+            budget_exhausted: AtomicBool::new(false),
+            helper_nodes: AtomicU64::new(0),
+            helper_stats: Mutex::new(SearchStats::default()),
+            claims: AtomicU64::new(0),
         }
+    }
+
+    /// The stop flag plus every bounded exit of one search in one call: explicit stop,
+    /// a superseding search's cancellation of the shared token and the absolute
+    /// deadline all release primer waits through here.
+    pub(crate) fn should_abort(&self) -> bool {
+        self.is_stopped() || self.deadline_exceeded() || self.budget_exhausted()
+    }
+
+    /// Whether a worker's reservation found the shared node budget empty. Latched for
+    /// the rest of the search: credit may flow back later, but a drained pool means the
+    /// declared cap was reached, and no claim after that point can make progress.
+    pub(crate) fn budget_exhausted(&self) -> bool {
+        self.budget_exhausted.load(Ordering::Acquire)
+    }
+
+    /// Whether the search-wide absolute deadline has passed on the shared clock.
+    pub(crate) fn deadline_exceeded(&self) -> bool {
+        self.deadline
+            .is_some_and(|deadline| self.clock.now() >= deadline)
+    }
+
+    /// Reservation unit for `budget`: bounded chunks keep small budgets tight while
+    /// large budgets amortize the shared-counter traffic.
+    #[must_use]
+    pub(crate) fn node_reservation_chunk(budget: u64) -> u64 {
+        (budget / 64).clamp(1, NODE_RESERVATION_CHUNK)
+    }
+
+    /// The declared budget for diagnostics; `None` means unbounded.
+    pub(crate) const fn node_budget(&self) -> Option<u64> {
+        self.node_budget
+    }
+
+    /// Whether this search carries a shared node budget at all.
+    pub(crate) const fn budgeted(&self) -> bool {
+        self.node_budget.is_some()
+    }
+
+    /// Grants up to `requested` nodes from the shared budget. Returns how many the
+    /// caller may actually visit: at most the ungranted remainder of the budget, so
+    /// concurrent reservations overshoot only within one reservation unit per worker.
+    pub(crate) fn grant_nodes(&self, requested: u64) -> u64 {
+        let Some(budget) = self.node_budget else {
+            return requested;
+        };
+        let previous = self.nodes_granted.fetch_add(requested, Ordering::Relaxed);
+        let granted = budget.saturating_sub(previous).min(requested);
+        if granted < requested {
+            // Return the ungrantable remainder at once: concurrent workers may briefly
+            // observe the inflated counter (safe direction — they are refused early),
+            // and the counter keeps tracking handed-out credit minus returned credit.
+            let _ = self
+                .nodes_granted
+                .fetch_sub(requested - granted, Ordering::Relaxed);
+            if granted == 0 {
+                // The declared cap was reached: latch the exhaustion so no worker can
+                // wait on claims that can never be granted again.
+                self.budget_exhausted.store(true, Ordering::Release);
+            }
+        }
+        granted
+    }
+
+    /// Returns unused granted credit so other workers can still spend it.
+    pub(crate) fn return_nodes(&self, credit: u64) {
+        if credit > 0 {
+            let _ = self.nodes_granted.fetch_sub(credit, Ordering::Relaxed);
+        }
+    }
+
+    /// Adds one worker's completed (possibly cancelled or abandoned) claim to the
+    /// exact helper totals the controller publishes.
+    pub(crate) fn record_helper_work(&self, nodes: u64, stats: &SearchStats) {
+        let _ = self.helper_nodes.fetch_add(nodes, Ordering::Relaxed);
+        if let Ok(mut totals) = self.helper_stats.lock() {
+            totals.accumulate(stats);
+        }
+    }
+
+    /// Exact helper totals for mid-search reporting; monotonic, never reset.
+    pub(crate) fn helper_work_snapshot(&self) -> (u64, SearchStats) {
+        (
+            self.helper_nodes.load(Ordering::Relaxed),
+            self.helper_stats
+                .lock()
+                .map(|totals| *totals)
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Final helper totals after every helper joined; exact, read once.
+    pub(crate) fn drain_helper_work(&self) -> (u64, SearchStats) {
+        self.helper_work_snapshot()
+    }
+
+    /// Number of root-move claims ever granted, for test synchronization.
+    #[cfg(test)]
+    pub(crate) fn claim_count(&self) -> u64 {
+        self.claims.load(Ordering::Relaxed)
     }
 
     /// The controller finished (or is cancelling): every helper must exit.
@@ -137,13 +283,17 @@ impl ParallelSearch {
     /// under the iteration lock so a claim can never straddle `begin_iteration` and
     /// consume a slot of the epoch it was not issued for.
     pub(crate) fn claim(&self) -> Option<(u64, usize, Move)> {
-        let iteration = self.iteration.lock().ok()?;
-        if self.is_stopped() || iteration.epoch == 0 {
-            return None;
-        }
-        let index = self.cursor.fetch_add(1, Ordering::AcqRel);
-        let movement = iteration.moves.get(index).copied()?;
-        Some((iteration.epoch, index, movement))
+        let claimed = {
+            let iteration = self.iteration.lock().ok()?;
+            if self.should_abort() || iteration.epoch == 0 {
+                return None;
+            }
+            let index = self.cursor.fetch_add(1, Ordering::AcqRel);
+            let movement = iteration.moves.get(index).copied()?;
+            (iteration.epoch, index, movement)
+        };
+        let _ = self.claims.fetch_add(1, Ordering::Relaxed);
+        Some(claimed)
     }
 
     /// Window parameters of `epoch`, but only while it is still the current iteration.
@@ -227,10 +377,11 @@ impl ParallelSearch {
 
     /// Scouts must not run before the first full-window search raised the shared alpha;
     /// otherwise a widened aspiration window would put every worker into a full search.
-    /// Returns false if the primer disappeared (panic, stop) and priming never happened.
+    /// Returns false if the primer disappeared (panic, stop) or the search-wide deadline
+    /// passed while waiting, and priming never happened.
     pub(crate) fn wait_until_primed(&self) -> bool {
         while !self.primed.load(Ordering::Acquire) {
-            if self.is_stopped() || !self.helpers_alive() {
+            if self.should_abort() || !self.helpers_alive() {
                 return self.primed.load(Ordering::Acquire);
             }
             std::thread::sleep(ITERATION_POLL);
@@ -238,7 +389,8 @@ impl ParallelSearch {
         true
     }
 
-    /// Exact scores raise the shared alpha so later claims search narrower windows.
+    /// Published scores (exact or a sound bound) raise the shared alpha so later claims
+    /// search narrower windows; `fetch_max` keeps a lower bound from lowering it.
     pub(crate) fn raise_alpha(&self, score: i32) {
         let _ = self.shared_alpha.fetch_max(score, Ordering::AcqRel);
     }
@@ -260,9 +412,9 @@ impl ParallelSearch {
         self.alive_helpers.load(Ordering::Acquire) > 0
     }
 
-    /// Waits until a new iteration appears or the search stops.
+    /// Waits until a new iteration appears or the search stops or expires.
     pub(crate) fn wait_for_work(&self, seen_epoch: u64) {
-        if self.is_stopped() {
+        if self.should_abort() {
             return;
         }
         let current = self
@@ -303,9 +455,161 @@ pub(crate) fn take_helper_evaluation_failure_injection() -> bool {
     INJECT_HELPER_EVALUATION_FAILURE.swap(false, Ordering::SeqCst)
 }
 
+/// Test-only gate that parks a helper inside its primer search while leaving the stop
+/// flag observable, modelling a long inference the search cannot interrupt. The
+/// escalation paths (deadline, stop, cancellation during a primer wait) are unreachable
+/// with a cooperative primer, so the regression tests arm one claim.
+#[cfg(test)]
+static PRIMER_GATE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn arm_primer_gate() {
+    PRIMER_GATE.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn release_primer_gate() {
+    PRIMER_GATE.store(false, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn primer_gate_armed() -> bool {
+    PRIMER_GATE.load(Ordering::SeqCst)
+}
+
+/// Test-only permit that makes the controller wait until a helper has claimed before
+/// its own first claim of a search, so helper-dominated workloads are deterministic.
+#[cfg(test)]
+static GATE_CONTROLLER_ON_HELPER_CLAIM: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn arm_controller_claim_gate() {
+    GATE_CONTROLLER_ON_HELPER_CLAIM.store(true, Ordering::SeqCst);
+}
+
+/// Test-side, single-shot consumption of the controller claim gate: parks the calling
+/// controller until a helper has claimed (bounded, so a broken helper cannot hang the
+/// suite), making helper-dominated workloads deterministic.
+#[cfg(test)]
+pub(crate) fn gate_controller_on_helper_claim(parallel: &ParallelSearch) {
+    if !GATE_CONTROLLER_ON_HELPER_CLAIM.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let limit = web_time::Instant::now() + std::time::Duration::from_secs(10);
+    while parallel.claim_count() == 0 && web_time::Instant::now() < limit {
+        std::thread::sleep(ITERATION_POLL);
+    }
+}
+
+/// Test-only permit that makes the next helper `fork_for_worker` panic, exercising the
+/// creation-loop unwind path with helpers already running.
+#[cfg(test)]
+static INJECT_FORK_PANIC: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+/// Arms a panic on the `n`-th helper fork (1-based); zero disarms.
+pub(crate) fn inject_fork_panic_on(nth: usize) {
+    INJECT_FORK_PANIC.store(nth, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn take_fork_panic_injection(fork_index: usize) -> bool {
+    fork_index > 0
+        && INJECT_FORK_PANIC
+            .compare_exchange(fork_index, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+}
+
+/// Test-only permit that fails the `n`-th helper thread spawn, exercising the explicit
+/// `spawn_scoped` failure path with (for `n` > 1) helpers already running.
+#[cfg(test)]
+static INJECT_HELPER_SPAWN_FAILURE: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+/// Arms a spawn failure on the `n`-th helper creation (1-based); zero disarms.
+pub(crate) fn inject_helper_spawn_failure_on(nth: usize) {
+    INJECT_HELPER_SPAWN_FAILURE.store(nth, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn take_helper_spawn_failure_injection(spawn_index: usize) -> bool {
+    spawn_index > 0
+        && INJECT_HELPER_SPAWN_FAILURE
+            .compare_exchange(spawn_index, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+}
+
+/// Test-only permit that panics a helper in the middle of its search once its context
+/// has visited exactly the armed node count, exercising the unwind path through a live
+/// per-claim context (its flushed work must still reach the shared totals).
+#[cfg(test)]
+static INJECT_HELPER_PANIC_AT_NODES: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn inject_helper_panic_at_nodes(nodes: u64) {
+    INJECT_HELPER_PANIC_AT_NODES.store(nodes, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn helper_panic_node_injection() -> u64 {
+    INJECT_HELPER_PANIC_AT_NODES.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+/// Consumes an armed panic permit exactly once (the load-based match keeps the hot
+/// path to a plain read; only an actual match pays for this swap).
+pub(crate) fn consume_helper_panic_injection() -> bool {
+    INJECT_HELPER_PANIC_AT_NODES.swap(0, Ordering::SeqCst) != 0
+}
+
+/// Creates one helper thread inside the search scope, reporting creation failure
+/// instead of panicking so a failing spawn degrades the worker count explicitly.
+#[cfg(not(test))]
+pub(crate) fn spawn_helper_thread<'scope, 'env, F>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    index: usize,
+    name: String,
+    body: F,
+) -> std::io::Result<()>
+where
+    F: FnOnce() + Send + 'scope,
+{
+    let _ = index;
+    std::thread::Builder::new()
+        .name(name)
+        .spawn_scoped(scope, body)
+        .map(|_| ())
+}
+
+/// Test twin of `spawn_helper_thread` with an injected creation-failure permit, so the
+/// explicit failure path (helpers already running) is reachable without relying on the
+/// OS to fail a thread spawn.
+#[cfg(test)]
+pub(crate) fn spawn_helper_thread<'scope, 'env, F>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    index: usize,
+    name: String,
+    body: F,
+) -> std::io::Result<()>
+where
+    F: FnOnce() + Send + 'scope,
+{
+    if take_helper_spawn_failure_injection(index) {
+        return Err(std::io::Error::other("injected helper spawn failure"));
+    }
+    std::thread::Builder::new()
+        .name(name)
+        .spawn_scoped(scope, body)
+        .map(|_| ())
+}
+
 /// One helper worker: claims root moves of the current iteration until the queue drains
 /// or the controller stops the search. Takes ownership because the worker owns its
 /// engine and coordination handle outright.
+///
+/// The helper owns no time or node budget of its own: every claim it runs is bounded by
+/// the search-wide absolute deadline and the shared node pool on `parallel`, so neither
+/// starting a claim nor starting the helper can revive a spent budget.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the worker closure takes these values by value"
@@ -315,17 +619,16 @@ pub(crate) fn run_helper(
     root: crate::Position,
     parallel: Arc<ParallelSearch>,
     cancellation: crate::CancellationToken,
-    hard_limit: Option<Duration>,
 ) {
     let _guard = parallel.enter_helper();
     engine.set_active_parallel(Arc::clone(&parallel));
     let limits = crate::SearchLimits {
         max_depth: 0,
         max_nodes: None,
-        movetime: hard_limit,
+        movetime: None,
     };
     let mut prepared_epoch = 0_u64;
-    while !parallel.is_stopped() && !cancellation.is_cancelled() {
+    while !parallel.should_abort() && !cancellation.is_cancelled() {
         let Some((claim_epoch, index, movement)) = parallel.claim() else {
             let seen = parallel
                 .iteration_window()
