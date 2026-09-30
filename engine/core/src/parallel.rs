@@ -29,11 +29,16 @@ pub(crate) const MAX_WORKERS: usize = 128;
 
 /// Reservation unit of the shared node budget. A worker tops up its local credit in
 /// chunks of this size (bounded by the remaining budget) instead of touching shared
-/// state per node. With `W` workers the visited-node total may overshoot the declared
-/// budget by at most `W * chunk - (W - 1)` nodes, and undershoot it by at most
-/// `W * chunk` (credit reserved but unspent when the search ends); the exhaustion
-/// latch fires on the first refused reservation, so a drained pool ends the search
-/// deterministically. `SearchResult.nodes` always reports the exact visited total.
+/// state per node. Every reserving context — the controller's iterative search, each
+/// helper's per-claim context, and the controller's transient mate-prepass context —
+/// pays its work from the same pool. Grants are capped by the ungranted remainder, so
+/// outstanding credit never exceeds the declared budget, and every visited node
+/// consumes exactly one credit: the visited total cannot exceed the budget at all. It
+/// can undershoot by up to one reservation unit per reserving context (credit
+/// reserved but unspent when the search ends; every context returns its unspent
+/// credit on drop, including the prepass). The exhaustion latch fires on the first
+/// refused reservation, so a drained pool ends the search deterministically.
+/// `SearchResult.nodes` always reports the exact visited total.
 pub(crate) const NODE_RESERVATION_CHUNK: u64 = 64;
 
 /// Coordination state for one bounded parallel search.

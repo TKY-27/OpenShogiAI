@@ -12,6 +12,7 @@ Run commands from the repository root. Setup is in [README](../README.md).
 | `make usi-r4-package` | Assemble the verified R4 USI launcher package under `local/usi-r4/` |
 | `make frozen-smoke` | Explicit local baseline hash/load/native/Wasm smoke; no Arena or training |
 | `make format` / `make lint` | Rustfmt, Clippy and Ruff |
+| `make maintenance-clean` | Plan disposable build-cache cleanup (dry run); `python3.12 scripts/maintenance_cleanup.py --apply` performs it |
 | `make phase3-validate-registry` | Validate source-rights catalog without acquisition |
 | `make model-validate` | Validate legacy model/feature/training schemas |
 
@@ -36,6 +37,13 @@ confirm references, idle processes and file handles, containment, symlinks and m
 Preserve unique evaluation inputs and their source-game/descendant partition identities.
 Do not create archival copies of all obsolete build or experiment outputs. Record deletion
 paths, reasons and approximate sizes locally. Git-history size is separate from worktree savings.
+
+`make maintenance-clean` plans (dry run) the removal of classified disposable build caches:
+stale cargo build roots under `target/`, pure-build intermediates, routine dev caches and
+byte-code caches. `python3.12 scripts/maintenance_cleanup.py --apply` performs the plan; it
+refuses tracked, symlinked, recently active or `local/` paths and keeps the pinned
+`target/pure/release/open-shogi-cli` and the live `target/pure/bindings/` runtime. Compact
+JSON receipts land in `local/maintenance/`.
 
 ## Compatibility checks
 

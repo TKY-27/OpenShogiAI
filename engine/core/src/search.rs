@@ -1143,7 +1143,9 @@ impl SearchEngine {
     /// One `go` obeys one shared absolute deadline and one shared node budget: the
     /// deadline is anchored before any worker starts, so preparation and worker-creation
     /// time count toward the response, and nothing a helper does can revive a spent
-    /// budget. Creation failures degrade to the workers that did start — a helper thread
+    /// budget. The controller's mate prepass reserves from the same pool and obeys the
+    /// same deadline, so every line of work inside one `go` is paid from one budget.
+    /// Creation failures degrade to the workers that did start — a helper thread
     /// that cannot be spawned never aborts the search — while a controller panic before
     /// the search stops every started helper through the scope-local guard.
     ///
@@ -2077,6 +2079,14 @@ impl SearchEngine {
                 Vec::new()
             },
         };
+        // One `go` pays all of its work from one shared budget: when this runs as a
+        // parallel search's prepass, the proof reserves from the active pool and
+        // observes the same absolute deadline, stop and exhaustion as every worker,
+        // while its smaller local proof cap stays in force. A standalone mate search
+        // has no active parallel search and keeps its own limits untouched. The mate
+        // context is controller work (its nodes reach the result exactly once through
+        // the caller's accounting), so it never flushes as helper work.
+        context.budget.parallel.clone_from(&self.active_parallel);
         let mut pv = Vec::new();
         for depth in (1..=limits.max_depth.min(63)).step_by(2) {
             match mate_dfs(&mut position.clone(), depth, &mut context) {
@@ -3773,6 +3783,272 @@ mod tests {
         assert!(!result.found);
         assert_eq!(result.nodes, 0);
         assert_eq!(result.termination, SearchTermination::NodeLimit);
+    }
+
+    /// A checking-rich nonterminal position: two lances in hand against a bare king.
+    /// Every lance check is refutable (capture or sidestep), so the mate prepass does
+    /// real work (hundreds of nodes at its depth-5 proof cap) without proving mate.
+    fn mate_prepass_workload() -> Position {
+        crate::parse_sfen("4k4/9/9/9/9/9/9/9/4K4 b 2L 1").expect("valid test position")
+    }
+
+    fn nodes_plan(budget: u64, depth: Option<u8>) -> TimePlan {
+        TimeManager::default()
+            .plan(
+                Side::Black,
+                crate::TimeControl {
+                    nodes: Some(budget),
+                    depth,
+                    casual: false,
+                    ..crate::TimeControl::casual()
+                },
+                64,
+            )
+            .expect("nodes plan")
+    }
+
+    fn movetime_plan(movetime_ms: u64, safety_margin_ms: u64) -> TimePlan {
+        TimeManager::default()
+            .plan(
+                Side::Black,
+                crate::TimeControl {
+                    movetime_ms: Some(movetime_ms),
+                    safety_margin_ms,
+                    casual: false,
+                    ..crate::TimeControl::casual()
+                },
+                64,
+            )
+            .expect("movetime plan")
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn mate_prepass_pays_its_work_from_the_shared_node_budget() {
+        // The revert detector for the shared-pool attachment: at 65_536 the prepass's
+        // ~473-node proof is large next to one reservation unit, so without the pool
+        // debit the exact total lands above the bound deterministically (no timing
+        // involved). The 1_000 leg pins the same invariant at a small budget where the
+        // local allowance (n/32) is tiny.
+        let position = mate_prepass_workload();
+        for (budget, depth, minimum_prepass_nodes) in
+            [(1_000_u64, None, 16_u64), (65_536, Some(6_u8), 64)]
+        {
+            let mut engine = SearchEngine::new(SearchConfig::default());
+            let result = engine.search_parallel_managed_with_callback(
+                &position,
+                nodes_plan(budget, depth),
+                &CancellationToken::new(),
+                2,
+                |_| {},
+            );
+            let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(budget);
+            let bound = budget + 2 * chunk;
+            assert_eq!(result.termination, SearchTermination::NodeLimit);
+            assert!(
+                (1..=2_048).contains(&result.stats.mate_nodes),
+                "prepass must run under its local proof cap: {}",
+                result.stats.mate_nodes
+            );
+            assert!(
+                result.stats.mate_nodes >= minimum_prepass_nodes,
+                "prepass must do real work on this position: {}",
+                result.stats.mate_nodes
+            );
+            // Detector precondition: the prepass's work must exceed the total
+            // reservation slack by a wide margin, or a reverted pool attachment could
+            // hide inside it. The workload's ~473-node proof clears 4 chunks (~256)
+            // deterministically.
+            assert!(
+                budget == 1_000 || result.stats.mate_nodes > 4 * chunk,
+                "workload no longer exercises the revert detector: {}",
+                result.stats.mate_nodes
+            );
+            assert!(
+                result.nodes >= result.stats.mate_nodes,
+                "prepass work is part of the exact total exactly once"
+            );
+            assert!(
+                result.nodes <= bound,
+                "one go must pay the prepass from the shared budget: {} > {bound}",
+                result.nodes
+            );
+            assert!(position.is_legal_move(result.best_move.expect("best move")));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_mate_proof_keeps_its_score_semantics_and_exact_total() {
+        let position = crate::parse_sfen("3lkl3/3p1p3/4G4/9/9/9/9/9/K8 b R 1").unwrap();
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let result = engine.search_parallel_managed_with_callback(
+            &position,
+            nodes_plan(65_536, Some(5)),
+            &CancellationToken::new(),
+            2,
+            |_| {},
+        );
+        assert_eq!(result.stats.mate_plies, 1);
+        assert_eq!(result.score, MATE_SCORE - 1);
+        assert_eq!(result.pv.len(), 1);
+        // A proven mate skips the depth loop, so no helper ever works: the exact
+        // total is the prepass's nodes alone, counted exactly once.
+        assert_eq!(result.nodes, result.stats.mate_nodes);
+        let mut child = position.clone();
+        child
+            .make_move(result.best_move.expect("best move"))
+            .unwrap();
+        assert!(child.is_in_check(child.side_to_move()));
+        assert!(child.legal_moves().is_empty());
+    }
+
+    #[test]
+    fn serial_mate_prepass_stays_inside_the_declared_node_budget() {
+        // Threads=1: the local limit counts the prepass, so the total cannot exceed
+        // the budget at all.
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let result = engine.search_managed(
+            &mate_prepass_workload(),
+            nodes_plan(65_536, Some(6)),
+            &CancellationToken::new(),
+        );
+        assert_eq!(result.termination, SearchTermination::NodeLimit);
+        assert!(result.stats.mate_nodes > 0);
+        assert!(
+            result.nodes <= 65_536,
+            "serial total must respect the budget including the prepass: {}",
+            result.nodes
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn precancelled_go_skips_the_mate_prepass_without_pool_work() {
+        // Pins the skip path's observable semantics (no work, fallback move). The
+        // pre-existing prepass gate would skip a cancelled go even without the pool
+        // attachment; the revert detector for the pool itself is the 65_536-budget
+        // case of mate_prepass_pays_its_work_from_the_shared_node_budget.
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        let result = engine.search_parallel_managed_with_callback(
+            &mate_prepass_workload(),
+            nodes_plan(1_000, Some(6)),
+            &cancellation,
+            2,
+            |_| {},
+        );
+        assert_eq!(result.termination, SearchTermination::Cancelled);
+        assert_eq!(result.stats.mate_nodes, 0);
+        let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(1_000);
+        assert!(
+            result.nodes <= 2 * chunk,
+            "a cancelled go must not spend pool credit: {}",
+            result.nodes
+        );
+        let position = mate_prepass_workload();
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+    }
+
+    #[test]
+    fn zero_and_tiny_local_proof_budgets_stay_bounded() {
+        // Pins allowance rounding and the standalone local caps. The tiny-budget leg's
+        // zero prepass work follows from the local allowance (n/32 rounds to zero) and
+        // would hold without the pool attachment; it documents the composition.
+        // Standalone: a zero or near-zero proof budget visits nothing beyond it.
+        let mut engine = SearchEngine::new(SearchConfig::default());
+        for cap in [0_u64, 3] {
+            let mate = engine.find_mate_with_limits(
+                &mate_prepass_workload(),
+                SearchLimits {
+                    max_depth: 5,
+                    max_nodes: Some(cap),
+                    movetime: None,
+                },
+                &CancellationToken::new(),
+            );
+            assert!(!mate.found);
+            assert!(mate.nodes <= cap);
+            assert_eq!(mate.termination, SearchTermination::NodeLimit);
+        }
+        // Parallel with a budget whose allowance rounds down to zero: the prepass
+        // must not visit a single node, and the whole go stays within its budget.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut engine = SearchEngine::new(SearchConfig::default());
+            let result = engine.search_parallel_managed_with_callback(
+                &mate_prepass_workload(),
+                nodes_plan(16, Some(6)),
+                &CancellationToken::new(),
+                2,
+                |_| {},
+            );
+            assert_eq!(result.termination, SearchTermination::NodeLimit);
+            assert_eq!(result.stats.mate_nodes, 0);
+            let chunk = crate::parallel::ParallelSearch::node_reservation_chunk(16);
+            assert!(
+                result.nodes <= 16 + 2 * chunk,
+                "tiny-budget total must stay bounded: {}",
+                result.nodes
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn go_with_running_mate_prepass_finishes_on_the_shared_deadline() {
+        // Injected controllable clock: every read advances 1 ms. Zero safety margin
+        // makes the hard limit the full 400 ms, so the prepass runs for real after
+        // preparation (its 20 ms local allowance survives 1 ms granularity; pinned by
+        // mate_nodes >= 1), the iterative search continues to the shared deadline, and
+        // the whole go — prepass included — ends on that one deadline. The slack
+        // covers only read-granularity jitter: work ignoring the deadline would keep
+        // visiting nodes, and every visit advances the virtual clock by whole steps.
+        let clock = Arc::new(SteppingClock::new(1));
+        let mut engine = SearchEngine::with_clock(SearchConfig::default(), clock);
+        let result = engine.search_parallel_managed_with_callback(
+            &mate_prepass_workload(),
+            movetime_plan(400, 0),
+            &CancellationToken::new(),
+            2,
+            |_| {},
+        );
+        assert_eq!(result.termination, SearchTermination::TimeLimit);
+        assert!(
+            result.stats.mate_nodes >= 1,
+            "the prepass must actually run under this plan: {}",
+            result.stats.mate_nodes
+        );
+        assert!(
+            result.elapsed <= Duration::from_millis(400 + 150),
+            "nothing inside the go may run past the shared deadline: {:?}",
+            result.elapsed
+        );
+        let position = mate_prepass_workload();
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deadline_exhausted_during_preparation_skips_the_mate_prepass() {
+        // A coarse clock: root preparation and evaluation alone exhaust the shared
+        // deadline, so the prepass gate must skip the proof entirely instead of
+        // spending pool credit against a spent deadline. The gate predates the pool
+        // attachment; this test pins the skip semantics for any elapsed-time source.
+        let clock = Arc::new(SteppingClock::new(40));
+        let mut engine = SearchEngine::with_clock(SearchConfig::default(), clock);
+        let result = engine.search_parallel_managed_with_callback(
+            &mate_prepass_workload(),
+            movetime_plan(60, 50),
+            &CancellationToken::new(),
+            2,
+            |_| {},
+        );
+        assert_eq!(result.termination, SearchTermination::TimeLimit);
+        assert_eq!(result.stats.mate_nodes, 0);
+        let position = mate_prepass_workload();
+        assert!(position.is_legal_move(result.best_move.expect("best move")));
     }
 
     #[test]

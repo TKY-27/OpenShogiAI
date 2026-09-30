@@ -10,7 +10,8 @@ export UV_CACHE_DIR CARGO_INCREMENTAL
 .PHONY: help bootstrap env-check deps python-sync format format-check lint rust-lint \
  python-lint test rust-test python-test build rust-build wasm-build wasm-web-generate \
  wasm-web-check boundary-check license-check provenance-check docs-check check \
- pure-build pure-native-build usi-r4-package frozen-smoke phase3-validate-registry model-validate
+ pure-build pure-native-build usi-r4-package frozen-smoke phase3-validate-registry model-validate \
+ maintenance-clean
 
 help:
 	@echo "OpenShogiAI: make check | build | test | format | lint | pure-build | pure-native-build | usi-r4-package | frozen-smoke"
@@ -62,6 +63,8 @@ usi-r4-package:
 	./scripts/build_usi_r4_package.sh
 frozen-smoke:
 	python3.12 scripts/check_frozen_model.py
+maintenance-clean:
+	python3.12 scripts/maintenance_cleanup.py
 
 boundary-check:
 	./scripts/check_repository_boundaries.sh

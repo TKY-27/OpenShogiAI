@@ -20,6 +20,19 @@ open-shogi-core = { path = "engine/core", default-features = false }
 open-shogi-usi = { path = "engine/usi", default-features = false }
 proptest = "1"
 
+# Low-storage development default: no incremental caches and line tables only, so
+# routine check/test cycles do not recreate multi-gigabyte target directories.
+# Override with `CARGO_INCREMENTAL=1 cargo build` and
+# `RUSTFLAGS="-C debuginfo=2"` (or a custom profile) when a full debugger
+# experience is required; optimization levels and runtime behavior are unchanged.
+[profile.dev]
+incremental = false
+debug = "line-tables-only"
+
+[profile.test]
+incremental = false
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 
